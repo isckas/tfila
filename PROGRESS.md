@@ -13,11 +13,28 @@ Three sections:
 
 ## Now
 
-_(nothing in flight — ready to start PR 5)_
+_(nothing in flight — ready to start PR 6)_
 
 ---
 
 ## Done
+
+### 2026-05-11 — PR 5: public "next minyan near me" feed ✅
+
+The product becomes visible. `/` goes from placeholder to a real geolocated feed of upcoming minyanim, sorted by start time, with a zmanim strip header.
+
+- **`lib/zmanim/resolve.ts`**: `resolveRuleTime(time, geo, date)` — maps a `MinyanTime` (fixed or zmanim-relative) to a concrete UTC `Date`. Fixed times are interpreted as wall-clock in the shul's timezone with proper DST handling (no dep on tz libs — uses `Intl.DateTimeFormat.formatToParts`). Zmanim anchors map to `@hebcal/core` Zmanim methods (shkia/netz/alos/misheyakir/chatzos/mincha_gedolah/plag_mincha/tzeis_72/tzeis_42/sof_zman_shma_{gra,mga}/sof_zman_tefillah_{gra,mga}/candle_lighting).
+- **`lib/zmanim/strip.ts`**: `computeZmanimStrip(geo, date)` returns the full snapshot used by the header (alos, netz, sof shma gra/mga, sof tefillah gra/mga, chatzos, mincha gedolah, plag, shkia, tzeis 72, candle-lighting, havdalah).
+- **`lib/queries.ts`** add `getNearbyShulsWithRules(lat, lng, radiusMeters)` — PostGIS `ST_DWithin` join over shul + minyan_rule, filtered to active shuls, non-deleted live rules, non-rejected data_sources. Projects `location` to `{lat, lng}` via ST_X/ST_Y at read time. Returns ordered by distance ascending.
+- **`components/LocationGate.tsx`** (client): asks `navigator.geolocation.getCurrentPosition`, stores result in `localStorage`, redirects to `/?lat=X&lng=Y`. Auto-redirects on mount if localStorage already has a saved location. Handles denied/error states with clear UI.
+- **`components/RelativeTime.tsx`** (client): re-renders every 30s. Shows "in 12m" / "starting now" / "started 4m ago" with color coding (in-progress = amber, imminent = emerald, distant = neutral, long-past = muted).
+- **`components/MinyanList.tsx`** (server): list view with shul name, tefillah, absolute time, relative time, distance in miles. Empty state notes the address-backfill gap explicitly.
+- **`components/ZmanimStrip.tsx`** (server): horizontal pill bar of the major zmanim. Compact, scrollable on narrow screens.
+- **`app/page.tsx`** rewritten: reads `?lat&lng` from `searchParams` (async per Next 16). Without coords → LocationGate. With coords → nearby query (2-mile radius), resolve all rules against today's date, filter to a window (30 min back for late-arrival + 6 hours forward), sort by start ISO, render. Day-of-week filter via JS `Date.getDay()`. Special-schedule-kind rules (yom_tov, three_weeks, etc.) are skipped for now — only `regular` rules appear in the feed.
+- **Cost-side defaults**: `dynamic = 'force-dynamic'`, no caching yet. Every page hit is a fresh PostGIS query. At ~30 shuls and a 2-mile radius this is fast (<10ms in Neon).
+- **Build verified**: 11 routes still register.
+
+**Empty state today**: the 39 sprint-1 shuls have no addresses or lat/lng yet, so the feed renders "Nothing in the next few hours within walking distance" for any location. The LocationGate and ZmanimStrip work regardless. Address backfill (LLM-extract address from each shul's homepage, then geocode) is the next natural slice — that's the gap that unlocks real demo data.
 
 ### 2026-05-11 — PR 4: weekly cron + per-shul re-scrape ✅
 
