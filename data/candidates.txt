@@ -1,0 +1,47 @@
+# ShulCloud-hosted shul candidates (one URL per line)
+# Source: https://www.shulcloud.com/customers + web search verification
+# Run: npm run discover:shulcloud
+
+https://www.skylakesynagogue.com
+https://brsonline.shulcloud.com
+https://www.agudath.org
+https://www.tinw.org
+https://www.jewishdowntown.org
+https://templesinaiatlanta.shulcloud.com
+https://www.judeareform.org
+https://www.jewishfairlawn.org
+https://www.harshalom.org
+https://www.ozny.org
+https://www.shaareitorah.com
+https://www.shaareitefillah.com
+https://www.bnaidavid.com
+https://www.beiteinu.org
+https://www.adasisrael.org
+https://www.nste.org.au
+https://www.shirhadash.org
+https://www.etzchayim.org
+https://www.bethelnw.org
+https://www.templesinaipgh.org
+https://www.cong-shalom.org
+https://www.vbs.org
+https://aspenjewish.shulcloud.com
+https://www.tbibluebell.org
+https://agudasachimva.shulcloud.com
+https://www.bnaijeshurun.org
+https://emanuelsynagoguesydney.shulcloud.com
+https://www.bethshalomaustin.org
+https://www.mymakom.org
+https://www.tbila.org
+https://www.vosla.org
+https://www.bethjacobvt.org
+https://www.hamakomla.org
+https://www.bethemeth.org
+https://www.bethelwesthartford.org
+https://www.mjc.org
+https://www.knessetisrael.org
+https://thehamptonsynagogue.shulcloud.com
+https://www.bethor.org
+https://www.brithshalom.org
+https://shaareyzedek.shulcloud.com
+https://meyerlandminyaninc.shulcloud.com
+https://www.whiteshul.com
