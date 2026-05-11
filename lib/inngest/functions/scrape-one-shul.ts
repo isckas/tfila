@@ -1,0 +1,297 @@
+// Re-scrape an existing data_source. Fetches the page, compares its
+// content hash to the last-known hash on the data_source row, and:
+//   - unchanged → write a scrape_run row marked `no_change`, done
+//   - changed → re-extract via LLM, soft-delete old rules, insert new,
+//               update data_source.config_json + last_run_*
+//   - "broken" (low confidence OR >50% rule-count drop) → write a
+//               scrape_run row marked `broken`, flip data_source.review_status
+//               back to `pending`, leave rules untouched
+//
+// Always writes exactly one scrape_run row.
+
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { inngest } from "../client";
+import { db } from "../../../db/client";
+import {
+  dataSource,
+  minyanRule,
+  scrapeRun,
+  type MinyanTime,
+} from "../../../db/schema";
+import { fetchHtml } from "../../scrapers/fetch";
+import { extractFromHtml } from "../../llm/extract";
+
+// If the new extraction produces fewer than this fraction of the
+// previous rule count (and we had at least 3 rules before), treat it
+// as a broken extraction rather than silently replacing rules.
+const BROKEN_DROP_THRESHOLD = 0.5;
+
+// Confidence below this → don't auto-apply changes either.
+const MIN_AUTO_APPLY_CONFIDENCE = 0.6;
+
+export const scrapeOneShul = inngest.createFunction(
+  {
+    id: "shul-scrape-one",
+    concurrency: {
+      // Best-effort per-host limit. The event payload doesn't carry the
+      // host directly; we use shulId as a proxy (one shul = one host).
+      key: "event.data.shulId",
+      limit: 1,
+    },
+    triggers: [{ event: "shul.scrape.requested" }],
+  },
+  async ({ event, step }) => {
+    const { shulId, dataSourceId, reason } = event.data as {
+      shulId: number;
+      dataSourceId: number;
+      reason: "weekly" | "manual";
+    };
+
+    if (process.env.SCRAPE_ENABLED === "false") {
+      return { skipped: true, reason: "SCRAPE_ENABLED=false" };
+    }
+
+    // ─── 1. Load the data_source row ─────────────────────────────
+    const loaded = await step.run("load-data-source", async () => {
+      const rows = await db
+        .select({
+          id: dataSource.id,
+          identifier: dataSource.identifier,
+          kind: dataSource.kind,
+          configJson: dataSource.configJson,
+        })
+        .from(dataSource)
+        .where(eq(dataSource.id, dataSourceId))
+        .limit(1);
+      if (!rows[0]) throw new Error(`data_source ${dataSourceId} not found`);
+      return rows[0];
+    });
+
+    const url = loaded.identifier;
+    const previousHash =
+      (loaded.configJson as { page_content_hash?: string } | null)?.page_content_hash ?? null;
+
+    // ─── 2. Fetch page ──────────────────────────────────────────
+    const fetched = await step.run("fetch", async () => {
+      const res = await fetchHtml(url, { timeoutMs: 20_000 });
+      if (!res.ok) {
+        throw new Error(`Fetch failed: HTTP ${res.status} for ${url}`);
+      }
+      return { html: res.html, finalUrl: res.finalUrl, status: res.status };
+    });
+
+    // ─── 3. Quick path: extractor will hash & compare ──────────
+    // We let extractFromHtml() compute the hash so we have a single
+    // source of truth for it. But if the hash matches the last run, we
+    // skip the LLM entirely.
+    const newHashOnly = await step.run("hash-check", async () => {
+      const { createHash } = await import("node:crypto");
+      const truncated = fetched.html.slice(0, 80_000);
+      return createHash("sha256").update(truncated, "utf8").digest("hex");
+    });
+
+    if (previousHash && newHashOnly === previousHash) {
+      // No change since last scrape — write the audit row and stop.
+      await step.run("write-scrape-run-no-change", async () => {
+        await db.insert(scrapeRun).values({
+          shulId,
+          dataSourceId,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          status: "no_change",
+          rulesAdded: 0,
+          rulesRemoved: 0,
+          rulesChanged: 0,
+        });
+        await db
+          .update(dataSource)
+          .set({ lastRunAt: new Date(), lastRunStatus: "no_change", updatedAt: new Date() })
+          .where(eq(dataSource.id, dataSourceId));
+      });
+      return { changed: false, reason, hash: newHashOnly };
+    }
+
+    // ─── 4. Hash differs — re-extract ────────────────────────────
+    const extracted = await step.run("llm-extract", async () => {
+      return extractFromHtml(fetched.html);
+    });
+
+    // ─── 5. Decide: auto-apply, or flag as broken? ──────────────
+    const prevCount = await step.run("count-existing-rules", async () => {
+      const rows = await db
+        .select({ n: sql<number>`COUNT(*)::int` })
+        .from(minyanRule)
+        .where(
+          and(eq(minyanRule.dataSourceId, dataSourceId), isNull(minyanRule.deletedAt)),
+        );
+      return rows[0]?.n ?? 0;
+    });
+
+    const newCount = extracted.extraction.rules.length;
+    const confidenceTooLow =
+      extracted.extraction.confidence < MIN_AUTO_APPLY_CONFIDENCE;
+    const ruleDropSuspicious =
+      prevCount >= 3 && newCount < prevCount * BROKEN_DROP_THRESHOLD;
+
+    if (confidenceTooLow || ruleDropSuspicious || newCount === 0) {
+      // Don't auto-apply. Mark broken, flag for review, keep old rules
+      // in place so daveners see the previous schedule until reviewed.
+      await step.run("mark-broken", async () => {
+        await db.insert(scrapeRun).values({
+          shulId,
+          dataSourceId,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          status: "broken",
+          rulesAdded: 0,
+          rulesRemoved: 0,
+          rulesChanged: 0,
+          error: brokenReason(confidenceTooLow, ruleDropSuspicious, newCount, prevCount, extracted.extraction.confidence),
+        });
+        await db
+          .update(dataSource)
+          .set({
+            lastRunAt: new Date(),
+            lastRunStatus: "broken",
+            reviewStatus: "pending",
+            confidenceScore: extracted.extraction.confidence,
+            updatedAt: new Date(),
+            // store the rejected proposal in config_json for the reviewer to inspect
+            configJson: {
+              ...(loaded.configJson as object | null ?? {}),
+              last_rejected_extraction: {
+                at: new Date().toISOString(),
+                model: extracted.model,
+                page_content_hash: extracted.pageContentHash,
+                confidence: extracted.extraction.confidence,
+                reasoning: extracted.extraction.reasoning,
+                rules_count: newCount,
+                previous_rules_count: prevCount,
+              },
+            },
+          })
+          .where(eq(dataSource.id, dataSourceId));
+      });
+      return {
+        changed: false,
+        broken: true,
+        prevCount,
+        newCount,
+        confidence: extracted.extraction.confidence,
+      };
+    }
+
+    // ─── 6. Apply changes: soft-delete old rules, insert new ─────
+    const applied = await step.run("apply-changes", async () => {
+      const now = new Date();
+
+      // Soft-delete every currently-live rule linked to this data_source
+      const deleted = await db
+        .update(minyanRule)
+        .set({ deletedAt: now, updatedAt: now })
+        .where(
+          and(eq(minyanRule.dataSourceId, dataSourceId), isNull(minyanRule.deletedAt)),
+        )
+        .returning({ id: minyanRule.id });
+
+      // Insert the new rules
+      let inserted = 0;
+      for (const r of extracted.extraction.rules) {
+        const time: MinyanTime =
+          r.time.kind === "fixed"
+            ? { kind: "fixed", clock: r.time.clock }
+            : {
+                kind: "zmanim",
+                anchor: r.time.anchor,
+                offsetMin: r.time.offsetMin,
+              };
+
+        await db.insert(minyanRule).values({
+          shulId,
+          dataSourceId,
+          tefillah: r.tefillah,
+          tefillahLabel: r.tefillahLabel ?? null,
+          daysOfWeek: r.daysOfWeek ?? null,
+          time: time as unknown as object,
+          validFrom: r.validFrom ?? null,
+          validTo: r.validTo ?? null,
+          specialScheduleKind: r.specialScheduleKind,
+          priority: 0,
+          nusach: r.nusach ?? null,
+          notes: r.notes ?? null,
+          lastSeenInScrapeAt: now,
+        });
+        inserted++;
+      }
+
+      // Refresh data_source: new hash, new confidence, last_run timestamps
+      await db
+        .update(dataSource)
+        .set({
+          lastRunAt: now,
+          lastRunStatus: "ok",
+          confidenceScore: extracted.extraction.confidence,
+          builtAt: now,
+          builtBy: "llm",
+          configJson: {
+            ...(loaded.configJson as object | null ?? {}),
+            version: 1,
+            page_url: url,
+            final_url: fetched.finalUrl,
+            fetched_status: fetched.status,
+            page_content_hash: extracted.pageContentHash,
+            model: extracted.model,
+            prompt_version: "tfila-v1",
+            extracted_at: now.toISOString(),
+            reasoning: extracted.extraction.reasoning,
+            usage: extracted.usage,
+            last_rejected_extraction: undefined, // clear any prior broken-flag context
+          },
+          updatedAt: now,
+        })
+        .where(eq(dataSource.id, dataSourceId));
+
+      // Audit row
+      await db.insert(scrapeRun).values({
+        shulId,
+        dataSourceId,
+        startedAt: now,
+        finishedAt: new Date(),
+        status: "ok",
+        rulesAdded: inserted,
+        rulesRemoved: deleted.length,
+        rulesChanged: 0, // we do replace-all, not in-place change tracking
+      });
+
+      return { rulesAdded: inserted, rulesRemoved: deleted.length };
+    });
+
+    return {
+      changed: true,
+      reason,
+      hash: extracted.pageContentHash,
+      confidence: extracted.extraction.confidence,
+      model: extracted.model,
+      ...applied,
+    };
+  },
+);
+
+function brokenReason(
+  lowConfidence: boolean,
+  drop: boolean,
+  newCount: number,
+  prevCount: number,
+  confidence: number,
+): string {
+  const parts: string[] = [];
+  if (lowConfidence)
+    parts.push(`confidence ${confidence.toFixed(2)} < ${MIN_AUTO_APPLY_CONFIDENCE}`);
+  if (drop)
+    parts.push(
+      `rule count dropped from ${prevCount} → ${newCount} (>${(1 - BROKEN_DROP_THRESHOLD) * 100}% drop)`,
+    );
+  if (newCount === 0 && prevCount > 0)
+    parts.push(`new extraction produced 0 rules (previous: ${prevCount})`);
+  return parts.join("; ") || "broken (unknown reason)";
+}

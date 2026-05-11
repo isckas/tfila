@@ -13,11 +13,43 @@ Three sections:
 
 ## Now
 
-_(nothing in flight — ready to start PR 4)_
+_(nothing in flight — ready to start PR 5)_
 
 ---
 
 ## Done
+
+### 2026-05-11 — PR 4: weekly cron + per-shul re-scrape ✅
+
+The freshness engine. Mondays 13:00 UTC, every active+approved data_source gets re-fetched. Hash-based change detection skips the LLM call when nothing changed; when something did change, the extractor re-runs with broken-detection guardrails.
+
+- **`lib/inngest/events.ts`**: added `shul.scrape.requested` typed event (`{shulId, dataSourceId, reason: 'weekly' | 'manual'}`).
+- **`lib/inngest/functions/scrape-one-shul.ts`**: per-shul re-scrape function. Concurrency keyed by `shulId` (limit 1) so a single shul never scrapes itself in parallel. Pipeline:
+  1. Load data_source row
+  2. Fetch page (existing `fetchHtml`)
+  3. Hash the truncated content (sha256, same algorithm as `extract.ts`)
+  4. **If hash == previous hash** → write `scrape_run status=no_change`, update `last_run_*` on data_source, done. **No LLM call.**
+  5. **If hash differs** → call `extractFromHtml`
+  6. **Broken-detection** (any of these → mark broken + flip data_source.review_status=pending, leave old rules in place):
+     - confidence < 0.6
+     - new rule count == 0 while previous had any
+     - new count < 50% of old count when old ≥ 3
+  7. Otherwise → soft-delete every live rule on this data_source, insert fresh rules from the extraction, update data_source `config_json` with new hash + reasoning + usage. Write `scrape_run status=ok` with `rules_added`/`rules_removed` counts.
+  - Always writes exactly one `scrape_run` audit row per execution
+  - Honors `SCRAPE_ENABLED=false` kill-switch
+- **`lib/inngest/functions/weekly-rescrape.ts`**: cron-triggered (`0 13 * * MON`). Queries every `(active shul, approved data_source)` pair, fan-outs one `shul.scrape.requested` event each. The per-shul function's concurrency cap throttles execution.
+- **`app/api/inngest/route.ts`**: registers `scrapeOneShul` + `weeklyRescrape` alongside the PR 0/3 functions. Four functions total.
+- **Build verified**: 11 routes still register.
+
+**Cost profile**: At ~$0.025 per LLM extraction and 30 shuls with ~weekly hash-stable pages, expected weekly cost is roughly $0.10-$0.30 (just the shuls whose pages actually changed). Unchanged pages: $0 (no LLM call).
+
+**Why the broken-detection matters**: a shul redesigning their site (different selectors, swapped layout) typically produces an extraction with way fewer rules or low confidence. Without the guardrail, we'd silently soft-delete every rule and the public feed would go blank. The guardrail leaves the previous schedule live until you approve the new extraction from the admin queue.
+
+### 2026-05-11 — Deploy ✅
+- GitHub: pushed to https://github.com/isckas/tfila (private)
+- Vercel: live at **https://tfila.vercel.app**, auto-deploys on push to `main`
+- Smoke-tested: `/`, `/bot`, `/signin`, `/admin/queue` (gates to /signin), `/shul/[slug]`, 404 — all working with prod Neon DB
+- `/api/inngest` returns 500 in prod until `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` are set (expected — code refuses to start without signing keys). Won't affect public routes.
 
 ### 2026-05-11 — PR 3: LLM schema-builder Inngest function ✅
 

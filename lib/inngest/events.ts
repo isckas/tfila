@@ -16,6 +16,20 @@ export interface InngestEvents {
     };
   };
 
+  /**
+   * Per-shul scrape — fired by the weekly cron for each active shul,
+   * or manually for ad-hoc re-scrapes. Differs from `data-source.requested`
+   * in that it OPERATES ON an existing data_source (refreshing rules)
+   * rather than creating a new one.
+   */
+  "shul.scrape.requested": {
+    data: {
+      shulId: number;
+      dataSourceId: number;
+      reason: "weekly" | "manual";
+    };
+  };
+
   /** Proof-of-life event (PR 0). */
   "hello.test": {
     data?: unknown;

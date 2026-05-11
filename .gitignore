@@ -46,3 +46,5 @@ next-env.d.ts
 
 # Claude Code per-session permission cache (personal to each developer)
 .claude/settings.local.json
+
+.vercel
