@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -20,6 +20,12 @@ export const metadata: Metadata = {
   description:
     "Find the next minyan near you. Mobile-first directory of Jewish shul times, kept fresh automatically.",
   metadataBase: new URL("https://tfila.co"),
+};
+
+// We don't have a dark theme — opt out so OS dark mode and Chrome's
+// "Force Dark for Web" don't repaint the page over our light palette.
+export const viewport: Viewport = {
+  colorScheme: "light",
 };
 
 export default function RootLayout({
