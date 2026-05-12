@@ -48,14 +48,23 @@ export default async function AdminQueuePage() {
                     <div className="mt-0.5 text-xs text-neutral-500">
                       <span className="font-mono">{d.kind}</span>
                       {" · "}
-                      <a
-                        href={d.identifier}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline-offset-2 hover:underline break-all"
-                      >
-                        {d.identifier}
-                      </a>
+                      {d.kind === "email_newsletter" ? (
+                        <a
+                          href={`mailto:${d.identifier}`}
+                          className="underline-offset-2 hover:underline break-all"
+                        >
+                          {d.identifier}
+                        </a>
+                      ) : (
+                        <a
+                          href={d.identifier}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline-offset-2 hover:underline break-all"
+                        >
+                          {d.identifier}
+                        </a>
+                      )}
                     </div>
                   </div>
                   <div className="text-right shrink-0">

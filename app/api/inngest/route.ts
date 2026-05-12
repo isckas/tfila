@@ -4,6 +4,7 @@ import { helloProofOfLife } from "@/lib/inngest/functions/hello";
 import { buildDataSource } from "@/lib/inngest/functions/build-data-source";
 import { scrapeOneShul } from "@/lib/inngest/functions/scrape-one-shul";
 import { weeklyRescrape } from "@/lib/inngest/functions/weekly-rescrape";
+import { processEmail } from "@/lib/inngest/functions/process-email";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -12,5 +13,6 @@ export const { GET, POST, PUT } = serve({
     buildDataSource,
     scrapeOneShul,
     weeklyRescrape,
+    processEmail,
   ],
 });

@@ -13,11 +13,34 @@ Three sections:
 
 ## Now
 
-_(nothing in flight)_
+⏸ **PR 11 awaits your Postmark + DNS setup.** App code is shipped; need an inbound email vendor wired to the webhook URL.
 
 ---
 
 ## Done
+
+### 2026-05-12 — PR 11: forward-an-email ingestion (gabbai-free) ✅ (app code; inbound vendor pending user setup)
+
+Closes the "Phase 2" email-newsletter source loop SCOPE.md called for, with the user-revised flow: **any davener forwards their shul's weekly email once, the LLM auto-creates the data_source keyed by the original sender's email, and subsequent forwards from the same original sender keep the rules fresh — gabbai never touches anything**. Special-schedule emails (Tisha B'Av, three weeks, Yom Tov) add date-bounded rules without overwriting the routine weekly pattern.
+
+- **`lib/inbound/extract-original-sender.ts`**: heuristic that finds the original "From: …" line in a forwarded body. Handles Gmail (`---------- Forwarded message ----------`), Outlook (`________`), Apple Mail (`Begin forwarded message:`), and Yahoo (`----- Forwarded Message -----`) forward markers. Returns `{email, name|null}` or null. No LLM call.
+- **`lib/llm/extract-email.ts`**: email-tuned extractor. Reuses the PR 3 Zod schema but with a flat-text, date-aware system prompt and 3 inline few-shot examples (routine weekly, Tisha B'Av, non-schedule). Haiku 4.5 → Sonnet 4.6 fallback below 0.4 confidence. Prompt-cache flag on the system block.
+- **`POST /api/inbound/email`**: Postmark-shaped JSON webhook receiver. HTTP Basic auth via `POSTMARK_INBOUND_USERNAME` + `POSTMARK_INBOUND_PASSWORD` env vars (skipped when either is unset, for local dev / synthetic tests). Validates payload, extracts original sender from the body, fires Inngest event `email.received`. Returns 202 without waiting for LLM (webhook responses must be fast). `maxDuration=30s`.
+- **`lib/inngest/events.ts`**: added `email.received` typed payload.
+- **`lib/inngest/functions/process-email.ts`** (registered alongside the four existing Inngest functions): looks up data_source by `(kind=email_newsletter, identifier=originalSenderEmail)`. **First-time sender → creates a new shul + data_source with `status=pending_review`** (lands in your admin queue). Existing sender → just refreshes rules. The persistence layer is careful:
+  - **Regular rules REPLACE** existing regular rules for the data_source (latest email is authoritative for weekly pattern).
+  - **Special-schedule rules ADD** to whatever's there (priority 10, with `validFrom`/`validTo` set by the LLM from email date context).
+  - Per-shul concurrency cap of 1 (no race when multiple weekly emails arrive simultaneously).
+- **`/submit` rewritten** with two clearly-labeled options: "Submit a URL" (existing form) and "Or, forward your shul's weekly email" (showing `submit@inbound.tfila.co` in a copy-friendly amber pill + collapsible auto-forward setup instructions for Gmail and Outlook). Explicit copy: "no gabbai action is needed for either".
+- **`/admin/queue`**: email-newsletter entries now render with a `mailto:` link on the identifier (since for email kind, the identifier IS an email address, not a URL).
+- **`scripts/test-inbound-email.ts`**: posts a synthetic Postmark-shaped forwarded email payload to the local `/api/inbound/email`. Lets you exercise the whole pipeline (sender extraction → Inngest dispatch → LLM → DB persist) without setting up Postmark first.
+- **Build verified**: 16 routes (+/api/inbound/email).
+
+**What's left for production (user-side setup):**
+1. Sign up at [postmarkapp.com](https://postmarkapp.com) → create an Inbound stream
+2. Configure DNS — Postmark walks you through 3 MX/CNAME records for `inbound.tfila.co` (or use Postmark's bare `xxx@inbound.postmarkapp.com` address as a quick start with no DNS)
+3. In Postmark's inbound stream settings: webhook URL = `https://tfila.vercel.app/api/inbound/email`, optionally set HTTP Basic Auth credentials (and mirror them in Vercel env as `POSTMARK_INBOUND_USERNAME` + `POSTMARK_INBOUND_PASSWORD`)
+4. Update the displayed address on `/submit` (currently hardcoded to `submit@inbound.tfila.co`) to whatever Postmark gives you, if different. Already lifted out as a constant in `app/submit/page.tsx`.
 
 ### 2026-05-12 — PR 10: location search + UX polish ✅
 

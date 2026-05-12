@@ -30,6 +30,25 @@ export interface InngestEvents {
     };
   };
 
+  /**
+   * Sent by the Postmark inbound webhook after a forwarded shul email
+   * lands at submit@inbound.tfila.co.
+   */
+  "email.received": {
+    data: {
+      /** Email of the davener (or whoever forwarded). */
+      forwarderEmail: string;
+      /** Email of the original shul mailing-list sender (extracted from forwarded headers). */
+      originalSenderEmail: string;
+      originalSenderName: string | null;
+      subject: string;
+      /** Plain-text body (already trimmed/sanitized). */
+      body: string;
+      /** ISO timestamp of when the email reached our inbound endpoint. */
+      receivedAt: string;
+    };
+  };
+
   /** Proof-of-life event (PR 0). */
   "hello.test": {
     data?: unknown;
