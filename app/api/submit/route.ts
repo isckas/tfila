@@ -4,6 +4,7 @@ import { db } from "@/db/client";
 import { shul } from "@/db/schema";
 import { slugify, nameFromTitle } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
+import { notifyAdmin } from "@/lib/email";
 
 // Submissions are processed ASYNC. We validate + dedupe + create a
 // placeholder shul row + fire an Inngest event in <1s, then return
@@ -93,6 +94,28 @@ export async function POST(req: Request): Promise<NextResponse> {
     // retry from /admin/queue once a manual-retry button is built.
     console.error("[submit] inngest.send failed:", (err as Error).message);
   }
+
+  // ─── Notify admin (best effort, async) ──────────────────────
+  const origin =
+    req.headers.get("origin") ?? process.env.AUTH_URL ?? new URL(req.url).origin;
+  await notifyAdmin({
+    subject: `new shul submission: ${placeholderName}`,
+    text: [
+      `A new shul was just submitted to tfila.co.`,
+      ``,
+      `Name (placeholder, LLM will overwrite): ${placeholderName}`,
+      `URL: ${url}`,
+      `Contact email (from form): ${email ?? "(none)"}`,
+      `Slug: ${candidateSlug}`,
+      `Forwarder host: ${req.headers.get("host") ?? "?"}`,
+      ``,
+      `Review the extracted rules here once the LLM finishes (~30s):`,
+      `${origin}/admin/shuls?status=pending_review`,
+      ``,
+      `Direct link to the shul (will be empty until rules are extracted):`,
+      `${origin}/shul/${candidateSlug}`,
+    ].join("\n"),
+  });
 
   return NextResponse.redirect(
     new URL(`/submit?ok=1&slug=${encodeURIComponent(newShul.slug)}`, req.url),

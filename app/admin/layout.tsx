@@ -19,6 +19,9 @@ export default async function AdminLayout({
             <Link href="/admin/queue" className="text-neutral-600 hover:text-neutral-900">
               Queue
             </Link>
+            <Link href="/admin/shuls" className="text-neutral-600 hover:text-neutral-900">
+              All shuls
+            </Link>
           </div>
           <div className="flex items-center gap-3 text-sm text-neutral-600">
             <span>{session.email}</span>

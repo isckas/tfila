@@ -141,6 +141,100 @@ export async function countByShulStatus() {
     .groupBy(shul.status);
 }
 
+// ─── Admin shul listing (with search + status filter) ────────────────────
+
+export interface AdminShulRow {
+  id: number;
+  slug: string;
+  name: string;
+  status: string;
+  address: string | null;
+  contactEmail: string | null;
+  submittedUrl: string | null;
+  submittedAt: Date;
+  dataSourceCount: number;
+  liveRuleCount: number;
+  primaryDataSourceId: number | null;
+  primaryDataSourceReview: string | null;
+}
+
+export async function listAdminShuls(opts: {
+  q?: string | null;
+  status?: string | null;
+  limit?: number;
+}): Promise<AdminShulRow[]> {
+  const q = opts.q?.trim();
+  const status = opts.status?.trim();
+  const limit = opts.limit ?? 200;
+
+  // Compose the WHERE clause with Drizzle sql-template parameter
+  // binding. Per-shul aggregates via LATERAL joins keep this a single
+  // round-trip even for the search/filter combinations.
+  let where = sql`1=1`;
+  if (q) {
+    const pattern = `%${q}%`;
+    where = sql`${where} AND (s.name ILIKE ${pattern} OR s.slug ILIKE ${pattern})`;
+  }
+  if (status) {
+    where = sql`${where} AND s.status = ${status}::shul_status`;
+  }
+
+  const res = await db.execute<{
+    id: number;
+    slug: string;
+    name: string;
+    status: string;
+    address: string | null;
+    contact_email: string | null;
+    submitted_url: string | null;
+    submitted_at: Date;
+    data_source_count: number;
+    live_rule_count: number;
+    primary_data_source_id: number | null;
+    primary_data_source_review: string | null;
+  }>(sql`
+    SELECT
+      s.id, s.slug, s.name, s.status::text AS status, s.address, s.contact_email,
+      s.submitted_url, s.submitted_at,
+      COALESCE(ds_agg.cnt, 0)::int AS data_source_count,
+      COALESCE(rule_agg.cnt, 0)::int AS live_rule_count,
+      ds_top.id AS primary_data_source_id,
+      ds_top.review_status::text AS primary_data_source_review
+    FROM shul s
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) AS cnt FROM data_source WHERE shul_id = s.id
+    ) ds_agg ON true
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) AS cnt FROM minyan_rule
+      WHERE shul_id = s.id AND deleted_at IS NULL
+    ) rule_agg ON true
+    LEFT JOIN LATERAL (
+      SELECT id, review_status FROM data_source
+       WHERE shul_id = s.id
+       ORDER BY priority DESC, built_at DESC NULLS LAST, id DESC
+       LIMIT 1
+    ) ds_top ON true
+    WHERE ${where}
+    ORDER BY s.submitted_at DESC
+    LIMIT ${limit}
+  `);
+
+  return res.rows.map((r) => ({
+    id: r.id,
+    slug: r.slug,
+    name: r.name,
+    status: r.status,
+    address: r.address,
+    contactEmail: r.contact_email,
+    submittedUrl: r.submitted_url,
+    submittedAt: r.submitted_at,
+    dataSourceCount: Number(r.data_source_count),
+    liveRuleCount: Number(r.live_rule_count),
+    primaryDataSourceId: r.primary_data_source_id,
+    primaryDataSourceReview: r.primary_data_source_review,
+  }));
+}
+
 // ─── Davener home feed ───────────────────────────────────────────────────
 
 export interface NearbyShulRule {

@@ -17,15 +17,16 @@ export default async function AdminQueuePage() {
         ascending — lowest first.
       </p>
 
-      <section className="mb-6 flex flex-wrap gap-3 text-sm">
+      <section className="mb-6 flex flex-wrap gap-2 text-sm">
         {statusCounts.map((c) => (
-          <span
+          <Link
             key={c.status}
-            className="rounded border border-neutral-200 bg-neutral-50 px-3 py-1"
+            href={`/admin/shuls?status=${c.status}`}
+            className="rounded border border-neutral-200 bg-neutral-50 px-3 py-1 hover:border-neutral-400 hover:bg-white"
           >
             <span className="font-medium">{c.n}</span>{" "}
-            {c.status.replace("_", " ")}
-          </span>
+            <span className="text-neutral-600">{c.status.replace("_", " ")}</span>
+          </Link>
         ))}
       </section>
 

@@ -56,3 +56,26 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+
+/**
+ * Send a one-line notification to the admin (ADMIN_EMAIL).
+ * Used for new shul submissions, failed scrapes, etc.
+ * Silently no-ops if ADMIN_EMAIL is not set.
+ * Errors are swallowed (we never want notifications to break a user flow).
+ */
+export async function notifyAdmin(args: {
+  subject: string;
+  text: string;
+}): Promise<void> {
+  const to = process.env.ADMIN_EMAIL;
+  if (!to) return;
+  try {
+    await sendTransactional({
+      to,
+      subject: `[tfila] ${args.subject}`,
+      text: args.text,
+    });
+  } catch (err) {
+    console.error("[notifyAdmin] failed:", (err as Error).message);
+  }
+}
