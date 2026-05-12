@@ -102,8 +102,8 @@ export function LocationGate() {
 
       {status === "denied" && (
         <p className="mt-4 rounded border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-900">
-          Permission denied. Re-enable location in your browser site settings,
-          or pass <code>?lat=X&amp;lng=Y</code> directly in the URL.
+          Permission denied. Use the search box below instead, or re-enable
+          location in your browser site settings.
         </p>
       )}
       {status === "error" && errorMsg && (
@@ -112,9 +112,40 @@ export function LocationGate() {
         </p>
       )}
 
+      <div className="my-6 flex items-center gap-3 text-xs uppercase tracking-wide text-neutral-400">
+        <span className="h-px flex-1 bg-neutral-200" />
+        or
+        <span className="h-px flex-1 bg-neutral-200" />
+      </div>
+
+      <form method="get" action="/api/search" className="space-y-2">
+        <label className="block text-sm font-medium text-neutral-800">
+          Search by location
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="search"
+            name="q"
+            required
+            placeholder="Address, neighborhood, or city"
+            className="flex-1 rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+          >
+            Search
+          </button>
+        </div>
+        <p className="text-xs text-neutral-500">
+          e.g. &ldquo;Upper West Side, NYC&rdquo; · &ldquo;Fair Lawn, NJ&rdquo; ·
+          zip code · full address
+        </p>
+      </form>
+
       <p className="mt-6 text-xs text-neutral-500">
-        Tip: tfila.co works without an account. Bookmark this URL after granting
-        location to skip this prompt next time.
+        Tip: tfila.co works without an account. Bookmark this URL after picking
+        a location to skip this prompt next time.
       </p>
     </div>
   );

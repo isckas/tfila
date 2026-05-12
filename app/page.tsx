@@ -5,6 +5,8 @@ import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { LocationGate } from "@/components/LocationGate";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
+import { SearchBox } from "@/components/SearchBox";
+import { ChangeLocationButton } from "@/components/ChangeLocationButton";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +17,13 @@ const FUTURE_WINDOW_MIN = 24 * 60; // show upcoming minyanim up to this far out
 const MAX_ITEMS = 25; // cap so the feed doesn't become a wall of text
 
 interface PageProps {
-  searchParams: Promise<{ lat?: string; lng?: string; date?: string }>;
+  searchParams: Promise<{
+    lat?: string;
+    lng?: string;
+    date?: string;
+    err?: string;
+    q?: string;
+  }>;
 }
 
 export default async function HomePage({ searchParams }: PageProps) {
@@ -27,25 +35,49 @@ export default async function HomePage({ searchParams }: PageProps) {
     // No location yet — render the gate.
     const counts = await countByShulStatus();
     const total = counts.reduce((s, c) => s + Number(c.n), 0);
+
     return (
-      <main className="mx-auto max-w-2xl px-4 py-10">
-        <header className="mb-6">
-          <h1 className="text-3xl font-semibold">tfila.co</h1>
-          <p className="text-neutral-600">Find your next minyan near you.</p>
+      <main className="mx-auto max-w-2xl px-5 py-12">
+        <header className="mb-8">
+          <h1 className="text-4xl font-semibold tracking-tight text-neutral-900">
+            tfila<span className="text-amber-700">.</span>co
+          </h1>
+          <p className="mt-2 text-lg text-neutral-700">
+            Find your next minyan near you.
+          </p>
         </header>
+
+        {sp.err && (
+          <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {sp.err === "no-results"
+              ? `We couldn't find "${sp.q ?? ""}". Try a more specific address.`
+              : sp.err === "geocode-failed"
+                ? "The location lookup hit an error. Try again."
+                : "Something went wrong."}
+          </div>
+        )}
+
         <LocationGate />
-        <p className="mt-6 text-xs text-neutral-500">
-          {total} shul{total === 1 ? "" : "s"} indexed.{" "}
-          <Link href="/bot" className="underline">About the scraper</Link>.
-        </p>
+
+        <div className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
+          <span>
+            {total} shul{total === 1 ? "" : "s"} indexed.
+          </span>
+          <div className="flex gap-4">
+            <Link href="/submit" className="font-medium text-amber-800 underline-offset-2 hover:underline">
+              Submit your shul
+            </Link>
+            <Link href="/bot" className="underline-offset-2 hover:underline">
+              About
+            </Link>
+          </div>
+        </div>
       </main>
     );
   }
 
   // ─── Resolved feed ──────────────────────────────────────────────
   const now = new Date();
-  const today = new Date(now);
-  today.setUTCHours(0, 0, 0, 0);
   const todayDow = now.getDay(); // 0 = Sunday in JS
 
   const rows = await getNearbyShulsWithRules(lat, lng, DEFAULT_RADIUS_METERS);
@@ -89,33 +121,38 @@ export default async function HomePage({ searchParams }: PageProps) {
   const trimmed = resolved.slice(0, MAX_ITEMS);
 
   // Zmanim strip is anchored on the user's location, not any particular shul.
-  // Timezone: we don't know it without a lookup; for v1, derive from system
-  // timezone of the request (Vercel servers run UTC). Fall back to ET.
+  // Use the system timezone of the request server (Vercel runs UTC) only as a
+  // last-resort fallback — most shuls in the feed bring their own.
   const userTz =
     Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
   const stripSnapshot = computeZmanimStrip({ lat, lng, timezone: userTz }, now);
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-6">
-      <header className="mb-4 flex items-baseline justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">tfila.co</h1>
-          <p className="text-xs text-neutral-500 tabular-nums">
-            Near {lat.toFixed(3)}, {lng.toFixed(3)}
-            {" · "}
-            {now.toLocaleTimeString([], {
-              hour: "numeric",
-              minute: "2-digit",
-              hour12: true,
-            })}
-          </p>
+    <main className="mx-auto max-w-2xl px-5 py-6">
+      <header className="mb-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <Link href="/" className="block">
+              <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
+                tfila<span className="text-amber-700">.</span>co
+              </h1>
+            </Link>
+            <p className="mt-0.5 text-xs text-neutral-500 tabular-nums">
+              Near {lat.toFixed(3)}, {lng.toFixed(3)}
+              {" · "}
+              {now.toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              })}
+            </p>
+          </div>
+          <ChangeLocationButton />
         </div>
-        <Link
-          href="/"
-          className="text-xs text-neutral-500 underline-offset-2 hover:underline"
-        >
-          change location
-        </Link>
+
+        <div className="mt-3">
+          <SearchBox variant="compact" placeholder="Search a different location…" />
+        </div>
       </header>
 
       <ZmanimStrip snapshot={stripSnapshot} />
@@ -128,9 +165,12 @@ export default async function HomePage({ searchParams }: PageProps) {
         <MinyanList items={trimmed} serverNowMs={now.getTime()} />
       </section>
 
-      <footer className="mt-10 text-xs text-neutral-400">
+      <footer className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
+        <Link href="/submit" className="font-medium text-amber-800 underline-offset-2 hover:underline">
+          Submit your shul
+        </Link>
         <Link href="/bot" className="underline-offset-2 hover:underline">
-          About the scraper
+          About
         </Link>
       </footer>
     </main>

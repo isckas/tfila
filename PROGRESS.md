@@ -13,11 +13,26 @@ Three sections:
 
 ## Now
 
-_(nothing in flight — ready for PR 9 production Inngest + Resend setup)_
+_(nothing in flight)_
 
 ---
 
 ## Done
+
+### 2026-05-12 — PR 10: location search + UX polish ✅
+
+- **`/api/search?q=…`**: server route that geocodes free-text via existing Google API and 303-redirects to `/?lat=X&lng=Y`. Handles empty input + no-results + API errors with proper error params.
+- **`components/SearchBox.tsx`**: plain HTML form, no client JS. Two variants — `full` (label + helper text, used in LocationGate) and `compact` (inline, used in feed header).
+- **LocationGate updated**: search field appears below the "Use my location" button as an `or` alternative. Users who don't want to grant browser geolocation can now type a city/zip/address.
+- **Feed header updated**: compact search box always visible so users can swap locations in one click without going back to the gate.
+- **`components/ChangeLocationButton.tsx`** (new client component): replaces the static `<Link href="/">change location</Link>` which was broken — clicking it bounced back instantly because LocationGate auto-redirects from localStorage. The new button explicitly clears localStorage before navigating to `/`, so the gate actually shows.
+- **Visual refresh**: cream background (`bg-stone-50` on body), softer ambers (`amber-700`/`amber-800` accents for brand wordmark + "Submit your shul" CTAs), more generous padding (`px-5 py-6/12`), rounder cards.
+- **Submit + About links** now visible in home-page header and footer in both location-gate and feed states.
+
+### 2026-05-12 — PR 9: production Inngest + Resend wired ✅
+
+- Inngest: signed up under `isckas`, generated Test-env Event Key + Signing Key, added both to Vercel production env vars. Redeployed. `/api/inngest` now returns 401 to unauthenticated curl (was 500) — the expected response from a signature-protected handler. User still needs to sync the app URL inside the Inngest dashboard (one-time step) and switch to Production-env keys when ready for the real cron.
+- Resend: API key added to Vercel + `AUTH_EMAIL_FROM=onboarding@resend.dev` (until tfila.co domain is verified in Resend). Admin magic-link emails now actually deliver to the inbox.
 
 ### 2026-05-12 — PR 8: public submission form + admin approve/reject ✅
 
