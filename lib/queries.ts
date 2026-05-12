@@ -52,6 +52,45 @@ export async function getLiveRulesForShul(shulId: number) {
     );
 }
 
+/**
+ * Rules visible to the PUBLIC for a shul. Excludes rules from
+ * data_sources with `review_status='rejected'`. Rules from sources
+ * with `review_status='pending'` are included — better to show low-
+ * signal data than nothing, especially during pre-approval window.
+ */
+export async function getPublicRulesForShul(shulId: number) {
+  return db
+    .select({
+      id: minyanRule.id,
+      shulId: minyanRule.shulId,
+      dataSourceId: minyanRule.dataSourceId,
+      tefillah: minyanRule.tefillah,
+      tefillahLabel: minyanRule.tefillahLabel,
+      daysOfWeek: minyanRule.daysOfWeek,
+      time: minyanRule.time,
+      validFrom: minyanRule.validFrom,
+      validTo: minyanRule.validTo,
+      specialScheduleKind: minyanRule.specialScheduleKind,
+      priority: minyanRule.priority,
+      nusach: minyanRule.nusach,
+      notes: minyanRule.notes,
+    })
+    .from(minyanRule)
+    .leftJoin(dataSource, eq(dataSource.id, minyanRule.dataSourceId))
+    .where(
+      and(
+        eq(minyanRule.shulId, shulId),
+        isNull(minyanRule.deletedAt),
+        sql`(${dataSource.id} IS NULL OR ${dataSource.reviewStatus} <> 'rejected')`,
+      ),
+    )
+    .orderBy(
+      desc(minyanRule.priority),
+      asc(minyanRule.tefillah),
+      asc(minyanRule.validFrom),
+    );
+}
+
 // ─── Admin-facing reads ──────────────────────────────────────────────────
 
 export async function listPendingDataSources() {
