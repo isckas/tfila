@@ -133,6 +133,12 @@ export default async function ReviewDetailPage({ params }: PageProps) {
         </span>
       </section>
 
+      <p className="mt-2 text-xs text-neutral-500">
+        Times come from the automated extractor — admin can delete a rule but
+        not hand-edit times. If a rule has the wrong time, delete it and
+        re-extract the data source so the LLM produces a fresh one.
+      </p>
+
       {/* LLM reasoning */}
       {reasoning && (
         <section className="mt-5">
@@ -204,25 +210,18 @@ export default async function ReviewDetailPage({ params }: PageProps) {
                   )}
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Link
-                    href={`/admin/rule/${r.id}/edit`}
-                    className="rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+                <form
+                  method="post"
+                  action={`/api/admin/rule/${r.id}/delete?dsId=${ds.id}`}
+                  className="shrink-0"
+                >
+                  <button
+                    type="submit"
+                    className="rounded border border-rose-300 px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50"
                   >
-                    Edit
-                  </Link>
-                  <form
-                    method="post"
-                    action={`/api/admin/rule/${r.id}/delete?dsId=${ds.id}`}
-                  >
-                    <button
-                      type="submit"
-                      className="rounded border border-rose-300 px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50"
-                    >
-                      Delete
-                    </button>
-                  </form>
-                </div>
+                    Delete
+                  </button>
+                </form>
               </li>
             ))}
           </ul>

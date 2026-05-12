@@ -372,6 +372,27 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </section>
       )}
 
+      {/* ─── Source attribution ─────────────────────────────── */}
+      {shul.submittedUrl && (
+        <section className="mt-8">
+          <h2 className="mb-1 text-sm font-medium text-neutral-700">
+            Schedule source
+          </h2>
+          <p className="text-xs text-neutral-600">
+            Times above are extracted from the shul&apos;s own schedule page,
+            re-checked weekly. Verify against the source directly:{" "}
+            <a
+              href={shul.submittedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all text-amber-800 underline-offset-2 hover:underline"
+            >
+              {shul.submittedUrl}
+            </a>
+          </p>
+        </section>
+      )}
+
       {/* ─── Footer ─────────────────────────────────────────── */}
       <footer className="mt-10 text-xs text-neutral-500">
         Status: <span className="font-mono">{shul.status}</span>

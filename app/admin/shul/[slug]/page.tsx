@@ -4,6 +4,11 @@ import { getShulForAdmin, getRecentScrapeRunsForShul } from "@/lib/queries";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{
+    extracted?: string;
+    err?: string;
+    rebuilt?: string;
+  }>;
 }
 
 export const dynamic = "force-dynamic";
@@ -15,8 +20,12 @@ const STATUS_LABEL: Record<string, string> = {
   archived: "Archived",
 };
 
-export default async function AdminShulDetailPage({ params }: PageProps) {
+export default async function AdminShulDetailPage({
+  params,
+  searchParams,
+}: PageProps) {
   const { slug } = await params;
+  const sp = await searchParams;
   const data = await getShulForAdmin(slug);
   if (!data) notFound();
 
@@ -63,6 +72,53 @@ export default async function AdminShulDetailPage({ params }: PageProps) {
           public page →
         </Link>
       </div>
+
+      {/* Status banner from a recent action */}
+      {sp.extracted === "1" && (
+        <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          ✓ Extraction complete. Review the new data source below.
+        </div>
+      )}
+      {sp.rebuilt === "1" && (
+        <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          ✓ Re-extraction queued. A new data source will appear here once the
+          LLM finishes (~30 seconds; check back).
+        </div>
+      )}
+      {sp.err && (
+        <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          {decodeURIComponent(sp.err)}
+        </div>
+      )}
+
+      {/* No-data-source CTA — most common reason a shul is "pending review" */}
+      {dataSources.length === 0 && s.submittedUrl && (
+        <section className="mt-5 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+          <h2 className="text-sm font-semibold text-amber-900">
+            No data source yet
+          </h2>
+          <p className="mt-1 text-sm text-amber-900">
+            This shul was submitted but the automatic extraction hasn&apos;t
+            run yet (often because Inngest isn&apos;t synced). Run it now:
+          </p>
+          <form
+            method="post"
+            action={`/api/admin/shul/${s.id}/extract`}
+            className="mt-3"
+          >
+            <button
+              type="submit"
+              className="rounded bg-amber-800 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-900"
+            >
+              Run initial extraction
+            </button>
+            <span className="ml-2 text-xs text-amber-800">
+              ~30 seconds. Pulls minyan times from{" "}
+              <span className="font-mono">{s.submittedUrl}</span>.
+            </span>
+          </form>
+        </section>
+      )}
 
       {/* ─── Edit shul metadata ──────────────────────────────── */}
       <section className="mt-6">
