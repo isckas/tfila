@@ -13,11 +13,36 @@ Three sections:
 
 ## Now
 
-_(nothing in flight — ready for the data-quality / submission flow PRs)_
+_(nothing in flight — ready for PR 9 production Inngest + Resend setup)_
 
 ---
 
 ## Done
+
+### 2026-05-12 — PR 8: public submission form + admin approve/reject ✅
+
+Closes the data-input loop. Anyone can submit a shul URL; you (admin) can approve or reject the extracted config from `/admin/queue`.
+
+- **`/submit` page**: simple HTML form (URL + optional contact email). No JS, no client-side state. Success / error states via query string.
+- **`POST /api/submit`**: validates URL, checks for duplicates, fetches the page, calls `extractFromHtml` (PR 3 extractor), tries to find an address too (`extractAddressFromHtml` from PR 6 + Google geocode + `geo-tz` timezone), persists shul + data_source + minyan_rules in a single transaction with `status=pending_review` and `review_status=pending`. Synchronous — takes ~10-30s per submission but that's fine UX for a one-time form. (Inngest is wired in code for async, but until production Inngest keys are set we run inline. Easy switch later.)
+- **`/api/admin/data-source/[id]/approve`**: auth-gated, flips data_source.review_status to approved AND flips shul.status to active. Records reviewer email + timestamp in reviewer_notes.
+- **`/api/admin/data-source/[id]/reject`**: auth-gated, flips review_status to rejected. Rules stay soft-linked but the feed query excludes them.
+- **`/admin/queue` rewritten** from read-only table to a list of cards with inline Approve / Reject form buttons.
+- **Build verified**: 14 routes registered (+/submit + /api/submit + /api/admin/data-source/[id]/{approve,reject}).
+
+### 2026-05-12 — PR 7: data-quality backfill (timezones + LLM-re-extracted rules) ✅
+
+Two one-shot scripts that fix the two data-quality issues uncovered by the PR 5 smoke test, plus a small home-page UX tweak.
+
+- **`scripts/backfill-timezones.ts`** (new): for each shul with location set and timezone null, derive timezone via `geo-tz` package (`find(lat, lng)`) and persist. Idempotent. **29 of 29** shuls now have correct timezones (America/New_York, America/Los_Angeles, America/Chicago, America/Detroit, America/Toronto). Fixes the zmanim resolver for non-Eastern shuls.
+- **`scripts/reextract-rules.ts`** (new): for each shul with location, re-fetches submitted_url, runs `extractFromHtml` (the PR 3 LLM extractor), and replaces the sprint-1-era rules with fresh ones. Upgrades existing data_source rows from `kind=shulcloud_website` to `kind=website_llm` with `review_status=approved` (skips the queue — this is the admin-authoritative refresh). Soft-deletes old rules in the same transaction.
+  - **15 of 29** successfully re-extracted (confidences 0.75–0.92, 67 fresh rules)
+  - **9** skipped (confidence < 0.5 or 0 rules — pages without parseable schedules)
+  - **12** failed near the end with Anthropic `400 invalid_request_error` (looks like API credit limit). Top up at `console.anthropic.com` and re-run; the script is idempotent.
+  - Cost: ~$0.93 in Haiku 4.5 tokens (858K input / 15K output)
+- **Home page window widened**: `app/page.tsx` `FUTURE_WINDOW_MIN` from 6h → 24h, added `MAX_ITEMS = 25` cap. Previously the feed was empty for anyone visiting at off-peak times (e.g. 9 PM ET when today's evening minyanim are done and tomorrow's morning is >6h away). Now you see the next ~25 minyanim in the next day.
+
+**Known residual data-quality issue (not blocking, follow-up):** Some sprint-1 ShulCloud calendar pages produce LLM extractions with fixed clock times (e.g. "Mincha 7:35") rather than zmanim-relative (e.g. "Mincha 18 min before shkia"). The LLM sees the resolved time on the calendar widget for *this week* and faithfully reports it. Times will drift week-to-week. Fix is per-shul: improve the prompt for ShulCloud-specific inputs, or pivot to a shul's static schedule page when available.
 
 ### 2026-05-12 — PR 6: address backfill (29 / 39 shuls geocoded) ✅
 

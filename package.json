@@ -19,6 +19,7 @@
     "@sentry/nextjs": "^10.52.0",
     "cheerio": "^1.2.0",
     "drizzle-orm": "^0.45.2",
+    "geo-tz": "^8.1.7",
     "inngest": "^4.4.0",
     "next": "16.2.4",
     "pg": "^8.20.0",

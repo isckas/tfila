@@ -11,7 +11,8 @@ export const dynamic = "force-dynamic";
 // Feed parameters. Could become user-settable in a later PR.
 const DEFAULT_RADIUS_METERS = 3_220; // ~2 miles
 const PAST_WINDOW_MIN = 30; // show in-progress minyanim from this many minutes ago
-const FUTURE_WINDOW_MIN = 6 * 60; // and upcoming ones up to this far out
+const FUTURE_WINDOW_MIN = 24 * 60; // show upcoming minyanim up to this far out
+const MAX_ITEMS = 25; // cap so the feed doesn't become a wall of text
 
 interface PageProps {
   searchParams: Promise<{ lat?: string; lng?: string; date?: string }>;
@@ -85,6 +86,7 @@ export default async function HomePage({ searchParams }: PageProps) {
     });
   }
   resolved.sort((a, b) => a.startIso.localeCompare(b.startIso));
+  const trimmed = resolved.slice(0, MAX_ITEMS);
 
   // Zmanim strip is anchored on the user's location, not any particular shul.
   // Timezone: we don't know it without a lookup; for v1, derive from system
@@ -120,9 +122,10 @@ export default async function HomePage({ searchParams }: PageProps) {
 
       <section className="mt-5">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
-          Next minyanim ({resolved.length})
+          Next minyanim ({trimmed.length}
+          {resolved.length > trimmed.length && ` of ${resolved.length}`})
         </h2>
-        <MinyanList items={resolved} serverNowMs={now.getTime()} />
+        <MinyanList items={trimmed} serverNowMs={now.getTime()} />
       </section>
 
       <footer className="mt-10 text-xs text-neutral-400">
