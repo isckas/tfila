@@ -47,9 +47,11 @@ export default async function SubmitPage({ searchParams }: PageProps) {
             ? "That URL doesn't look right. Use a full https:// URL."
             : err === "duplicate"
               ? "We already have this shul. Email us if you want to update it."
-              : err === "extract"
-                ? "We couldn't extract minyan times from that URL. Try the schedule/calendar page directly, or use the email option below."
-                : "Something went wrong. Try again, or email us."}
+              : err === "service-unavailable"
+                ? "Our extraction service is temporarily unavailable. Please try again in a few minutes (or use the email option below — it's queued, not synchronous)."
+                : err === "extract"
+                  ? "We couldn't extract minyan times from that URL. Try the schedule/calendar page directly, or use the email option below."
+                  : "Something went wrong. Try again, or email us."}
         </div>
       )}
 

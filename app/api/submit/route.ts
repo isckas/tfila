@@ -63,7 +63,20 @@ export async function POST(req: Request): Promise<NextResponse> {
   let scheduleExtraction;
   try {
     scheduleExtraction = await extractFromHtml(html);
-  } catch {
+  } catch (err) {
+    // Distinguish "service is down" (Anthropic API errors) from "we
+    // couldn't read this particular page". The former gets retried
+    // automatically once the user tops up credits; the latter needs
+    // a human (or a different URL).
+    const msg = (err as Error)?.message ?? "";
+    if (
+      msg.includes("credit balance") ||
+      msg.includes("rate_limit") ||
+      msg.includes("overloaded") ||
+      msg.includes("invalid_request_error")
+    ) {
+      return fail(req, "service-unavailable");
+    }
     return fail(req, "extract");
   }
   if (

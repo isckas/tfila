@@ -11,7 +11,26 @@ Parking lot for ideas that are out of MVP scope but worth not losing. Anything i
 
 ## Triage (new, undecided)
 
-_(empty — both scope expansions resolved 2026-05-11 and promoted to SCOPE.md)_
+### Email-inbound vendor pick (2026-05-12, shelved mid-PR-11)
+
+**Status**: PR 11 app-code is shipped (webhook, Inngest function, LLM extractor, `/submit` UI). Postmark setup blocked because Postmark won't let us configure inbound on a public/free-email domain (`@gmail.com` etc). We need to pick + wire one of these vendors before the email flow goes live:
+
+- **Option A — Postmark bare hashed inbound address** (`<hash>@inbound.postmarkapp.com`): zero DNS, immediate, ugly address.
+- **Option B — Postmark on `inbound.tfila.co`** (preferred, we own tfila.co): one MX record on tfila.co's DNS → Postmark. Result: `submit@inbound.tfila.co`.
+- **Option C — Cloudflare Email Routing + Workers**: free, custom domain, slightly different code path (Workers, not Postmark JSON webhook).
+
+**Code already deployed**, just inert until a webhook fires it:
+- `app/api/inbound/email/route.ts` — accepts Postmark-shaped JSON, HTTP Basic auth via env, fires Inngest event
+- `lib/inngest/functions/process-email.ts` — finds/creates shul, runs LLM extract, persists rules
+- `lib/llm/extract-email.ts` — email-tuned extractor
+- `lib/inbound/extract-original-sender.ts` — heuristic for forwarded "From:" line
+- `app/submit/page.tsx` — UI shows the inbound address (hardcoded `submit@inbound.tfila.co`, swap after pick)
+
+**Tied to env vars** (production):
+- `POSTMARK_INBOUND_USERNAME` + `POSTMARK_INBOUND_PASSWORD` — optional HTTP Basic auth; if unset, webhook accepts unauthenticated POSTs (fine for dev; production should set these)
+- If switching to Cloudflare: ditch the Postmark-shaped JSON; either build a Workers-side adapter or have the Worker POST the same shape
+
+**To resume**: pick A/B/C, sign up + configure, paste the webhook URL `https://tfila.vercel.app/api/inbound/email`, optionally add Basic Auth creds to Vercel, update the hardcoded `INBOUND_ADDRESS` in `app/submit/page.tsx`, redeploy.
 
 ---
 
