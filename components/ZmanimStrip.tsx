@@ -12,16 +12,54 @@ interface Props {
  * on narrow mobile viewports.
  */
 export function ZmanimStrip({ snapshot, timezone }: Props) {
-  const items: Array<{ label: string; value: Date | null }> = [
-    { label: "Alos", value: snapshot.alos },
-    { label: "Netz", value: snapshot.netz },
-    { label: "Sof Shma", value: snapshot.sofZmanShmaGra },
-    { label: "Sof Tef", value: snapshot.sofZmanTefillahGra },
-    { label: "Chatzos", value: snapshot.chatzos },
-    { label: "Mincha G", value: snapshot.minchaGedolah },
-    { label: "Plag", value: snapshot.plag },
-    { label: "Shkia", value: snapshot.shkia },
-    { label: "Tzeis", value: snapshot.tzeis72 },
+  const items: Array<{ label: string; value: Date | null; title: string }> = [
+    {
+      label: "Alos",
+      value: snapshot.alos,
+      title: "Alos Hashachar — dawn (72 min before sunrise)",
+    },
+    {
+      label: "Netz",
+      value: snapshot.netz,
+      title: "Hanetz Hachama — sunrise (earliest Shacharis at sunrise)",
+    },
+    {
+      label: "Sof Shma",
+      value: snapshot.sofZmanShmaGra,
+      title: "Sof Zman Krias Shma (GRA) — latest time to say morning Shma",
+    },
+    {
+      label: "Sof Tef",
+      value: snapshot.sofZmanTefillahGra,
+      title:
+        "Sof Zman Tefillah (GRA) — latest time to begin Shacharis Shemoneh Esrei",
+    },
+    {
+      label: "Chatzos",
+      value: snapshot.chatzos,
+      title: "Chatzos Hayom — solar midday",
+    },
+    {
+      label: "Mincha G",
+      value: snapshot.minchaGedolah,
+      title: "Mincha Gedolah — earliest time to daven Mincha",
+    },
+    {
+      label: "Plag",
+      value: snapshot.plag,
+      title:
+        "Plag Hamincha — earliest time to bring in Shabbos / start early Maariv",
+    },
+    {
+      label: "Shkia",
+      value: snapshot.shkia,
+      title: "Shkia — sunset",
+    },
+    {
+      label: "Tzeis",
+      value: snapshot.tzeis72,
+      title: "Tzeis Hakochavim (72 min) — full nightfall",
+    },
   ];
 
   return (
@@ -35,7 +73,8 @@ export function ZmanimStrip({ snapshot, timezone }: Props) {
         {items.map((it) => (
           <div
             key={it.label}
-            className="flex flex-col items-center rounded-md bg-amber-50/60 px-2 py-1.5 ring-1 ring-amber-100"
+            title={it.title}
+            className="flex cursor-help flex-col items-center rounded-md bg-amber-50/60 px-2 py-1.5 ring-1 ring-amber-100"
           >
             <span className="text-[10px] uppercase tracking-wide text-neutral-500">
               {it.label}

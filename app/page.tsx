@@ -2,11 +2,11 @@ import Link from "next/link";
 import { getNearbyShulsWithRules, countByShulStatus } from "@/lib/queries";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
-import { LocationGate } from "@/components/LocationGate";
+import { reverseGeocode } from "@/lib/geocoding";
+import { FindCard } from "@/components/FindCard";
+import { FeedHeader } from "@/components/FeedHeader";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
-import { RadiusSelector } from "@/components/RadiusSelector";
-import { ChangeLocationButton } from "@/components/ChangeLocationButton";
 
 export const dynamic = "force-dynamic";
 
@@ -32,25 +32,26 @@ export default async function HomePage({ searchParams }: PageProps) {
   const lat = sp.lat ? Number(sp.lat) : null;
   const lng = sp.lng ? Number(sp.lng) : null;
   const radiusMiles = sp.radius ? Number(sp.radius) : DEFAULT_RADIUS_MILES;
-  const radiusMeters = Math.max(50, Math.min(50_000, radiusMiles * MILES_TO_METERS));
+  const radiusMeters = Math.max(
+    50,
+    Math.min(50_000, radiusMiles * MILES_TO_METERS),
+  );
 
-  // ─── No location yet: render the gate ───────────────────────
+  // ─── No location yet: three-card landing ─────────────────────
   if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
     const counts = await countByShulStatus();
     const total = counts.reduce((s, c) => s + Number(c.n), 0);
+
     return (
-      <main className="mx-auto max-w-2xl px-4 py-10 sm:py-14">
-        <header className="mb-7">
-          <h1 className="text-4xl font-semibold tracking-tight text-neutral-900">
+      <main className="mx-auto max-w-5xl px-4 py-8 sm:py-12">
+        <header className="mb-8 sm:mb-10">
+          <h1 className="text-4xl font-semibold tracking-tight text-neutral-900 sm:text-5xl">
             tfila<span className="text-amber-700">.</span>co
           </h1>
-          <p className="mt-2 text-lg text-neutral-700">
-            Find your next minyan — by name, address, or right where you are.
-          </p>
         </header>
 
         {sp.err && (
-          <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {sp.err === "no-results"
               ? `We couldn't find "${sp.q ?? ""}". Try a more specific search.`
               : sp.err === "geocode-failed"
@@ -59,27 +60,71 @@ export default async function HomePage({ searchParams }: PageProps) {
           </div>
         )}
 
-        <LocationGate />
+        {/* ─── Three equal cards — stack on mobile, 3 cols on tablet+ ── */}
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {/* Card 1 — Find (functional widget) */}
+          <FindCard />
 
-        <div className="mt-8 flex flex-wrap items-baseline justify-between gap-3 text-sm text-neutral-500">
+          {/* Card 2 — Look up (nav tile) */}
+          <Link
+            href="/find"
+            className="group flex h-full flex-col rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition hover:border-neutral-400 hover:shadow-md"
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <span aria-hidden className="text-2xl">
+                🔍
+              </span>
+              <h2 className="text-lg font-semibold text-neutral-900">
+                Look up a shul
+              </h2>
+            </div>
+            <p className="mb-4 text-sm text-neutral-600">
+              Find a specific shul by name.
+            </p>
+            <span className="mt-auto inline-flex items-center gap-1 text-sm font-medium text-amber-800 group-hover:underline">
+              Search by name →
+            </span>
+          </Link>
+
+          {/* Card 3 — Add (nav tile, mentions both paths) */}
+          <Link
+            href="/submit"
+            className="group flex h-full flex-col rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition hover:border-neutral-400 hover:shadow-md"
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <span aria-hidden className="text-2xl">
+                ➕
+              </span>
+              <h2 className="text-lg font-semibold text-neutral-900">
+                Add a shul
+              </h2>
+            </div>
+            <p className="mb-2 text-sm text-neutral-600">
+              Two zero-effort options for gabbais and daveners:
+            </p>
+            <ul className="mb-4 space-y-1 text-sm text-neutral-700">
+              <li>• Submit your shul&apos;s calendar URL</li>
+              <li>
+                • Or forward the weekly bulletin to{" "}
+                <span className="break-all font-mono text-xs text-amber-800">
+                  submit@inbound.tfila.co
+                </span>
+              </li>
+            </ul>
+            <span className="mt-auto inline-flex items-center gap-1 text-sm font-medium text-amber-800 group-hover:underline">
+              Add your shul →
+            </span>
+          </Link>
+        </section>
+
+        <footer className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
           <span>
             {total} shul{total === 1 ? "" : "s"} indexed
           </span>
-          <div className="flex flex-wrap gap-4">
-            <Link href="/find" className="underline-offset-2 hover:underline">
-              Find a shul
-            </Link>
-            <Link
-              href="/submit"
-              className="font-medium text-amber-800 underline-offset-2 hover:underline"
-            >
-              Submit your shul
-            </Link>
-            <Link href="/bot" className="underline-offset-2 hover:underline">
-              About
-            </Link>
-          </div>
-        </div>
+          <Link href="/bot" className="underline-offset-2 hover:underline">
+            About
+          </Link>
+        </footer>
       </main>
     );
   }
@@ -132,55 +177,21 @@ export default async function HomePage({ searchParams }: PageProps) {
   const userTz =
     Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
   const stripSnapshot = computeZmanimStrip({ lat, lng, timezone: userTz }, now);
+  const placeName = await reverseGeocode(lat, lng).catch(() => null);
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-6">
-      {/* ─── Header ─────────────────────────────────────────── */}
-      <header className="mb-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <Link href="/" className="block">
-              <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
-                tfila<span className="text-amber-700">.</span>co
-              </h1>
-            </Link>
-            <p className="mt-0.5 text-xs tabular-nums text-neutral-500">
-              Near {lat.toFixed(3)}, {lng.toFixed(3)}
-              {" · "}
-              {now.toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              })}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 text-xs">
-            <RadiusSelector current={radiusMiles} />
-            <ChangeLocationButton />
-          </div>
-        </div>
+    <main className="mx-auto max-w-2xl px-4 pb-8">
+      <FeedHeader
+        placeName={placeName}
+        lat={lat}
+        lng={lng}
+        radiusMiles={radiusMiles}
+      />
 
-        {/* Inline search for switching to a different shul / location */}
-        <form method="get" action="/api/search" className="mt-3 flex gap-1.5">
-          <input
-            type="search"
-            name="q"
-            placeholder="Switch: shul name or location…"
-            className="w-full rounded border border-neutral-300 px-2.5 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
-          />
-          <button
-            type="submit"
-            className="shrink-0 rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
-          >
-            Go
-          </button>
-        </form>
-      </header>
-
-      {/* ─── Zmanim grid (no horizontal scroll) ─────────────── */}
+      {/* Zmanim */}
       <ZmanimStrip snapshot={stripSnapshot} timezone={userTz} />
 
-      {/* ─── Minyanim feed ──────────────────────────────────── */}
+      {/* Minyanim feed */}
       <section className="mt-5">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
           Next minyanim ({trimmed.length}
@@ -192,21 +203,9 @@ export default async function HomePage({ searchParams }: PageProps) {
         <MinyanList items={trimmed} serverNowMs={now.getTime()} />
       </section>
 
-      {/* ─── Footer ─────────────────────────────────────────── */}
-      <footer className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
-        <div className="flex gap-4">
-          <Link href="/find" className="underline-offset-2 hover:underline">
-            Find by name
-          </Link>
-          <Link
-            href="/submit"
-            className="font-medium text-amber-800 underline-offset-2 hover:underline"
-          >
-            Submit your shul
-          </Link>
-        </div>
+      <footer className="mt-10 text-center text-xs text-neutral-500">
         <Link href="/bot" className="underline-offset-2 hover:underline">
-          About
+          About tfila.co
         </Link>
       </footer>
     </main>
