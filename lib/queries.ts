@@ -81,6 +81,57 @@ export async function getDataSourceById(id: number) {
   return rows[0] ?? null;
 }
 
+/** Full review payload: data_source + the shul it belongs to + every
+ *  live rule under this data_source. */
+export async function getDataSourceForReview(id: number) {
+  const dsRows = await db
+    .select({
+      id: dataSource.id,
+      shulId: dataSource.shulId,
+      kind: dataSource.kind,
+      identifier: dataSource.identifier,
+      configJson: dataSource.configJson,
+      confidenceScore: dataSource.confidenceScore,
+      priority: dataSource.priority,
+      builtAt: dataSource.builtAt,
+      builtBy: dataSource.builtBy,
+      lastRunAt: dataSource.lastRunAt,
+      lastRunStatus: dataSource.lastRunStatus,
+      reviewStatus: dataSource.reviewStatus,
+      reviewerNotes: dataSource.reviewerNotes,
+    })
+    .from(dataSource)
+    .where(eq(dataSource.id, id))
+    .limit(1);
+  const ds = dsRows[0];
+  if (!ds) return null;
+
+  const shulRows = await db
+    .select({
+      id: shul.id,
+      slug: shul.slug,
+      name: shul.name,
+      address: shul.address,
+      status: shul.status,
+      contactEmail: shul.contactEmail,
+      submittedUrl: shul.submittedUrl,
+      timezone: shul.timezone,
+      nusach: shul.nusach,
+    })
+    .from(shul)
+    .where(eq(shul.id, ds.shulId))
+    .limit(1);
+  const shulRow = shulRows[0];
+
+  const rules = await db
+    .select()
+    .from(minyanRule)
+    .where(and(eq(minyanRule.dataSourceId, id), isNull(minyanRule.deletedAt)))
+    .orderBy(asc(minyanRule.tefillah), asc(minyanRule.id));
+
+  return { dataSource: ds, shul: shulRow, rules };
+}
+
 // ─── Counters (used in admin landing / health) ───────────────────────────
 
 export async function countByShulStatus() {

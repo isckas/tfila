@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { listPendingDataSources, countByShulStatus } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -42,9 +43,12 @@ export default async function AdminQueuePage() {
               >
                 <div className="flex flex-wrap items-baseline justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="font-medium text-neutral-900">
+                    <Link
+                      href={`/admin/data-source/${d.id}`}
+                      className="font-medium text-neutral-900 hover:text-amber-800 hover:underline underline-offset-2"
+                    >
                       {d.shulName}
-                    </div>
+                    </Link>
                     <div className="mt-0.5 text-xs text-neutral-500">
                       <span className="font-mono">{d.kind}</span>
                       {" · "}
@@ -79,7 +83,13 @@ export default async function AdminQueuePage() {
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Link
+                    href={`/admin/data-source/${d.id}`}
+                    className="rounded bg-amber-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-900"
+                  >
+                    Review rules →
+                  </Link>
                   <form
                     method="post"
                     action={`/api/admin/data-source/${d.id}/approve`}
