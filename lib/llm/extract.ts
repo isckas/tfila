@@ -2,11 +2,14 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
 import { ExtractionSchema, type Extraction } from "./schema";
 import { SYSTEM_PROMPT } from "./prompts";
+import { sanitizeHtmlForLLM } from "../scrapers/sanitize";
 
 // We send the page HTML up to this many chars to Claude. Beyond this, we
-// truncate (and note it in reasoning so the reviewer knows). Most shul
-// pages are well under 50K chars; the cap is a safety net.
-const MAX_HTML_CHARS = 80_000;
+// truncate (and note it in reasoning so the reviewer knows). HTML is
+// sanitized first (scripts/styles/comments stripped), which typically
+// shrinks WordPress/Divi pages 4-5x; pages still over this cap after
+// sanitization are genuinely long.
+const MAX_HTML_CHARS = 120_000;
 
 // Confidence below this triggers the Sonnet fallback.
 const HAIKU_CONFIDENCE_FLOOR = 0.4;
@@ -184,7 +187,10 @@ function extractJsonObject(text: string): string {
 }
 
 export async function extractFromHtml(html: string): Promise<ExtractionResult> {
-  const { html: trimmedHtml, truncated } = trimHtml(html);
+  // Strip scripts/styles/comments BEFORE truncating so the cap measures
+  // real content, not WordPress boilerplate.
+  const sanitized = sanitizeHtmlForLLM(html);
+  const { html: trimmedHtml, truncated } = trimHtml(sanitized);
   const pageContentHash = hashHtml(trimmedHtml);
 
   const haiku = await callClaude("claude-haiku-4-5", trimmedHtml, truncated);
