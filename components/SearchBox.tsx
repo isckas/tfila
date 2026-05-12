@@ -5,8 +5,12 @@ interface Props {
 }
 
 /**
- * Plain HTML form — no client JS. Submits GET to /api/search which
- * geocodes via Google and redirects back to / with lat/lng params.
+ * Unified search form. Submits GET to /api/search which:
+ *   - first tries to match an active shul by name (ILIKE)
+ *   - falls back to geocoding the query as a location
+ *   - if both miss, routes to /find with a "no matches" message.
+ *
+ * Plain HTML, no client JS.
  */
 export function SearchBox({ variant = "full", placeholder }: Props) {
   if (variant === "compact") {
@@ -16,7 +20,7 @@ export function SearchBox({ variant = "full", placeholder }: Props) {
           type="search"
           name="q"
           required
-          placeholder={placeholder ?? "Search location…"}
+          placeholder={placeholder ?? "Search shul name or location…"}
           className="w-full rounded border border-neutral-300 px-2.5 py-1 text-sm focus:border-neutral-500 focus:outline-none"
         />
         <button
@@ -31,14 +35,14 @@ export function SearchBox({ variant = "full", placeholder }: Props) {
   return (
     <form method="get" action="/api/search" className="space-y-2">
       <label className="block text-sm font-medium text-neutral-800">
-        Search by location
+        Find a shul or location
       </label>
       <div className="flex gap-2">
         <input
           type="search"
           name="q"
           required
-          placeholder={placeholder ?? "Address, neighborhood, or city"}
+          placeholder={placeholder ?? "Shul name, address, or city"}
           className="flex-1 rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
         />
         <button
@@ -49,8 +53,9 @@ export function SearchBox({ variant = "full", placeholder }: Props) {
         </button>
       </div>
       <p className="text-xs text-neutral-500">
-        e.g. &ldquo;Upper West Side, NYC&rdquo; · &ldquo;Fair Lawn, NJ&rdquo; · zip
-        code · full address
+        Type a shul name (e.g. &ldquo;Aish Thornhill&rdquo;) to find that
+        shul, or a place (&ldquo;Upper West Side, NYC&rdquo;, zip code, full
+        address) to see what&apos;s nearby.
       </p>
     </form>
   );

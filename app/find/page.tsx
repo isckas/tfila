@@ -2,7 +2,7 @@ import Link from "next/link";
 import { searchActiveShuls } from "@/lib/queries";
 
 interface PageProps {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; miss?: string }>;
 }
 
 export const dynamic = "force-dynamic";
@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function FindShulPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const q = sp.q?.trim() ?? "";
+  const showNoMatchHint = sp.miss === "1";
   const results = q.length >= 2 ? await searchActiveShuls(q, 50) : [];
 
   return (
@@ -28,6 +29,14 @@ export default async function FindShulPage({ searchParams }: PageProps) {
         </Link>
         .
       </p>
+
+      {showNoMatchHint && q && (
+        <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          We didn&apos;t find a shul named &ldquo;{q}&rdquo;, and we couldn&apos;t
+          geocode it as a location either. Try a different spelling, a partial
+          name, or a real address/city.
+        </div>
+      )}
 
       <form method="get" action="/find" className="mt-6 flex gap-2">
         <input
