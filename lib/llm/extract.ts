@@ -121,9 +121,12 @@ async function callClaude(
 }
 
 function stripJsonFences(text: string): string {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/^```(?:json)?\n([\s\S]*?)\n```$/);
-  return fenced ? fenced[1].trim() : trimmed;
+  let t = text.trim();
+  // Strip opening fence (```json or ```)
+  t = t.replace(/^```(?:json|JSON)?\s*\r?\n/, "");
+  // Strip closing fence
+  t = t.replace(/\r?\n\s*```\s*$/, "");
+  return t.trim();
 }
 
 export async function extractFromHtml(html: string): Promise<ExtractionResult> {

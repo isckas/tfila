@@ -13,11 +13,32 @@ Three sections:
 
 ## Now
 
-_(nothing in flight — ready to start PR 6)_
+_(nothing in flight — ready for the data-quality / submission flow PRs)_
 
 ---
 
 ## Done
+
+### 2026-05-12 — PR 6: address backfill (29 / 39 shuls geocoded) ✅
+
+One-shot script that closed the biggest blocker on PR 5 — every sprint-1 shul had `location = NULL` because addresses were never captured. Now 29/39 (74%) have real lat/lng + a normalized street address.
+
+- **`lib/llm/extract-address.ts`**: focused Haiku 4.5 call (~1500-token prompt, no caching needed). Output schema is `{address: string|null, confidence: number, reasoning: string}` via Zod. Cheaper than the full schedule extractor (`lib/llm/extract.ts`) for the single-purpose pass.
+- **`scripts/backfill-addresses.ts`**: for each shul with `location IS NULL` and a `submitted_url`, tries up to 6 candidate URLs in order (the submitted URL, root, `/contact`, `/contact-us`, `/about`, `/directions`). First high-confidence (≥0.55) address wins. Calls `lib/geocoding.ts` (Google Geocoding API) to convert address → lat/lng. Updates `shul.address` + `shul.location` (PostGIS GEOGRAPHY) in a single statement. Idempotent — re-running picks up where it left off because the WHERE clause excludes shuls that already have a location.
+- **Same `stripJsonFences` fix** applied to `lib/llm/extract.ts` and the new `lib/llm/extract-address.ts` — Haiku wraps JSON in `\`\`\`json … \`\`\`` fences sometimes; the regex now handles arbitrary whitespace and optional CR.
+- **Bumped `AddressExtractionSchema.reasoning` max from 300 → 1000 chars** — Haiku's reasoning can be verbose, especially for "no address found" explanations. Same fix would apply to the main extractor if we hit it.
+- **Results**:
+  - 11 shuls geocoded in this session (on top of 18 from a prior partial run)
+  - 11 shuls skipped — addresses genuinely not findable on their public sites (would need manual entry / Google Places lookup / different strategy)
+  - Total LLM cost: ~$0.71 in Haiku 4.5 calls (679K input / 6.7K output tokens)
+  - Geocoding cost: ~$0.15 for 29 successful geocodes
+- **Smoke tested** the live feed at `https://tfila.vercel.app/?lat=...&lng=...` near Fair Lawn and Calabasas. The pipeline (LocationGate → spatial query → rule resolution → render) works end to end.
+
+**Two data-quality issues surfaced during smoke test — separate fixes, not PR 6 scope:**
+1. `shul.timezone` is NULL for all sprint-1 shuls. The zmanim resolver falls back to `America/New_York`, so non-Eastern shuls show times 1-3 hours off. Fix: derive timezone from `lat/lng` (e.g. `geo-tz` or `tz-lookup` library) and backfill via a similar script.
+2. Some `minyan_rule.time` entries from sprint-1 look like *calculated daily zmanim* (e.g. an LA shul with Mincha at "12:52") rather than recurring rule times. The sprint-1 ShulCloud calendar parser likely grabbed that day's resolved times. Fix: re-run the new LLM extractor (PR 3) against the homepages we now have addresses for, replacing the sprint-1 rules with fresh ones.
+
+Both fixes are natural follow-ups. Neither blocks PR 6's value: the geocoded shuls + working pipeline give us a real demo path.
 
 ### 2026-05-11 — PR 5: public "next minyan near me" feed ✅
 
