@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 };
 
 interface PageProps {
-  searchParams: Promise<{ ok?: string; err?: string }>;
+  searchParams: Promise<{ ok?: string; err?: string; slug?: string }>;
 }
 
 // The address daveners forward their shul's weekly email to. When prod
@@ -37,8 +37,21 @@ export default async function SubmitPage({ searchParams }: PageProps) {
 
       {ok && (
         <div className="mt-6 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <strong>Got it.</strong> The submission is in the review queue. Once
-          approved, the shul will appear in the public feed at tfila.co.
+          <strong>Got it.</strong> We&apos;re extracting the schedule in the
+          background — usually 30 seconds or less. The shul will appear in the
+          public feed once an admin approves the extraction.
+          {sp.slug && (
+            <>
+              {" "}You can check on it at{" "}
+              <Link
+                href={`/shul/${sp.slug}`}
+                className="underline-offset-2 hover:underline font-medium"
+              >
+                /shul/{sp.slug}
+              </Link>
+              .
+            </>
+          )}
         </div>
       )}
       {err && (

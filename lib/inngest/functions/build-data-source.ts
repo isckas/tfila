@@ -171,6 +171,26 @@ async function persistExtraction(args: PersistArgs): Promise<{
       `);
     }
 
+    // If the extractor surfaced a real shul name and the shul row still
+    // has the URL-derived placeholder name, upgrade it. We detect a
+    // placeholder by it equaling the bare hostname or containing ".".
+    if (args.extraction.shulName) {
+      const hostname = (() => {
+        try {
+          return new URL(args.url).hostname.replace(/^www\./, "");
+        } catch {
+          return "";
+        }
+      })();
+      await tx.execute(sql`
+        UPDATE shul
+           SET name = ${args.extraction.shulName},
+               updated_at = NOW()
+         WHERE id = ${args.shulId}
+           AND (name = ${hostname} OR name LIKE '%.%')
+      `);
+    }
+
     return { dataSourceId, rulesInserted };
   });
 }
