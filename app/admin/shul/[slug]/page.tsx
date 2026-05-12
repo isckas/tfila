@@ -8,6 +8,7 @@ interface PageProps {
     extracted?: string;
     err?: string;
     rebuilt?: string;
+    from?: string;
   }>;
 }
 
@@ -77,6 +78,16 @@ export default async function AdminShulDetailPage({
       {sp.extracted === "1" && (
         <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           ✓ Extraction complete. Review the new data source below.
+          {sp.from && (
+            <div className="mt-1 text-xs text-emerald-800">
+              The submitted URL had no times; used a fallback URL on the same
+              origin instead:{" "}
+              <code className="rounded bg-emerald-100 px-1.5 py-0.5">
+                {sp.from}
+              </code>
+              . Consider updating the source URL to match.
+            </div>
+          )}
         </div>
       )}
       {sp.rebuilt === "1" && (

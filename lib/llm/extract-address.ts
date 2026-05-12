@@ -68,6 +68,37 @@ function stripJsonFences(text: string): string {
   return t.trim();
 }
 
+function extractJsonObject(text: string): string {
+  const cleaned = stripJsonFences(text);
+  try {
+    JSON.parse(cleaned);
+    return cleaned;
+  } catch {
+    // fall through
+  }
+  const start = cleaned.indexOf("{");
+  if (start === -1) return cleaned;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const c = cleaned[i];
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return cleaned.slice(start, i + 1);
+    }
+  }
+  return cleaned;
+}
+
 export async function extractAddressFromHtml(html: string): Promise<{
   extraction: AddressExtraction;
   inputTokens: number;
@@ -78,20 +109,25 @@ export async function extractAddressFromHtml(html: string): Promise<{
     model: "claude-haiku-4-5",
     max_tokens: 600,
     system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: [{ type: "text", text: truncated }] }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: truncated }] },
+      // Prefill forces JSON-only output, no prose preamble possible.
+      { role: "assistant", content: [{ type: "text", text: "{" }] },
+    ],
   });
 
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
     throw new Error("Haiku returned no text block for address extraction.");
   }
-  const json = stripJsonFences(textBlock.text);
+  const fullText = "{" + textBlock.text;
+  const json = extractJsonObject(fullText);
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch (err) {
     throw new Error(
-      `Address-extractor returned invalid JSON: ${(err as Error).message}. Preview: ${textBlock.text.slice(0, 200)}`,
+      `Address-extractor returned invalid JSON: ${(err as Error).message}. Preview: ${fullText.slice(0, 200)}`,
     );
   }
   const result = AddressExtractionSchema.safeParse(parsed);

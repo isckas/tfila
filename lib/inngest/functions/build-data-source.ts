@@ -6,7 +6,10 @@ import {
   minyanRule,
   type MinyanTime,
 } from "../../../db/schema";
-import { fetchHtml } from "../../scrapers/fetch";
+import {
+  extractFromUrlWithFallback,
+  type FallbackAttempt,
+} from "../../llm/extract-with-fallback";
 import { extractFromHtml } from "../../llm/extract";
 
 function hostOfUrl(url: string): string {
@@ -40,18 +43,12 @@ export const buildDataSource = inngest.createFunction(
       return { skipped: true, reason: "SCRAPE_ENABLED=false" };
     }
 
-    // ─── 1. Fetch the page ──────────────────────────────────────────
-    const fetched = await step.run("fetch-html", async () => {
-      const res = await fetchHtml(url, { timeoutMs: 20_000 });
-      if (!res.ok) {
-        throw new Error(`Fetch failed: HTTP ${res.status} for ${url}`);
-      }
-      return { html: res.html, finalUrl: res.finalUrl, status: res.status };
-    });
-
-    // ─── 2. LLM extract (Haiku → Sonnet fallback) ───────────────────
-    const extracted = await step.run("llm-extract", async () => {
-      return extractFromHtml(fetched.html);
+    // ─── 1+2. Fetch & extract, with same-origin candidate-URL fallback ──
+    // If the submitted URL's page yields nothing (e.g. /calendar is an
+    // events widget on a Reform shul where times live at /worship/shabbat),
+    // we try a small set of well-known service-times paths on the same origin.
+    const extracted = await step.run("fetch-and-extract", async () => {
+      return extractFromUrlWithFallback(url, { timeoutMs: 20_000 });
     });
 
     // ─── 3. Persist ─────────────────────────────────────────────────
@@ -59,32 +56,38 @@ export const buildDataSource = inngest.createFunction(
       return persistExtraction({
         shulId,
         url,
+        winningUrl: extracted.winningUrl,
+        usedFallback: extracted.usedFallback,
+        attempts: extracted.attempts,
         sourceKind,
-        fetchedStatus: fetched.status,
-        fetchedFinalUrl: fetched.finalUrl,
-        extraction: extracted.extraction,
-        model: extracted.model,
-        pageContentHash: extracted.pageContentHash,
-        usage: extracted.usage,
+        extraction: extracted.result.extraction,
+        model: extracted.result.model,
+        pageContentHash: extracted.result.pageContentHash,
+        usage: extracted.result.usage,
       });
     });
 
     return {
       dataSourceId: persisted.dataSourceId,
       rulesInserted: persisted.rulesInserted,
-      confidence: extracted.extraction.confidence,
-      model: extracted.model,
-      reasoning: extracted.extraction.reasoning,
+      confidence: extracted.result.extraction.confidence,
+      model: extracted.result.model,
+      reasoning: extracted.result.extraction.reasoning,
+      winningUrl: extracted.winningUrl,
+      usedFallback: extracted.usedFallback,
     };
   },
 );
 
 interface PersistArgs {
   shulId: number;
+  /** The URL the user originally submitted. */
   url: string;
+  /** The URL that actually produced the winning extraction (may differ from submitted). */
+  winningUrl: string;
+  usedFallback: boolean;
+  attempts: FallbackAttempt[];
   sourceKind: "website_llm" | "shulcloud_website";
-  fetchedStatus: number;
-  fetchedFinalUrl: string;
   extraction: Awaited<ReturnType<typeof extractFromHtml>>["extraction"];
   model: "claude-haiku-4-5" | "claude-sonnet-4-6";
   pageContentHash: string;
@@ -97,9 +100,10 @@ async function persistExtraction(args: PersistArgs): Promise<{
 }> {
   const configJson = {
     version: 1,
-    page_url: args.url,
-    final_url: args.fetchedFinalUrl,
-    fetched_status: args.fetchedStatus,
+    page_url: args.winningUrl,
+    submitted_url: args.url,
+    used_fallback: args.usedFallback,
+    fallback_attempts: args.attempts,
     page_content_hash: args.pageContentHash,
     model: args.model,
     prompt_version: "tfila-v1",
@@ -116,7 +120,7 @@ async function persistExtraction(args: PersistArgs): Promise<{
       .values({
         shulId: args.shulId,
         kind: args.sourceKind,
-        identifier: args.url,
+        identifier: args.winningUrl,
         configJson,
         confidenceScore: args.extraction.confidence,
         builtBy: "llm",

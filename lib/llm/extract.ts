@@ -84,6 +84,12 @@ async function callClaude(
         role: "user",
         content: [{ type: "text", text: userText }],
       },
+      // Prefill forces the assistant response to continue from "{",
+      // making any prose preamble structurally impossible.
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "{" }],
+      },
     ],
   });
 
@@ -91,13 +97,15 @@ async function callClaude(
   if (!textBlock || textBlock.type !== "text") {
     throw new ExtractionError(`Model ${model} returned no text block.`);
   }
-  const jsonStr = stripJsonFences(textBlock.text);
+  // Re-prepend the prefilled "{" so we parse the full JSON object.
+  const fullText = "{" + textBlock.text;
+  const jsonStr = extractJsonObject(fullText);
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(jsonStr);
   } catch (err) {
     throw new ExtractionError(
-      `Model ${model} returned invalid JSON: ${(err as Error).message}. Output preview: ${textBlock.text.slice(0, 200)}`,
+      `Model ${model} returned invalid JSON: ${(err as Error).message}. Output preview: ${fullText.slice(0, 200)}`,
       err,
     );
   }
@@ -127,6 +135,52 @@ function stripJsonFences(text: string): string {
   // Strip closing fence
   t = t.replace(/\r?\n\s*```\s*$/, "");
   return t.trim();
+}
+
+/**
+ * Extract the first balanced JSON object from a string, tolerating prose
+ * preamble/postamble around it. We scan from the first "{" and return the
+ * substring up to the matching "}" at depth 0, ignoring braces inside strings.
+ */
+function extractJsonObject(text: string): string {
+  const cleaned = stripJsonFences(text);
+  // Fast path: already pure JSON.
+  try {
+    JSON.parse(cleaned);
+    return cleaned;
+  } catch {
+    // fall through to balanced-brace scan
+  }
+  const start = cleaned.indexOf("{");
+  if (start === -1) return cleaned;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const c = cleaned[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === "\\") {
+        escape = true;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return cleaned.slice(start, i + 1);
+    }
+  }
+  return cleaned;
 }
 
 export async function extractFromHtml(html: string): Promise<ExtractionResult> {

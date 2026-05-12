@@ -3,8 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { dataSource, minyanRule, shul, type MinyanTime } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
-import { fetchHtml } from "@/lib/scrapers/fetch";
-import { extractFromHtml } from "@/lib/llm/extract";
+import { extractFromUrlWithFallback } from "@/lib/llm/extract-with-fallback";
 
 /**
  * Trigger an immediate (inline, synchronous) LLM extraction for a
@@ -56,34 +55,13 @@ export async function POST(
     );
   }
 
-  // Fetch the page
-  let html: string;
-  try {
-    const fetched = await fetchHtml(s.submittedUrl, { timeoutMs: 25_000 });
-    if (!fetched.ok || !fetched.html) {
-      return NextResponse.redirect(
-        new URL(
-          `/admin/shul/${s.slug}?err=${encodeURIComponent("fetch HTTP " + fetched.status)}`,
-          req.url,
-        ),
-        303,
-      );
-    }
-    html = fetched.html;
-  } catch (err) {
-    return NextResponse.redirect(
-      new URL(
-        `/admin/shul/${s.slug}?err=${encodeURIComponent("fetch error: " + (err as Error).message.slice(0, 80))}`,
-        req.url,
-      ),
-      303,
-    );
-  }
-
-  // LLM extract
+  // Fetch + LLM extract, falling back to a small set of same-origin
+  // service-times paths if the submitted URL yields nothing.
   let extracted;
   try {
-    extracted = await extractFromHtml(html);
+    extracted = await extractFromUrlWithFallback(s.submittedUrl, {
+      timeoutMs: 25_000,
+    });
   } catch (err) {
     const msg = (err as Error)?.message ?? "";
     const tag =
@@ -91,7 +69,9 @@ export async function POST(
         ? "no-credits"
         : msg.includes("rate_limit")
           ? "rate-limited"
-          : "llm-error";
+          : msg.includes("No URL on")
+            ? "no-rules"
+            : "llm-error";
     return NextResponse.redirect(
       new URL(
         `/admin/shul/${s.slug}?err=${encodeURIComponent(tag + ": " + msg.slice(0, 80))}`,
@@ -102,25 +82,29 @@ export async function POST(
   }
 
   // Persist
+  const { result, winningUrl, usedFallback, attempts } = extracted;
   await db.transaction(async (tx) => {
     const [ds] = await tx
       .insert(dataSource)
       .values({
         shulId: s.id,
         kind: "website_llm",
-        identifier: s.submittedUrl!,
+        identifier: winningUrl,
         configJson: {
           version: 1,
-          page_url: s.submittedUrl,
-          page_content_hash: extracted.pageContentHash,
-          model: extracted.model,
+          page_url: winningUrl,
+          submitted_url: s.submittedUrl,
+          used_fallback: usedFallback,
+          fallback_attempts: attempts,
+          page_content_hash: result.pageContentHash,
+          model: result.model,
           prompt_version: "tfila-v1",
           extracted_at: new Date().toISOString(),
-          reasoning: extracted.extraction.reasoning,
-          usage: extracted.usage,
+          reasoning: result.extraction.reasoning,
+          usage: result.usage,
           trigger: "admin_manual_extract",
         },
-        confidenceScore: extracted.extraction.confidence,
+        confidenceScore: result.extraction.confidence,
         priority: 40,
         builtBy: "llm",
         builtAt: new Date(),
@@ -130,7 +114,7 @@ export async function POST(
       })
       .returning({ id: dataSource.id });
 
-    for (const r of extracted.extraction.rules) {
+    for (const r of result.extraction.rules) {
       const time: MinyanTime =
         r.time.kind === "fixed"
           ? { kind: "fixed", clock: r.time.clock }
@@ -154,22 +138,24 @@ export async function POST(
 
     // Promote the LLM-detected shul name + address if the row still
     // has only the placeholder.
-    if (extracted.extraction.shulName) {
+    if (result.extraction.shulName) {
       await tx.execute(sql`
-        UPDATE shul SET name = ${extracted.extraction.shulName}, updated_at = NOW()
+        UPDATE shul SET name = ${result.extraction.shulName}, updated_at = NOW()
         WHERE id = ${s.id} AND (name LIKE '%.%' OR name = '')
       `);
     }
-    if (extracted.extraction.shulAddress) {
+    if (result.extraction.shulAddress) {
       await tx.execute(sql`
-        UPDATE shul SET address = COALESCE(address, ${extracted.extraction.shulAddress}), updated_at = NOW()
+        UPDATE shul SET address = COALESCE(address, ${result.extraction.shulAddress}), updated_at = NOW()
         WHERE id = ${s.id}
       `);
     }
   });
 
+  const qs = new URLSearchParams({ extracted: "1" });
+  if (usedFallback) qs.set("from", winningUrl);
   return NextResponse.redirect(
-    new URL(`/admin/shul/${s.slug}?extracted=1`, req.url),
+    new URL(`/admin/shul/${s.slug}?${qs.toString()}`, req.url),
     303,
   );
 }

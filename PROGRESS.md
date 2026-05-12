@@ -19,6 +19,19 @@ Three sections:
 
 ## Done
 
+### 2026-05-12 — PR 21: same-origin candidate-URL fallback for LLM extraction ✅
+
+Diagnosed why `https://www.bethshalomaustin.org/calendar` returned 0 rules: it's a Reform shul on ShulCloud where `/calendar` is the events widget (Torah Study, social programs) and the actual service times live at `/worship/shabbat`. Our extractor faithfully reported "no minyan content found here", which was correct — but unhelpful. Now if the submitted URL yields nothing useful, we try a short list of well-known service-times paths on the same origin and pick the best result.
+
+- **`lib/llm/extract-with-fallback.ts`** (new): wraps `extractFromHtml` with a per-origin candidate cascade. Trigger: `confidence < 0.4` OR `rules.length === 0`. Candidates (in order): `/worship/shabbat`, `/services`, `/service-times`, `/schedule`, `/minyan`. Short-circuits as soon as a candidate hits `confidence ≥ 0.6` AND has rules. If no candidate beats the submitted URL, returns the original result. Tracks per-URL `attempts[]` (status + httpStatus + confidence + rulesCount) for the audit trail. Worst case: 6 LLM extractions per submission (still bounded; most pages succeed on the first try).
+- **`lib/inngest/functions/build-data-source.ts`**: replaces the two-step `fetch-html` + `llm-extract` with a single `fetch-and-extract` step using the new helper. `data_source.identifier` and `configJson.page_url` now store the **winning URL** (not the submitted one), so weekly rescrapes hit the URL that actually had the data. `configJson` also gets `submitted_url`, `used_fallback`, and `fallback_attempts[]` for the admin reasoning trail.
+- **`app/api/admin/shul/[id]/extract/route.ts`**: same swap. On success, redirect carries `?from=<winningUrl>` when a fallback was used.
+- **`app/admin/shul/[slug]/page.tsx`**: success banner now shows the winning fallback URL when applicable, with a hint to update the source URL to match (so future rescrapes have a stable submitted URL too).
+
+**Why this is OK to ship without re-extracting existing data:** the change only affects new extractions. Existing data_source rows keep their original `identifier`. To rebuild bethshalomaustin.org, click "Extract now from this URL" on the admin page — it'll now find `/worship/shabbat` automatically.
+
+---
+
 ### 2026-05-12 — PR 11: forward-an-email ingestion (gabbai-free) ✅ (app code; inbound vendor pending user setup)
 
 Closes the "Phase 2" email-newsletter source loop SCOPE.md called for, with the user-revised flow: **any davener forwards their shul's weekly email once, the LLM auto-creates the data_source keyed by the original sender's email, and subsequent forwards from the same original sender keep the rules fresh — gabbai never touches anything**. Special-schedule emails (Tisha B'Av, three weeks, Yom Tov) add date-bounded rules without overwriting the routine weekly pattern.

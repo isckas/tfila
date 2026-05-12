@@ -123,6 +123,37 @@ function stripJsonFences(text: string): string {
   return t.trim();
 }
 
+function extractJsonObject(text: string): string {
+  const cleaned = stripJsonFences(text);
+  try {
+    JSON.parse(cleaned);
+    return cleaned;
+  } catch {
+    // fall through
+  }
+  const start = cleaned.indexOf("{");
+  if (start === -1) return cleaned;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const c = cleaned[i];
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return cleaned.slice(start, i + 1);
+    }
+  }
+  return cleaned;
+}
+
 export interface EmailExtractionResult {
   extraction: Extraction;
   model: "claude-haiku-4-5" | "claude-sonnet-4-6";
@@ -149,6 +180,8 @@ async function callClaude(
         role: "user",
         content: [{ type: "text", text: `SUBJECT: ${subject}\nBODY:\n${body}` }],
       },
+      // Prefill forces the response to start at "{" — no prose preamble possible.
+      { role: "assistant", content: [{ type: "text", text: "{" }] },
     ],
   });
 
@@ -156,8 +189,15 @@ async function callClaude(
   if (!textBlock || textBlock.type !== "text") {
     throw new Error(`${model} returned no text block.`);
   }
-  const json = stripJsonFences(textBlock.text);
-  const parsed = JSON.parse(json);
+  const json = extractJsonObject("{" + textBlock.text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    throw new Error(
+      `${model} returned invalid JSON: ${(err as Error).message}. Preview: ${("{" + textBlock.text).slice(0, 200)}`,
+    );
+  }
   const validated = ExtractionSchema.safeParse(parsed);
   if (!validated.success) {
     throw new Error(`${model} output failed Zod validation: ${validated.error.message}`);
