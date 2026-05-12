@@ -1,40 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 const STORAGE_KEY = "tfila.location";
-
-interface SavedLocation {
-  lat: number;
-  lng: number;
-  radius?: number;
-  savedAt: number;
-}
-
-function readSaved(): SavedLocation | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as SavedLocation;
-    if (typeof parsed.lat !== "number" || typeof parsed.lng !== "number")
-      return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 function persist(lat: number, lng: number, radius: number) {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({
-        lat,
-        lng,
-        radius,
-        savedAt: Date.now(),
-      } as SavedLocation),
+      JSON.stringify({ lat, lng, radius, savedAt: Date.now() }),
     );
   } catch {
     // private mode / quota — non-fatal
@@ -46,27 +21,17 @@ function persist(lat: number, lng: number, radius: number) {
  * button (primary CTA) plus a fallback address input (delegates to
  * the unified /api/search route).
  *
- * On mount, restores a saved location from localStorage so a returning
- * visitor jumps straight to the feed without re-clicking the button.
+ * Does NOT auto-redirect on mount even if a saved location exists —
+ * that broke the "click the logo to go home" flow. ResumeBanner
+ * (separate component) renders a dismissible "resume to your saved
+ * location" callout instead.
  */
 export function FindCard() {
   const router = useRouter();
-  const params = useSearchParams();
   const [status, setStatus] = useState<
     "idle" | "requesting" | "denied" | "error"
   >("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // Restore saved location if URL doesn't already have coords.
-  useEffect(() => {
-    if (params.get("lat") && params.get("lng")) return;
-    const saved = readSaved();
-    if (saved) {
-      const r = saved.radius ?? 2;
-      router.replace(`/?lat=${saved.lat}&lng=${saved.lng}&radius=${r}`);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const requestLocation = () => {
     setStatus("requesting");

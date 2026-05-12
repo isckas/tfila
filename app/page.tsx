@@ -1,9 +1,15 @@
 import Link from "next/link";
-import { getNearbyShulsWithRules, countByShulStatus } from "@/lib/queries";
+import {
+  getNearbyShulsWithRules,
+  countByShulStatus,
+  listShulsForLookup,
+} from "@/lib/queries";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { reverseGeocode } from "@/lib/geocoding";
 import { FindCard } from "@/components/FindCard";
+import { LookupCard } from "@/components/LookupCard";
+import { ResumeBanner } from "@/components/ResumeBanner";
 import { FeedHeader } from "@/components/FeedHeader";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
@@ -39,7 +45,10 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   // ─── No location yet: three-card landing ─────────────────────
   if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
-    const counts = await countByShulStatus();
+    const [counts, lookupShuls] = await Promise.all([
+      countByShulStatus(),
+      listShulsForLookup(),
+    ]);
     const total = counts.reduce((s, c) => s + Number(c.n), 0);
 
     return (
@@ -49,6 +58,8 @@ export default async function HomePage({ searchParams }: PageProps) {
             tfila<span className="text-amber-700">.</span>co
           </h1>
         </header>
+
+        <ResumeBanner />
 
         {sp.err && (
           <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -65,26 +76,8 @@ export default async function HomePage({ searchParams }: PageProps) {
           {/* Card 1 — Find (functional widget) */}
           <FindCard />
 
-          {/* Card 2 — Look up (nav tile) */}
-          <Link
-            href="/find"
-            className="group flex h-full flex-col rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition hover:border-neutral-400 hover:shadow-md"
-          >
-            <div className="mb-3 flex items-center gap-2">
-              <span aria-hidden className="text-2xl">
-                🔍
-              </span>
-              <h2 className="text-lg font-semibold text-neutral-900">
-                Look up a shul
-              </h2>
-            </div>
-            <p className="mb-4 text-sm text-neutral-600">
-              Find a specific shul by name.
-            </p>
-            <span className="mt-auto inline-flex items-center gap-1 text-sm font-medium text-amber-800 group-hover:underline">
-              Search by name →
-            </span>
-          </Link>
+          {/* Card 2 — Look up (live fuzzy search embedded) */}
+          <LookupCard shuls={lookupShuls} />
 
           {/* Card 3 — Add (nav tile, mentions both paths) */}
           <Link

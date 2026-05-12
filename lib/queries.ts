@@ -177,6 +177,23 @@ export async function getShulForAdmin(slug: string) {
   };
 }
 
+/**
+ * All active shuls' lightweight payload, used by the home-page
+ * Look-up card for client-side fuzzy matching. Small enough to
+ * inline in the SSR HTML (~50 bytes per shul × ~150 shuls).
+ */
+export async function listShulsForLookup() {
+  return db
+    .select({
+      slug: shul.slug,
+      name: shul.name,
+      address: shul.address,
+    })
+    .from(shul)
+    .where(eq(shul.status, "active"))
+    .orderBy(asc(shul.name));
+}
+
 /** Public free-text search across shul name/slug. Active shuls only. */
 export async function searchActiveShuls(q: string, limit = 30) {
   const pattern = `%${q.trim()}%`;
