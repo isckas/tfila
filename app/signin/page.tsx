@@ -6,13 +6,19 @@ export const metadata: Metadata = {
 };
 
 interface PageProps {
-  searchParams: Promise<{ sent?: string; error?: string }>;
+  searchParams: Promise<{
+    sent?: string;
+    error?: string;
+    err?: string;
+    detail?: string;
+  }>;
 }
 
 export default async function SignInPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const sent = params.sent === "1";
-  const error = params.error;
+  const error = params.error ?? params.err;
+  const detail = params.detail;
 
   return (
     <main className="mx-auto max-w-md px-6 py-16">
@@ -33,7 +39,9 @@ export default async function SignInPage({ searchParams }: PageProps) {
             ? "That link is invalid or expired. Request a new one below."
             : error === "missing"
               ? "Missing token in URL."
-              : "Something went wrong. Try again."}
+              : error === "send"
+                ? `Failed to send the magic link.${detail ? ` (${detail})` : ""}`
+                : "Something went wrong. Try again."}
         </div>
       )}
 
