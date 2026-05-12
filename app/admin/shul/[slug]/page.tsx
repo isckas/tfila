@@ -91,45 +91,95 @@ export default async function AdminShulDetailPage({
         </div>
       )}
 
-      {/* No-data-source CTA — most common reason a shul is "pending review" */}
+      {/* No-data-source warning (still shown when relevant) */}
       {dataSources.length === 0 && s.submittedUrl && (
-        <section className="mt-5 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-          <h2 className="text-sm font-semibold text-amber-900">
-            No data source yet
-          </h2>
-          <p className="mt-1 text-sm text-amber-900">
-            This shul was submitted but the automatic extraction hasn&apos;t
-            run yet (often because Inngest isn&apos;t synced). Run it now:
-          </p>
-          <form
-            method="post"
-            action={`/api/admin/shul/${s.id}/extract`}
-            className="mt-3"
-          >
-            <button
-              type="submit"
-              className="rounded bg-amber-800 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-900"
-            >
-              Run initial extraction
-            </button>
-            <span className="ml-2 text-xs text-amber-800">
-              ~30 seconds. Pulls minyan times from{" "}
-              <span className="font-mono">{s.submittedUrl}</span>.
-            </span>
-          </form>
+        <section className="mt-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <strong>No data source yet</strong> — automatic extraction
+          hasn&apos;t run for this shul. Hit{" "}
+          <span className="font-medium">Extract now</span> in the Source URL
+          section below.
         </section>
       )}
+
+      {/* ─── Source URL (editable + extract trigger) ───────── */}
+      <section className="mt-6">
+        <h2 className="mb-2 text-sm font-medium text-neutral-700">Source URL</h2>
+        <div className="rounded-xl border border-neutral-200 bg-white p-4">
+          <form method="post" action={`/api/admin/shul/${s.id}/edit`}>
+            <label className="block">
+              <span className="text-xs font-medium text-neutral-600">
+                Calendar / schedule URL
+              </span>
+              <input
+                type="url"
+                name="submittedUrl"
+                defaultValue={s.submittedUrl ?? ""}
+                placeholder="https://example-shul.org/calendar"
+                className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1.5 text-sm font-mono focus:border-neutral-500 focus:outline-none"
+              />
+            </label>
+            {/* Re-submit the rest of the existing values so the edit endpoint
+                doesn't blow them away */}
+            <input type="hidden" name="name" value={s.name} />
+            <input type="hidden" name="timezone" value={s.timezone ?? ""} />
+            <input type="hidden" name="address" value={s.address ?? ""} />
+            <input type="hidden" name="nusach" value={s.nusach ?? ""} />
+            <input
+              type="hidden"
+              name="contactEmail"
+              value={s.contactEmail ?? ""}
+            />
+            <p className="mt-1 text-xs text-neutral-500">
+              The page we scrape minyan times from. If the originally submitted
+              URL was wrong, paste the correct one (often a /calendar or
+              /schedule path) and Save.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="submit"
+                className="rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800"
+              >
+                Save URL
+              </button>
+            </div>
+          </form>
+          {s.submittedUrl && (
+            <form
+              method="post"
+              action={`/api/admin/shul/${s.id}/extract`}
+              className="mt-3 border-t border-neutral-200 pt-3"
+            >
+              <button
+                type="submit"
+                className="rounded bg-amber-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-900"
+              >
+                Extract now from this URL
+              </button>
+              <span className="ml-2 text-xs text-neutral-500">
+                ~30 seconds. Creates a new pending data source — old ones
+                remain so you can compare and reject.
+              </span>
+            </form>
+          )}
+        </div>
+      </section>
 
       {/* ─── Edit shul metadata ──────────────────────────────── */}
       <section className="mt-6">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
-          Edit metadata
+          Metadata (location / nusach)
         </h2>
         <form
           method="post"
           action={`/api/admin/shul/${s.id}/edit`}
           className="space-y-3 rounded-xl border border-neutral-200 bg-white p-4"
         >
+          {/* Preserve the source URL when this form is submitted */}
+          <input
+            type="hidden"
+            name="submittedUrl"
+            value={s.submittedUrl ?? ""}
+          />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="text-xs font-medium text-neutral-600">Name</span>
@@ -191,10 +241,10 @@ export default async function AdminShulDetailPage({
               type="submit"
               className="rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800"
             >
-              Save
+              Save metadata
             </button>
             <span className="text-xs text-neutral-500">
-              Re-geocode after address changes is automatic when location is null.
+              Times come from the extractor — not editable here.
             </span>
           </div>
         </form>

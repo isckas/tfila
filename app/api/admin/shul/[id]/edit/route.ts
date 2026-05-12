@@ -25,6 +25,25 @@ export async function POST(
   const nusach = (form.get("nusach") as string | null)?.trim() || null;
   const contactEmail =
     (form.get("contactEmail") as string | null)?.trim() || null;
+  const submittedUrlRaw = (form.get("submittedUrl") as string | null)?.trim();
+  let submittedUrl: string | null = null;
+  if (submittedUrlRaw) {
+    try {
+      const parsed = new URL(submittedUrlRaw);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return NextResponse.json(
+          { error: "URL must be http(s)" },
+          { status: 400 },
+        );
+      }
+      submittedUrl = parsed.toString();
+    } catch {
+      return NextResponse.json(
+        { error: "submittedUrl is not a valid URL" },
+        { status: 400 },
+      );
+    }
+  }
 
   if (!name) {
     return NextResponse.json({ error: "name required" }, { status: 400 });
@@ -47,6 +66,7 @@ export async function POST(
       timezone,
       nusach,
       contactEmail,
+      ...(submittedUrl !== null ? { submittedUrl } : {}),
       updatedAt: new Date(),
     })
     .where(eq(shul.id, shulId));
