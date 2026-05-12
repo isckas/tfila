@@ -64,6 +64,9 @@ export default async function HomePage({ searchParams }: PageProps) {
             {total} shul{total === 1 ? "" : "s"} indexed.
           </span>
           <div className="flex gap-4">
+            <Link href="/find" className="underline-offset-2 hover:underline">
+              Find a shul by name
+            </Link>
             <Link href="/submit" className="font-medium text-amber-800 underline-offset-2 hover:underline">
               Submit your shul
             </Link>
@@ -166,9 +169,14 @@ export default async function HomePage({ searchParams }: PageProps) {
       </section>
 
       <footer className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
-        <Link href="/submit" className="font-medium text-amber-800 underline-offset-2 hover:underline">
-          Submit your shul
-        </Link>
+        <div className="flex gap-4">
+          <Link href="/find" className="underline-offset-2 hover:underline">
+            Find by name
+          </Link>
+          <Link href="/submit" className="font-medium text-amber-800 underline-offset-2 hover:underline">
+            Submit your shul
+          </Link>
+        </div>
         <Link href="/bot" className="underline-offset-2 hover:underline">
           About
         </Link>

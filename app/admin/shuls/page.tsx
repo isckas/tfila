@@ -117,16 +117,12 @@ export default async function AdminShulsPage({ searchParams }: PageProps) {
                   >
                     <td className="px-3 py-2">
                       <div className="font-medium text-neutral-900">
-                        {s.primaryDataSourceId ? (
-                          <Link
-                            href={`/admin/data-source/${s.primaryDataSourceId}`}
-                            className="hover:text-amber-800 hover:underline underline-offset-2"
-                          >
-                            {s.name}
-                          </Link>
-                        ) : (
-                          s.name
-                        )}
+                        <Link
+                          href={`/admin/shul/${s.slug}`}
+                          className="hover:text-amber-800 hover:underline underline-offset-2"
+                        >
+                          {s.name}
+                        </Link>
                       </div>
                       {s.address && (
                         <div className="text-xs text-neutral-500">

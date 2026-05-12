@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { dataSource, minyanRule, shul, type MinyanTime } from "../db/schema";
+import { dataSource, minyanRule, scrapeRun, shul, type MinyanTime } from "../db/schema";
 
 // ─── Davener-facing reads ────────────────────────────────────────────────
 
@@ -79,6 +79,74 @@ export async function getDataSourceById(id: number) {
     .where(eq(dataSource.id, id))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** All data needed to render /admin/shul/[slug]. */
+export async function getShulForAdmin(slug: string) {
+  const shulRows = await db.select().from(shul).where(eq(shul.slug, slug)).limit(1);
+  const s = shulRows[0];
+  if (!s) return null;
+
+  const sources = await db
+    .select({
+      id: dataSource.id,
+      kind: dataSource.kind,
+      identifier: dataSource.identifier,
+      reviewStatus: dataSource.reviewStatus,
+      confidenceScore: dataSource.confidenceScore,
+      priority: dataSource.priority,
+      builtAt: dataSource.builtAt,
+      builtBy: dataSource.builtBy,
+      lastRunAt: dataSource.lastRunAt,
+      lastRunStatus: dataSource.lastRunStatus,
+    })
+    .from(dataSource)
+    .where(eq(dataSource.shulId, s.id))
+    .orderBy(desc(dataSource.priority), desc(dataSource.builtAt));
+
+  // Project lat/lng if location is set
+  const geo = await db.execute<{ lat: number | null; lng: number | null }>(sql`
+    SELECT ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng
+      FROM shul WHERE id = ${s.id}
+  `);
+  const point = geo.rows[0];
+
+  return {
+    shul: { ...s, lat: point?.lat ?? null, lng: point?.lng ?? null },
+    dataSources: sources,
+  };
+}
+
+/** Public free-text search across shul name/slug. Active shuls only. */
+export async function searchActiveShuls(q: string, limit = 30) {
+  const pattern = `%${q.trim()}%`;
+  if (!q.trim()) return [];
+  return db
+    .select({
+      id: shul.id,
+      slug: shul.slug,
+      name: shul.name,
+      address: shul.address,
+    })
+    .from(shul)
+    .where(
+      and(
+        eq(shul.status, "active"),
+        sql`(${shul.name} ILIKE ${pattern} OR ${shul.slug} ILIKE ${pattern})`,
+      ),
+    )
+    .orderBy(asc(shul.name))
+    .limit(limit);
+}
+
+/** Latest scrape_run rows for a shul (audit history). */
+export async function getRecentScrapeRunsForShul(shulId: number, limit = 20) {
+  return db
+    .select()
+    .from(scrapeRun)
+    .where(eq(scrapeRun.shulId, shulId))
+    .orderBy(desc(scrapeRun.startedAt))
+    .limit(limit);
 }
 
 /** Full review payload: data_source + the shul it belongs to + every
