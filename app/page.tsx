@@ -9,6 +9,7 @@ import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { reverseGeocode } from "@/lib/geocoding";
 import { FindCard } from "@/components/FindCard";
 import { LookupCard } from "@/components/LookupCard";
+import { AddCard } from "@/components/AddCard";
 import { ResumeBanner } from "@/components/ResumeBanner";
 import { FeedHeader } from "@/components/FeedHeader";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
@@ -79,35 +80,8 @@ export default async function HomePage({ searchParams }: PageProps) {
           {/* Card 2 — Look up (live fuzzy search embedded) */}
           <LookupCard shuls={lookupShuls} />
 
-          {/* Card 3 — Add (nav tile, mentions both paths) */}
-          <Link
-            href="/submit"
-            className="group flex h-full flex-col rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm transition hover:border-neutral-400 hover:shadow-md"
-          >
-            <div className="mb-3 flex items-center gap-2">
-              <span aria-hidden className="text-2xl">
-                ➕
-              </span>
-              <h2 className="text-lg font-semibold text-neutral-900">
-                Add a shul
-              </h2>
-            </div>
-            <p className="mb-2 text-sm text-neutral-600">
-              Two zero-effort options for gabbais and daveners:
-            </p>
-            <ul className="mb-4 space-y-1 text-sm text-neutral-700">
-              <li>• Submit your shul&apos;s calendar URL</li>
-              <li>
-                • Or forward the weekly bulletin to{" "}
-                <span className="break-all font-mono text-xs text-amber-800">
-                  submit@inbound.tfila.co
-                </span>
-              </li>
-            </ul>
-            <span className="mt-auto inline-flex items-center gap-1 text-sm font-medium text-amber-800 group-hover:underline">
-              Add your shul →
-            </span>
-          </Link>
+          {/* Card 3 — Add (URL form + email instructions embedded) */}
+          <AddCard />
         </section>
 
         <footer className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
