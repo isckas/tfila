@@ -111,6 +111,27 @@ export async function listPendingDataSources() {
     .orderBy(asc(dataSource.confidenceScore), asc(dataSource.builtAt));
 }
 
+export async function listRejectedDataSources() {
+  return db
+    .select({
+      id: dataSource.id,
+      shulId: dataSource.shulId,
+      shulSlug: shul.slug,
+      shulName: shul.name,
+      kind: dataSource.kind,
+      identifier: dataSource.identifier,
+      confidenceScore: dataSource.confidenceScore,
+      builtAt: dataSource.builtAt,
+      builtBy: dataSource.builtBy,
+      reviewerNotes: dataSource.reviewerNotes,
+      updatedAt: dataSource.updatedAt,
+    })
+    .from(dataSource)
+    .innerJoin(shul, eq(shul.id, dataSource.shulId))
+    .where(eq(dataSource.reviewStatus, "rejected"))
+    .orderBy(desc(dataSource.updatedAt));
+}
+
 export async function getDataSourceById(id: number) {
   const rows = await db
     .select()

@@ -19,6 +19,9 @@ export default async function AdminLayout({
             <Link href="/admin/queue" className="text-neutral-600 hover:text-neutral-900">
               Queue
             </Link>
+            <Link href="/admin/rejected" className="text-neutral-600 hover:text-neutral-900">
+              Rejected
+            </Link>
             <Link href="/admin/shuls" className="text-neutral-600 hover:text-neutral-900">
               All shuls
             </Link>

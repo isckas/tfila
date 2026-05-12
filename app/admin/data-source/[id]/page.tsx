@@ -115,18 +115,33 @@ export default async function ReviewDetailPage({ params }: PageProps) {
             Approve
           </button>
         </form>
-        <form
-          method="post"
-          action={`/api/admin/data-source/${ds.id}/reject`}
-          className="inline"
-        >
-          <button
-            type="submit"
-            className="rounded border border-neutral-300 px-4 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100"
+        {ds.reviewStatus === "rejected" ? (
+          <form
+            method="post"
+            action={`/api/admin/data-source/${ds.id}/unreject`}
+            className="inline"
           >
-            Reject
-          </button>
-        </form>
+            <button
+              type="submit"
+              className="rounded border border-amber-400 bg-amber-50 px-4 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100"
+            >
+              Move back to pending
+            </button>
+          </form>
+        ) : (
+          <form
+            method="post"
+            action={`/api/admin/data-source/${ds.id}/reject`}
+            className="inline"
+          >
+            <button
+              type="submit"
+              className="rounded border border-neutral-300 px-4 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100"
+            >
+              Reject
+            </button>
+          </form>
+        )}
         <span className="ml-2 text-xs text-neutral-500">
           {rules.length} rule{rules.length === 1 ? "" : "s"} below. Delete any
           that look wrong, then approve.
