@@ -35,6 +35,10 @@ export const shulStatusEnum = pgEnum("shul_status", [
   "active",
   "broken",
   "archived",
+  // Set by the extraction cascade when every tier (HTML, JS-rendered,
+  // PDF, vision) returns no usable rules. Weekly rescrape skips these
+  // unless an admin manually re-triggers.
+  "unsupported",
 ]);
 
 export const dataSourceKindEnum = pgEnum("data_source_kind", [
@@ -55,6 +59,17 @@ export const dataSourceRunStatusEnum = pgEnum("data_source_run_status", [
   "no_change",
   "broken",
   "error",
+]);
+
+// Which tier of the extraction cascade produced the rules in this
+// data_source. Persisted so weekly rescrapes skip straight to the
+// known-good tier instead of re-running the whole cascade.
+export const extractionStrategyEnum = pgEnum("extraction_strategy", [
+  "html",
+  "js_rendered",
+  "pdf_document",
+  "vision_image",
+  "failed",
 ]);
 
 export const tefillahEnum = pgEnum("tefillah", [
@@ -126,6 +141,7 @@ export const dataSource = pgTable(
     lastReceivedAt: timestamp("last_received_at", { withTimezone: true }),
     lastRunStatus: dataSourceRunStatusEnum("last_run_status"),
     lastRunDiffSummary: jsonb("last_run_diff_summary"),
+    extractionStrategy: extractionStrategyEnum("extraction_strategy"),
     reviewStatus: dataSourceReviewEnum("review_status").default("pending").notNull(),
     reviewerNotes: text("reviewer_notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

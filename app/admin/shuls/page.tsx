@@ -12,9 +12,10 @@ const STATUS_LABELS: Record<string, string> = {
   active: "Active",
   broken: "Broken",
   archived: "Archived",
+  unsupported: "Unsupported",
 };
 
-const STATUSES = ["pending_review", "active", "broken", "archived"];
+const STATUSES = ["pending_review", "active", "broken", "archived", "unsupported"];
 
 export default async function AdminShulsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
@@ -183,6 +184,7 @@ function StatusBadge({ status }: { status: string }) {
     pending_review: "bg-amber-100 text-amber-800",
     broken: "bg-rose-100 text-rose-800",
     archived: "bg-neutral-100 text-neutral-600",
+    unsupported: "bg-rose-100 text-rose-900",
   };
   return (
     <span

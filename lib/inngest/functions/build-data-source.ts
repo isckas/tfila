@@ -1,16 +1,8 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
-import {
-  dataSource,
-  minyanRule,
-  type MinyanTime,
-} from "../../../db/schema";
-import {
-  extractFromUrlWithFallback,
-  type FallbackAttempt,
-} from "../../llm/extract-with-fallback";
-import { extractFromHtml } from "../../llm/extract";
+import { dataSource, minyanRule, shul, type MinyanTime } from "../../../db/schema";
+import { runCascade, type CascadeResult } from "../../llm/cascade";
 
 function hostOfUrl(url: string): string {
   try {
@@ -32,10 +24,15 @@ export const buildDataSource = inngest.createFunction(
     triggers: [{ event: "data-source.requested" }],
   },
   async ({ event, step }) => {
-    const { shulId, url, sourceKind } = event.data as {
+    const { shulId, url, sourceKind, preferredStrategy } = event.data as {
       shulId: number;
       url: string;
       sourceKind: "website_llm" | "shulcloud_website";
+      preferredStrategy?:
+        | "html"
+        | "js_rendered"
+        | "pdf_document"
+        | "vision_image";
     };
 
     // ─── Kill switch ────────────────────────────────────────────────
@@ -43,86 +40,109 @@ export const buildDataSource = inngest.createFunction(
       return { skipped: true, reason: "SCRAPE_ENABLED=false" };
     }
 
-    // ─── 1+2. Fetch & extract, with same-origin candidate-URL fallback ──
-    // If the submitted URL's page yields nothing (e.g. /calendar is an
-    // events widget on a Reform shul where times live at /worship/shabbat),
-    // we try a small set of well-known service-times paths on the same origin.
-    const extracted = await step.run("fetch-and-extract", async () => {
-      return extractFromUrlWithFallback(url, { timeoutMs: 20_000 });
+    // ─── Run the cascade (HTML → JS → PDF → Vision → failed) ────────
+    const result = await step.run("cascade", async () => {
+      return runCascade(url, {
+        timeoutMs: 25_000,
+        preferredStrategy,
+      });
     });
 
-    // ─── 3. Persist ─────────────────────────────────────────────────
+    // ─── Persist (handles success and failed-tier cases) ────────────
     const persisted = await step.run("persist", async () => {
-      return persistExtraction({
-        shulId,
-        url,
-        winningUrl: extracted.winningUrl,
-        usedFallback: extracted.usedFallback,
-        attempts: extracted.attempts,
-        sourceKind,
-        extraction: extracted.result.extraction,
-        model: extracted.result.model,
-        pageContentHash: extracted.result.pageContentHash,
-        usage: extracted.result.usage,
-      });
+      return persistCascade({ shulId, submittedUrl: url, sourceKind, result });
     });
 
     return {
       dataSourceId: persisted.dataSourceId,
+      strategy: result.strategy,
       rulesInserted: persisted.rulesInserted,
-      confidence: extracted.result.extraction.confidence,
-      model: extracted.result.model,
-      reasoning: extracted.result.extraction.reasoning,
-      winningUrl: extracted.winningUrl,
-      usedFallback: extracted.usedFallback,
+      confidence: result.extraction?.confidence ?? null,
+      model: result.model,
+      reasoning: result.extraction?.reasoning ?? null,
+      winningUrl: result.winningUrl,
     };
   },
 );
 
 interface PersistArgs {
   shulId: number;
-  /** The URL the user originally submitted. */
-  url: string;
-  /** The URL that actually produced the winning extraction (may differ from submitted). */
-  winningUrl: string;
-  usedFallback: boolean;
-  attempts: FallbackAttempt[];
+  submittedUrl: string;
   sourceKind: "website_llm" | "shulcloud_website";
-  extraction: Awaited<ReturnType<typeof extractFromHtml>>["extraction"];
-  model: "claude-haiku-4-5" | "claude-sonnet-4-6";
-  pageContentHash: string;
-  usage: Awaited<ReturnType<typeof extractFromHtml>>["usage"];
+  result: CascadeResult;
 }
 
-async function persistExtraction(args: PersistArgs): Promise<{
+async function persistCascade(args: PersistArgs): Promise<{
   dataSourceId: number;
   rulesInserted: number;
 }> {
+  const { result } = args;
+
+  // ─── Failed: mark the shul unsupported, record a failed data_source ─
+  if (result.strategy === "failed" || !result.extraction) {
+    return db.transaction(async (tx) => {
+      const configJson = {
+        version: 2,
+        submitted_url: args.submittedUrl,
+        cascade_attempts: result.attempts,
+        usage: result.usage,
+        extracted_at: new Date().toISOString(),
+      };
+      const [inserted] = await tx
+        .insert(dataSource)
+        .values({
+          shulId: args.shulId,
+          kind: args.sourceKind,
+          identifier: args.submittedUrl,
+          configJson,
+          extractionStrategy: "failed",
+          confidenceScore: null,
+          builtBy: "llm",
+          builtAt: new Date(),
+          lastRunAt: new Date(),
+          lastRunStatus: "broken",
+          reviewStatus: "pending",
+          priority: args.sourceKind === "shulcloud_website" ? 30 : 40,
+        })
+        .returning({ id: dataSource.id });
+      // Mark the shul unsupported so weekly cron skips it.
+      await tx
+        .update(shul)
+        .set({ status: "unsupported", updatedAt: new Date() })
+        .where(eq(shul.id, args.shulId));
+      return { dataSourceId: inserted.id, rulesInserted: 0 };
+    });
+  }
+
+  // ─── Success: persist data_source + rules ────────────────────────
+  // The early-return above narrows `result.strategy !== 'failed'`, but
+  // the compiler can't follow that to result.extraction being non-null.
+  // Pull it into a local for clean access.
+  const extraction = result.extraction;
   const configJson = {
-    version: 1,
-    page_url: args.winningUrl,
-    submitted_url: args.url,
-    used_fallback: args.usedFallback,
-    fallback_attempts: args.attempts,
-    page_content_hash: args.pageContentHash,
-    model: args.model,
+    version: 2,
+    page_url: result.winningUrl,
+    submitted_url: args.submittedUrl,
+    extraction_strategy: result.strategy,
+    cascade_attempts: result.attempts,
+    page_content_hash: result.pageContentHash,
+    model: result.model,
     prompt_version: "tfila-v1",
     extracted_at: new Date().toISOString(),
-    reasoning: args.extraction.reasoning,
-    usage: args.usage,
+    reasoning: extraction.reasoning,
+    usage: result.usage,
   };
 
   return db.transaction(async (tx) => {
-    // Create a new data_source row for this build. (Older builds for the
-    // same shul + URL coexist; admin reviewer picks the canonical one.)
     const [inserted] = await tx
       .insert(dataSource)
       .values({
         shulId: args.shulId,
         kind: args.sourceKind,
-        identifier: args.winningUrl,
+        identifier: result.winningUrl,
         configJson,
-        confidenceScore: args.extraction.confidence,
+        confidenceScore: extraction.confidence,
+        extractionStrategy: result.strategy,
         builtBy: "llm",
         builtAt: new Date(),
         lastRunAt: new Date(),
@@ -131,21 +151,14 @@ async function persistExtraction(args: PersistArgs): Promise<{
         priority: args.sourceKind === "shulcloud_website" ? 30 : 40,
       })
       .returning({ id: dataSource.id });
-
     const dataSourceId = inserted.id;
 
-    // Insert one minyan_rule per extracted rule.
     let rulesInserted = 0;
-    for (const r of args.extraction.rules) {
+    for (const r of extraction.rules) {
       const time: MinyanTime =
         r.time.kind === "fixed"
           ? { kind: "fixed", clock: r.time.clock }
-          : {
-              kind: "zmanim",
-              anchor: r.time.anchor,
-              offsetMin: r.time.offsetMin,
-            };
-
+          : { kind: "zmanim", anchor: r.time.anchor, offsetMin: r.time.offsetMin };
       await tx.insert(minyanRule).values({
         shulId: args.shulId,
         dataSourceId,
@@ -164,31 +177,25 @@ async function persistExtraction(args: PersistArgs): Promise<{
       rulesInserted++;
     }
 
-    // If the extractor surfaced a shul address and the shul has none yet,
-    // populate it (geocoding will happen later when the field is non-null).
-    if (args.extraction.shulAddress) {
+    if (extraction.shulAddress) {
       await tx.execute(sql`
         UPDATE shul
-           SET address = COALESCE(address, ${args.extraction.shulAddress}),
+           SET address = COALESCE(address, ${extraction.shulAddress}),
                updated_at = NOW()
          WHERE id = ${args.shulId}
       `);
     }
-
-    // If the extractor surfaced a real shul name and the shul row still
-    // has the URL-derived placeholder name, upgrade it. We detect a
-    // placeholder by it equaling the bare hostname or containing ".".
-    if (args.extraction.shulName) {
+    if (extraction.shulName) {
       const hostname = (() => {
         try {
-          return new URL(args.url).hostname.replace(/^www\./, "");
+          return new URL(args.submittedUrl).hostname.replace(/^www\./, "");
         } catch {
           return "";
         }
       })();
       await tx.execute(sql`
         UPDATE shul
-           SET name = ${args.extraction.shulName},
+           SET name = ${extraction.shulName},
                updated_at = NOW()
          WHERE id = ${args.shulId}
            AND (name = ${hostname} OR name LIKE '%.%')
@@ -199,5 +206,4 @@ async function persistExtraction(args: PersistArgs): Promise<{
   });
 }
 
-// Re-export for index modules
 export { hostOfUrl };

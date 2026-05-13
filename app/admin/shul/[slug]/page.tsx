@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
   active: "Active",
   broken: "Broken",
   archived: "Archived",
+  unsupported: "Unsupported",
 };
 
 export default async function AdminShulDetailPage({
@@ -293,6 +294,19 @@ export default async function AdminShulDetailPage({
                     <span className={`rounded px-1.5 py-0.5 ${reviewBadge(ds.reviewStatus)}`}>
                       {ds.reviewStatus}
                     </span>
+                    {ds.extractionStrategy && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 ${
+                          ds.extractionStrategy === "failed"
+                            ? "bg-rose-100 text-rose-800"
+                            : ds.extractionStrategy === "html"
+                              ? "bg-neutral-100 text-neutral-700"
+                              : "bg-amber-100 text-amber-900"
+                        }`}
+                      >
+                        {ds.extractionStrategy.replace(/_/g, " ")}
+                      </span>
+                    )}
                     {ds.confidenceScore != null && (
                       <span className="text-neutral-500 tabular-nums">
                         conf {ds.confidenceScore.toFixed(2)}
@@ -416,6 +430,7 @@ function StatusPill({ status }: { status: string }) {
     pending_review: "bg-amber-100 text-amber-800",
     broken: "bg-rose-100 text-rose-800",
     archived: "bg-neutral-100 text-neutral-600",
+    unsupported: "bg-rose-100 text-rose-900",
   };
   return (
     <span className={`rounded px-1.5 py-0.5 text-xs ${styles[status] ?? "bg-neutral-100 text-neutral-700"}`}>

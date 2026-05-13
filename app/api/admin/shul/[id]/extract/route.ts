@@ -3,21 +3,16 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { dataSource, minyanRule, shul, type MinyanTime } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
-import { extractFromUrlWithFallback } from "@/lib/llm/extract-with-fallback";
+import { runCascade } from "@/lib/llm/cascade";
 
 /**
- * Trigger an immediate (inline, synchronous) LLM extraction for a
- * shul that has no data_source yet — e.g. a fresh submission whose
- * Inngest event never got dispatched because the app isn't synced.
+ * Trigger an immediate (inline, synchronous) extraction cascade for
+ * a shul. The cascade runs HTML → JS-rendered → PDF → Vision → failed.
+ * Whatever strategy succeeds gets persisted on the data_source so
+ * weekly rescrapes skip the earlier tiers.
  *
- * Inline because:
- *  - Inngest might not be synced (the auto path may silently drop)
- *  - Admin is waiting on the response, ~30s wait is fine for one click
- *  - Failures are surfaced immediately rather than vanishing into a
- *    queue the admin can't see
- *
- * Caps at 60s. If Anthropic is rate-limited / no credits, surfaces
- * a clear error to the redirect target.
+ * Caps at 60s. Cascade timeouts are tuned to fit (HTML 5s + JS 30s +
+ * PDF/Vision ~10s each in worst case).
  */
 export const maxDuration = 60;
 
@@ -55,13 +50,12 @@ export async function POST(
     );
   }
 
-  // Fetch + LLM extract, falling back to a small set of same-origin
-  // service-times paths if the submitted URL yields nothing.
-  let extracted;
+  // Run the cascade. Cascade itself doesn't throw on missing rules —
+  // it returns strategy='failed' instead. It only throws on Anthropic
+  // hard errors (credit balance, rate limit).
+  let cascade;
   try {
-    extracted = await extractFromUrlWithFallback(s.submittedUrl, {
-      timeoutMs: 25_000,
-    });
+    cascade = await runCascade(s.submittedUrl, { timeoutMs: 25_000 });
   } catch (err) {
     const msg = (err as Error)?.message ?? "";
     const tag =
@@ -69,9 +63,7 @@ export async function POST(
         ? "no-credits"
         : msg.includes("rate_limit")
           ? "rate-limited"
-          : msg.includes("No URL on")
-            ? "no-rules"
-            : "llm-error";
+          : "llm-error";
     return NextResponse.redirect(
       new URL(
         `/admin/shul/${s.slug}?err=${encodeURIComponent(tag + ": " + msg.slice(0, 80))}`,
@@ -81,8 +73,48 @@ export async function POST(
     );
   }
 
-  // Persist
-  const { result, winningUrl, usedFallback, attempts } = extracted;
+  // ─── Failed cascade: record + mark shul unsupported ────────────────
+  if (cascade.strategy === "failed" || !cascade.extraction) {
+    await db.transaction(async (tx) => {
+      await tx.insert(dataSource).values({
+        shulId: s.id,
+        kind: "website_llm",
+        identifier: s.submittedUrl!,
+        configJson: {
+          version: 2,
+          submitted_url: s.submittedUrl,
+          cascade_attempts: cascade.attempts,
+          usage: cascade.usage,
+          extracted_at: new Date().toISOString(),
+          trigger: "admin_manual_extract",
+        },
+        extractionStrategy: "failed",
+        confidenceScore: null,
+        priority: 40,
+        builtBy: "llm",
+        builtAt: new Date(),
+        lastRunAt: new Date(),
+        lastRunStatus: "broken",
+        reviewStatus: "pending",
+      });
+      await tx
+        .update(shul)
+        .set({ status: "unsupported", updatedAt: new Date() })
+        .where(eq(shul.id, s.id));
+    });
+    return NextResponse.redirect(
+      new URL(
+        `/admin/shul/${s.slug}?err=${encodeURIComponent(
+          "no-rules: every tier of the extraction cascade returned 0 rules. Shul marked unsupported.",
+        )}`,
+        req.url,
+      ),
+      303,
+    );
+  }
+
+  // ─── Success: persist ──────────────────────────────────────────────
+  const { extraction, model, winningUrl, strategy, attempts } = cascade;
   await db.transaction(async (tx) => {
     const [ds] = await tx
       .insert(dataSource)
@@ -91,20 +123,21 @@ export async function POST(
         kind: "website_llm",
         identifier: winningUrl,
         configJson: {
-          version: 1,
+          version: 2,
           page_url: winningUrl,
           submitted_url: s.submittedUrl,
-          used_fallback: usedFallback,
-          fallback_attempts: attempts,
-          page_content_hash: result.pageContentHash,
-          model: result.model,
+          extraction_strategy: strategy,
+          cascade_attempts: attempts,
+          page_content_hash: cascade.pageContentHash,
+          model,
           prompt_version: "tfila-v1",
           extracted_at: new Date().toISOString(),
-          reasoning: result.extraction.reasoning,
-          usage: result.usage,
+          reasoning: extraction.reasoning,
+          usage: cascade.usage,
           trigger: "admin_manual_extract",
         },
-        confidenceScore: result.extraction.confidence,
+        confidenceScore: extraction.confidence,
+        extractionStrategy: strategy,
         priority: 40,
         builtBy: "llm",
         builtAt: new Date(),
@@ -114,7 +147,7 @@ export async function POST(
       })
       .returning({ id: dataSource.id });
 
-    for (const r of result.extraction.rules) {
+    for (const r of extraction.rules) {
       const time: MinyanTime =
         r.time.kind === "fixed"
           ? { kind: "fixed", clock: r.time.clock }
@@ -136,24 +169,29 @@ export async function POST(
       });
     }
 
-    // Promote the LLM-detected shul name + address if the row still
-    // has only the placeholder.
-    if (result.extraction.shulName) {
+    if (extraction.shulName) {
       await tx.execute(sql`
-        UPDATE shul SET name = ${result.extraction.shulName}, updated_at = NOW()
+        UPDATE shul SET name = ${extraction.shulName}, updated_at = NOW()
         WHERE id = ${s.id} AND (name LIKE '%.%' OR name = '')
       `);
     }
-    if (result.extraction.shulAddress) {
+    if (extraction.shulAddress) {
       await tx.execute(sql`
-        UPDATE shul SET address = COALESCE(address, ${result.extraction.shulAddress}), updated_at = NOW()
+        UPDATE shul SET address = COALESCE(address, ${extraction.shulAddress}), updated_at = NOW()
         WHERE id = ${s.id}
       `);
     }
+    // If shul was previously marked unsupported, restore to pending_review.
+    await tx
+      .update(shul)
+      .set({ status: "pending_review", updatedAt: new Date() })
+      .where(eq(shul.id, s.id))
+      .execute()
+      .catch(() => {});
   });
 
-  const qs = new URLSearchParams({ extracted: "1" });
-  if (usedFallback) qs.set("from", winningUrl);
+  const qs = new URLSearchParams({ extracted: "1", strategy });
+  if (winningUrl !== s.submittedUrl) qs.set("from", winningUrl);
   return NextResponse.redirect(
     new URL(`/admin/shul/${s.slug}?${qs.toString()}`, req.url),
     303,

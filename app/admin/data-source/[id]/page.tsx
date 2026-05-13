@@ -25,6 +25,8 @@ export default async function ReviewDetailPage({ params }: PageProps) {
     typeof config.extracted_at === "string" ? config.extracted_at : null;
   const pageUrl =
     typeof config.page_url === "string" ? config.page_url : ds.identifier;
+  const extractionStrategy =
+    (ds as { extractionStrategy?: string | null }).extractionStrategy ?? null;
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-8">
@@ -70,6 +72,32 @@ export default async function ReviewDetailPage({ params }: PageProps) {
           {model && (
             <span className="rounded bg-neutral-100 px-2 py-0.5 font-mono">
               {model}
+            </span>
+          )}
+          {extractionStrategy && (
+            <span
+              className={`rounded px-2 py-0.5 ${
+                extractionStrategy === "failed"
+                  ? "bg-rose-100 text-rose-800"
+                  : extractionStrategy === "html"
+                    ? "bg-neutral-100 text-neutral-700"
+                    : "bg-amber-100 text-amber-900"
+              }`}
+              title={
+                extractionStrategy === "html"
+                  ? "Extracted from raw HTML"
+                  : extractionStrategy === "js_rendered"
+                    ? "Extracted from JavaScript-rendered HTML (Browserless)"
+                    : extractionStrategy === "pdf_document"
+                      ? "Extracted from a PDF document via Claude"
+                      : extractionStrategy === "vision_image"
+                        ? "Extracted from a schedule image via Claude vision"
+                        : extractionStrategy === "failed"
+                          ? "Cascade exhausted — no rules extracted from any tier"
+                          : ""
+              }
+            >
+              strategy: <span className="font-medium">{extractionStrategy.replace(/_/g, " ")}</span>
             </span>
           )}
         </div>

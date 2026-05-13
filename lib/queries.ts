@@ -159,6 +159,7 @@ export async function getShulForAdmin(slug: string) {
       builtBy: dataSource.builtBy,
       lastRunAt: dataSource.lastRunAt,
       lastRunStatus: dataSource.lastRunStatus,
+      extractionStrategy: dataSource.extractionStrategy,
     })
     .from(dataSource)
     .where(eq(dataSource.shulId, s.id))

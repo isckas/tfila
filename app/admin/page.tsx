@@ -8,6 +8,7 @@ const STATUS_LABEL: Record<string, string> = {
   active: "Active",
   broken: "Broken",
   archived: "Archived",
+  unsupported: "Unsupported",
 };
 
 export default async function AdminHomePage() {

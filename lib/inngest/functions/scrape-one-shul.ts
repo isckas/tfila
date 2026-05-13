@@ -16,10 +16,12 @@ import {
   dataSource,
   minyanRule,
   scrapeRun,
+  shul,
   type MinyanTime,
 } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
 import { extractFromHtml } from "../../llm/extract";
+import { runCascade } from "../../llm/cascade";
 
 // If the new extraction produces fewer than this fraction of the
 // previous rule count (and we had at least 3 rules before), treat it
@@ -51,7 +53,7 @@ export const scrapeOneShul = inngest.createFunction(
       return { skipped: true, reason: "SCRAPE_ENABLED=false" };
     }
 
-    // ─── 1. Load the data_source row ─────────────────────────────
+    // ─── 1. Load the data_source row + parent shul status ────────
     const loaded = await step.run("load-data-source", async () => {
       const rows = await db
         .select({
@@ -59,13 +61,57 @@ export const scrapeOneShul = inngest.createFunction(
           identifier: dataSource.identifier,
           kind: dataSource.kind,
           configJson: dataSource.configJson,
+          extractionStrategy: dataSource.extractionStrategy,
+          shulStatus: shul.status,
         })
         .from(dataSource)
+        .innerJoin(shul, eq(shul.id, dataSource.shulId))
         .where(eq(dataSource.id, dataSourceId))
         .limit(1);
       if (!rows[0]) throw new Error(`data_source ${dataSourceId} not found`);
       return rows[0];
     });
+
+    // ─── 1a. Skip failed / unsupported sources ──────────────────
+    // If the previous extraction couldn't get rules out of this site
+    // through any tier of the cascade, don't waste resources retrying.
+    // Admin must manually re-trigger.
+    if (
+      loaded.extractionStrategy === "failed" ||
+      loaded.shulStatus === "unsupported"
+    ) {
+      await db.insert(scrapeRun).values({
+        shulId,
+        dataSourceId,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        status: "no_change",
+        rulesAdded: 0,
+        rulesRemoved: 0,
+        rulesChanged: 0,
+        error: "skipped: data_source marked failed / shul unsupported",
+      });
+      return { skipped: true, reason: "unsupported" };
+    }
+
+    // ─── 1b. Non-HTML strategies: rerun the cascade pinned to it ─
+    // The HTML-specific flow below has hash optimization + drop
+    // detection tuned for HTML; for JS-rendered, PDF, vision sources
+    // we just rerun the cascade with the stored strategy and apply
+    // the result without the hash shortcut.
+    if (
+      loaded.extractionStrategy === "js_rendered" ||
+      loaded.extractionStrategy === "pdf_document" ||
+      loaded.extractionStrategy === "vision_image"
+    ) {
+      return rescrapeNonHtml({
+        shulId,
+        dataSourceId,
+        identifier: loaded.identifier,
+        strategy: loaded.extractionStrategy,
+        previousConfig: loaded.configJson as object | null,
+      });
+    }
 
     const url = loaded.identifier;
     const previousHash =
@@ -294,4 +340,189 @@ function brokenReason(
   if (newCount === 0 && prevCount > 0)
     parts.push(`new extraction produced 0 rules (previous: ${prevCount})`);
   return parts.join("; ") || "broken (unknown reason)";
+}
+
+/**
+ * Re-scrape path for non-HTML strategies (js_rendered, pdf_document,
+ * vision_image). Reruns the cascade pinned to the stored strategy so
+ * we don't pay for earlier tiers. Applies the same broken-flag and
+ * soft-delete semantics as the HTML path but without the hash check
+ * (these tiers don't produce a stable content hash anyway).
+ */
+async function rescrapeNonHtml(args: {
+  shulId: number;
+  dataSourceId: number;
+  identifier: string;
+  strategy: "js_rendered" | "pdf_document" | "vision_image";
+  previousConfig: object | null;
+}): Promise<{
+  changed: boolean;
+  broken?: boolean;
+  rulesAdded?: number;
+  rulesRemoved?: number;
+  confidence?: number;
+  strategy: string;
+}> {
+  // The submitted URL is what the cascade needs — for non-HTML strategies
+  // we stored the resource URL (PDF/image) as the identifier. Walk up to
+  // the original submitted_url from configJson so the cascade re-discovers
+  // the resource via its rediscovery logic (PDF link search, etc).
+  const submittedUrl =
+    (args.previousConfig as { submitted_url?: string } | null)?.submitted_url ??
+    args.identifier;
+
+  const cascade = await runCascade(submittedUrl, {
+    timeoutMs: 25_000,
+    preferredStrategy: args.strategy,
+  });
+
+  if (cascade.strategy === "failed" || !cascade.extraction) {
+    await db.insert(scrapeRun).values({
+      shulId: args.shulId,
+      dataSourceId: args.dataSourceId,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      status: "broken",
+      rulesAdded: 0,
+      rulesRemoved: 0,
+      rulesChanged: 0,
+      error: `cascade re-run failed for strategy ${args.strategy}`,
+    });
+    return { changed: false, broken: true, strategy: args.strategy };
+  }
+
+  const prevCount = await db
+    .select({ n: sql<number>`COUNT(*)::int` })
+    .from(minyanRule)
+    .where(
+      and(
+        eq(minyanRule.dataSourceId, args.dataSourceId),
+        isNull(minyanRule.deletedAt),
+      ),
+    )
+    .then((rows) => rows[0]?.n ?? 0);
+
+  const newCount = cascade.extraction.rules.length;
+  const confidenceTooLow =
+    cascade.extraction.confidence < MIN_AUTO_APPLY_CONFIDENCE;
+  const ruleDropSuspicious =
+    prevCount >= 3 && newCount < prevCount * BROKEN_DROP_THRESHOLD;
+
+  if (confidenceTooLow || ruleDropSuspicious || newCount === 0) {
+    await db.insert(scrapeRun).values({
+      shulId: args.shulId,
+      dataSourceId: args.dataSourceId,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      status: "broken",
+      rulesAdded: 0,
+      rulesRemoved: 0,
+      rulesChanged: 0,
+      error: brokenReason(
+        confidenceTooLow,
+        ruleDropSuspicious,
+        newCount,
+        prevCount,
+        cascade.extraction.confidence,
+      ),
+    });
+    await db
+      .update(dataSource)
+      .set({
+        lastRunAt: new Date(),
+        lastRunStatus: "broken",
+        reviewStatus: "pending",
+        confidenceScore: cascade.extraction.confidence,
+        updatedAt: new Date(),
+      })
+      .where(eq(dataSource.id, args.dataSourceId));
+    return {
+      changed: false,
+      broken: true,
+      strategy: args.strategy,
+      confidence: cascade.extraction.confidence,
+    };
+  }
+
+  // Apply: soft-delete old, insert new
+  const now = new Date();
+  const deleted = await db
+    .update(minyanRule)
+    .set({ deletedAt: now, updatedAt: now })
+    .where(
+      and(
+        eq(minyanRule.dataSourceId, args.dataSourceId),
+        isNull(minyanRule.deletedAt),
+      ),
+    )
+    .returning({ id: minyanRule.id });
+
+  let inserted = 0;
+  for (const r of cascade.extraction.rules) {
+    const time: MinyanTime =
+      r.time.kind === "fixed"
+        ? { kind: "fixed", clock: r.time.clock }
+        : { kind: "zmanim", anchor: r.time.anchor, offsetMin: r.time.offsetMin };
+    await db.insert(minyanRule).values({
+      shulId: args.shulId,
+      dataSourceId: args.dataSourceId,
+      tefillah: r.tefillah,
+      tefillahLabel: r.tefillahLabel ?? null,
+      daysOfWeek: r.daysOfWeek ?? null,
+      time: time as unknown as object,
+      validFrom: r.validFrom ?? null,
+      validTo: r.validTo ?? null,
+      specialScheduleKind: r.specialScheduleKind,
+      priority: 0,
+      nusach: r.nusach ?? null,
+      notes: r.notes ?? null,
+      lastSeenInScrapeAt: now,
+    });
+    inserted++;
+  }
+
+  await db
+    .update(dataSource)
+    .set({
+      identifier: cascade.winningUrl,
+      lastRunAt: now,
+      lastRunStatus: "ok",
+      confidenceScore: cascade.extraction.confidence,
+      builtAt: now,
+      builtBy: "llm",
+      configJson: {
+        ...(args.previousConfig ?? {}),
+        version: 2,
+        page_url: cascade.winningUrl,
+        submitted_url: submittedUrl,
+        extraction_strategy: cascade.strategy,
+        cascade_attempts: cascade.attempts,
+        model: cascade.model,
+        prompt_version: "tfila-v1",
+        extracted_at: now.toISOString(),
+        reasoning: cascade.extraction.reasoning,
+        usage: cascade.usage,
+      },
+      updatedAt: now,
+    })
+    .where(eq(dataSource.id, args.dataSourceId));
+
+  await db.insert(scrapeRun).values({
+    shulId: args.shulId,
+    dataSourceId: args.dataSourceId,
+    startedAt: now,
+    finishedAt: new Date(),
+    status: "ok",
+    rulesAdded: inserted,
+    rulesRemoved: deleted.length,
+    rulesChanged: 0,
+  });
+
+  return {
+    changed: true,
+    rulesAdded: inserted,
+    rulesRemoved: deleted.length,
+    confidence: cascade.extraction.confidence,
+    strategy: args.strategy,
+  };
 }
