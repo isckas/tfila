@@ -27,7 +27,31 @@ const STATUS_LABEL: Record<string, string> = {
   unsupported: "Unsupported",
 };
 
-export default async function AdminShulDetailPage({
+export default async function AdminShulDetailPage(props: PageProps) {
+  try {
+    return await renderAdminShulDetail(props);
+  } catch (err) {
+    const e = err as Error;
+    return (
+      <div className="mx-auto max-w-3xl px-5 py-8">
+        <h1 className="text-xl font-semibold text-rose-900">
+          Admin page errored
+        </h1>
+        <p className="mt-2 text-sm text-neutral-700">
+          Temporary debug surface — wraps the page in try/catch and renders the
+          actual server-side error so we can fix it without Vercel logs.
+        </p>
+        <pre className="mt-4 max-h-[60vh] overflow-auto rounded bg-rose-50 p-4 text-xs text-rose-900 whitespace-pre-wrap break-all">
+          {e?.name}: {e?.message}
+          {"\n\n"}
+          {e?.stack}
+        </pre>
+      </div>
+    );
+  }
+}
+
+async function renderAdminShulDetail({
   params,
   searchParams,
 }: PageProps) {
