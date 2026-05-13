@@ -2,20 +2,32 @@
 
 Feature design + decision doc. Each section describes a single feature or concern: what exists today, what's broken or unhandled, possible approaches, and the chosen direction (when decided).
 
-Different from the sibling docs:
-- **[SCOPE.md](./SCOPE.md)** — what tfila.co is and isn't, locked
-- **[PROGRESS.md](./PROGRESS.md)** — rolling log of what's been built
-- **[IDEAS.md](./IDEAS.md)** — parking lot for non-MVP ideas
-- **[CHANGELOG.md](./CHANGELOG.md)** — day-versioned release log for the admin section
-- **[STYLE.md](./STYLE.md)** — UX north star
+### How this differs from the sibling docs
 
-This file is for **bounded feature designs**: each entry has a question, current state, options, and (eventually) a chosen answer that gets promoted into code.
+| File | Purpose | Granularity | Lifecycle |
+|---|---|---|---|
+| [SCOPE.md](./SCOPE.md) | What tfila.co is and isn't, locked | Whole product | Edited rarely |
+| [IDEAS.md](./IDEAS.md) | Parking lot — "maybe someday" | One-line entries | Most never leave |
+| **FEATURES.md** | Designs with open choices we *will* build | Per-feature with options + tradeoffs + decision | Decided → built → archived |
+| [PROGRESS.md](./PROGRESS.md) | Rolling build log | Per-PR / per-day | Append-only |
+| [CHANGELOG.md](./CHANGELOG.md) | Day-versioned release log for admin | Per-version | Auto-bumped at midnight ET |
+| [STYLE.md](./STYLE.md) | UX north star | Project-wide rules | Edited rarely |
+
+**Lifecycle of an idea → feature → ship:**
+
+1. **IDEAS.md** — new idea captured as one line. Most stay here forever.
+2. **FEATURES.md** ← this file — we decide to do it, write a full design entry with options + tradeoffs.
+3. **Pick an option** — annotate the entry with the decision.
+4. **PROGRESS.md** — implementation logged as commits land.
+5. **CHANGELOG.md** — when the day rolls over, the cron grabs the commits into a new version entry that the admin sees.
+
+So: IDEAS is "free-form notes I don't want to lose"; FEATURES is "I'm about to build this and need to think clearly first." After building, the FEATURES entry stays as the historical decision record.
 
 ---
 
 ## Deduplication: same shul, different submissions
 
-Added: 2026-05-13 · Status: **open — needs decision**
+Added: 2026-05-13 · **Decision: Option A (registrable-domain dedup), 2026-05-13. Not yet built.**
 
 **Question:** When two people submit the same shul through different channels, how do we recognize them as the same shul and avoid creating duplicate rows?
 
@@ -105,14 +117,19 @@ Keep the current literal-string dedup. Add an admin action: "Merge shul B into s
 - **Catering one address from multiple weekly bulletins** (one shul, two newsletters: a weekly schedule + a special Yamim Tovim bulletin from a different sender). Same shul, two email senders, both legitimate sources. Solution: each email sender becomes a separate `data_source` under the same shul.
 - **Submission of a re-extract URL after a shul moved domains**. E.g. `oldname.org` (in DB) → resubmit as `newname.org` (current). Should produce a duplicate warning + admin tool to migrate the existing data_source to the new domain.
 
-### Open decision
+### Decision
 
-Pick A, B, C, or D — and confirm the desired UX for the false-positive case (a real false-positive merge needs a way out: admin "split" action, or a confirmation step before merging).
+**Option A — registrable-domain dedup across both channels.** Decided 2026-05-13. Not yet built.
 
-Once decided, the work:
-1. Schema: add `shul.match_domain` (varchar 253, indexed)
-2. Backfill: compute match_domain for existing rows
-3. URL submission path: extract eTLD+1 from submitted URL, dedupe by it
-4. Email submission path: extract eTLD+1 from sender domain, dedupe by it
-5. Cross-link: when a new submission's match_domain hits an existing shul, attach the new submission as an additional `data_source` instead of creating a new shul
-6. Admin "split" tool: if two shuls were incorrectly merged, admin can split them apart
+Open sub-question (to resolve before building): the false-positive escape hatch. Either (1) auto-merge on domain match + admin "split" action to undo, or (2) flag-as-likely-duplicate on the new submission and require admin click-through to merge. The doc currently leans toward (1) auto-merge + admin split, but (2) is safer for the shared-hosting edge case (e.g. many community sites under `chabad.org`).
+
+### Implementation plan (when ready to build)
+
+1. **Schema**: add `shul.match_domain` (varchar 253, indexed)
+2. **Backfill**: compute match_domain for existing rows
+3. **URL submission path** (`app/api/submit/route.ts`): extract eTLD+1 from submitted URL via `tldts`, dedupe by it
+4. **Email submission path** (`lib/inngest/functions/process-email.ts`): extract eTLD+1 from sender domain, dedupe by it
+5. **Cross-link**: when a new submission's match_domain hits an existing shul, attach as an additional `data_source` under the same shul instead of creating a new shul
+6. **Admin "split" tool**: if two shuls were incorrectly merged, admin can split them apart
+
+Each step is small and independent. Could ship across 3 PRs (schema + backfill / submission paths / admin tool) or one if we have a quiet day.
