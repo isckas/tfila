@@ -99,6 +99,23 @@ async function buildOgImage(outPath) {
   console.log(`✓ ${outPath} (${W}x${H})`);
 }
 
+async function buildLegacyFavicon(outPath) {
+  ensureDir(outPath);
+  // Static fallback for /favicon.ico — covers link unfurlers and older
+  // clients that hardcode the legacy path instead of reading the <link
+  // rel="icon"> tag. Sharp can't write true multi-resolution ICO (libvips
+  // lacks the encoder), so we emit a 32x32 PNG with .ico extension.
+  // Browsers accept this magic-byte mismatch on the legacy favicon path.
+  await sharp("app/icon.png")
+    .resize(32, 32, {
+      fit: "contain",
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    })
+    .png({ compressionLevel: 9 })
+    .toFile(outPath);
+  console.log(`✓ ${outPath} (32x32 png-as-ico)`);
+}
+
 async function main() {
   // Sanity-check source exists + readable
   readFileSync(SOURCE);
@@ -106,6 +123,7 @@ async function main() {
   await buildIconOnly(512, "app/icon.png");
   await buildIconOnly(180, "app/apple-icon.png");
   await buildOgImage("app/opengraph-image.png");
+  await buildLegacyFavicon("public/favicon.ico");
 
   console.log("\nDone. Next 16 auto-wires icon.png/apple-icon.png/opengraph-image.png");
   console.log("from app/. No layout.tsx changes needed for those.");
