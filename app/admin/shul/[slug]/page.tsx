@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getShulForAdmin, getRecentScrapeRunsForShul } from "@/lib/queries";
+import { parseCascadeAttempts } from "@/lib/llm/cascade";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -130,8 +131,7 @@ export default async function AdminShulDetailPage({
         );
         if (!latestFailed) return null;
         const cfg = (latestFailed.configJson as Record<string, unknown>) ?? {};
-        const attempts =
-          (cfg.cascade_attempts as Array<Record<string, unknown>> | undefined) ?? [];
+        const attempts = parseCascadeAttempts(cfg.cascade_attempts);
         return (
           <section className="mt-4 rounded-xl border-2 border-rose-300 bg-rose-50 p-4 text-sm">
             <header className="mb-3 flex items-baseline justify-between gap-3">
@@ -154,15 +154,12 @@ export default async function AdminShulDetailPage({
             ) : (
               <ol className="space-y-2">
                 {attempts.map((a, i) => {
-                  const strategy = String(a.strategy ?? "?");
-                  const status = String(a.status ?? "?");
-                  const rules = Number(a.rulesCount ?? 0);
-                  const conf =
-                    typeof a.confidence === "number" ? a.confidence : null;
-                  const url =
-                    typeof a.resourceUrl === "string" ? a.resourceUrl : null;
-                  const err =
-                    typeof a.errorMessage === "string" ? a.errorMessage : null;
+                  const strategy = a.strategy;
+                  const status = a.status;
+                  const rules = a.rulesCount;
+                  const conf = a.confidence;
+                  const url = a.resourceUrl ?? null;
+                  const err = a.errorMessage ?? null;
                   const badge =
                     status === "extracted"
                       ? "bg-amber-200 text-amber-900"

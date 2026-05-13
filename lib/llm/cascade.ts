@@ -28,6 +28,7 @@ import {
   type VisionExtractionResult,
 } from "./extract-vision";
 import { extractFromUrlWithFallback } from "./extract-with-fallback";
+import { z } from "zod";
 
 const MIN_USEFUL_CONFIDENCE = 0.4;
 
@@ -38,13 +39,51 @@ export type ExtractionStrategy =
   | "vision_image"
   | "failed";
 
-export interface CascadeAttempt {
-  strategy: ExtractionStrategy;
-  status: "extracted" | "fetch_failed" | "extract_failed" | "skipped";
-  rulesCount: number;
-  confidence: number | null;
-  resourceUrl?: string;
-  errorMessage?: string;
+// Zod schema for one cascade attempt. Used by admin UI (and any future
+// consumer) to validate `configJson.cascade_attempts` at read time.
+// Drizzle types `configJson` as `unknown` since it's JSONB, so without
+// this schema the admin UI silently swallows shape drift.
+export const CascadeAttemptSchema = z.object({
+  strategy: z.enum([
+    "html",
+    "js_rendered",
+    "pdf_document",
+    "vision_image",
+    "failed",
+  ]),
+  status: z.enum(["extracted", "fetch_failed", "extract_failed", "skipped"]),
+  rulesCount: z.number().int(),
+  confidence: z.number().nullable(),
+  resourceUrl: z.string().optional(),
+  httpStatus: z.number().int().optional(),
+  errorMessage: z.string().optional(),
+});
+
+export const CascadeAttemptsSchema = z.array(CascadeAttemptSchema);
+
+export type CascadeAttempt = z.infer<typeof CascadeAttemptSchema>;
+
+/**
+ * Read a `cascade_attempts` array out of a `configJson` blob safely.
+ * Returns an empty array (not null) on missing/malformed input so
+ * the UI can render unconditionally.
+ *
+ * Logs a console.warn in dev if validation strips fields, so we
+ * notice shape drift early.
+ */
+export function parseCascadeAttempts(raw: unknown): CascadeAttempt[] {
+  if (!raw) return [];
+  const result = CascadeAttemptsSchema.safeParse(raw);
+  if (!result.success) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        "[cascade] cascade_attempts failed schema validation:",
+        result.error.issues.slice(0, 3),
+      );
+    }
+    return [];
+  }
+  return result.data;
 }
 
 export interface CascadeResult {

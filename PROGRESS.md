@@ -11,39 +11,89 @@ Three sections:
 
 ---
 
-## Now — pickup tomorrow
+## Now — next session
 
-**Last working session: 2026-05-13.** Stopped for the night with the extraction cascade landed and one known bug. Pick up here:
+**Last working session: end of 2026-05-13.** Cascade is healthy in production; one shul-side test pending, plus a deferred refactor.
 
-### 🔧 Bug to fix first (15-30 min)
+### Pending verification on real sites
 
-**theshul.org PDF tier reports "no .pdf links found" despite the links existing in the static HTML.** Root cause traced: the cascade scans `renderedHtml ?? html` for PDF/image candidates, but Browserless's rendered output doesn't contain the same `<a href="*.pdf">` links as the static curl-fetched HTML.
+- **anash.ca/daven** — never fully end-to-end tested with the cascade. Page has `<img id="daven-image" src="" />` (JS-injected). Submit it via the home Add card and watch the cascade pick `vision_image` strategy.
+- **theshul.org** — vision-tier extraction succeeded on 2026-05-13; address is still null. Now that Google Places address backfill is wired + the key is live in prod, clicking "Re-extract from source" on the admin page should populate the address. Optional but cheap.
 
-**Fix:** in `lib/llm/cascade.ts` `findPdfCandidates` and `findImageCandidates`, scan **both** rendered AND static HTML, then deduplicate by absolute URL. Verify with `scripts/inspect-failed-extraction.ts theshul.org` after deploy.
+### Deferred refactor (med priority)
 
-After the fix, retry "Extract now" on:
-- **theshul.org** (id 56, currently `status=unsupported`) — expected to land as `pdf_document` strategy
-- **anash.ca/daven** — first end-to-end test of the JS-rendered → vision/PDF flow. Note: the image src is JS-injected, so `findImageCandidates` may need to also look for `<img id="daven-image">` patterns with empty src (JS will populate). Possibly a separate "named-id image" heuristic.
+- **Same-origin URL fallback only runs in HTML tier.** JS-rendered, PDF, and Vision tiers don't try `/worship/shabbat`, `/services`, etc. The HTML tier's `extractFromUrlWithFallback` is doing real work that the other tiers would benefit from. Hoisting the fallback to cascade level is a meaningful refactor (~1 hour); the current behavior covers our test cases so this isn't urgent.
 
-### ⏸ Other high-severity items from tonight's review (not blocking)
+### Still pending user-side setup (not new)
 
-Reviewed by Explore agent on 2026-05-13. Not fixed; pick what to tackle:
-
-1. **Browserless silently no-ops if `BROWSERLESS_API_KEY` unset in prod** — add a `console.warn` in `lib/scrapers/render.ts` so a misconfig in prod surfaces in Vercel logs
-2. **Same-origin URL fallback only runs in HTML tier** — the JS-rendered, PDF, Vision tiers don't try `/worship/shabbat`, `/services`, etc. Consider hoisting the fallback to the cascade level
-3. **`cascade_attempts` rendered with `as Record<string, unknown>`** — no runtime shape validation; add a Zod schema to `lib/llm/cascade.ts` and validate on read
-4. **Four `as unknown as object` casts on `minyan_rule.time`** — Drizzle JSONB doesn't model tagged unions well; create a typed insert helper
-5. **`extractionStrategy = NULL` not explicitly guarded** in `scrape-one-shul.ts` — backfill covers today's rows, but new `email_newsletter` data sources will have NULL strategy
-6. **`process-email.ts` concurrency lock has no timeout** — could queue forever if an Inngest step hangs
-
-### ⏸ Still pending user-side setup (not new)
-
-- **Postmark inbound vendor pick** (shelved since PR 11; see [IDEAS.md](./IDEAS.md))
-- **Anthropic Auto-Reload + monthly cap** (recommended after this session's cascade work bumped per-extraction cost ~10×)
+- **Postmark inbound vendor pick** — shelved since PR 11; see [IDEAS.md](./IDEAS.md)
+- **Anthropic Auto-Reload + monthly cap** — recommended after the cascade work bumped per-extraction cost ~10×
 
 ---
 
 ## Done
+
+### 2026-05-13 — Housekeeping pass (commit `<pending>`) ✅
+
+End-of-day pass through the high-severity items from the morning review + the Bal Harbour Places miss:
+
+- **Browserless prod warning** — `lib/scrapers/render.ts` now logs a `console.warn` when `BROWSERLESS_API_KEY` is unset in production. Misconfig in Vercel surfaces in logs instead of silently degrading the cascade.
+- **NULL extractionStrategy guard** — `lib/inngest/functions/scrape-one-shul.ts` explicitly treats `null` strategy as `html` (the implicit default for pre-cascade rows). No more relying on the absence-of-failed-or-resource as the only filter.
+- **`process-email.ts` Inngest step timeout** — adds an explicit step timeout so a hung concurrency-locked email processing step doesn't queue forever.
+- **Zod schema for `cascade_attempts`** — `lib/llm/cascade.ts` exports a `CascadeAttemptSchema`. Admin UI (`/admin/shul/[slug]` and `/admin/data-source/[id]`) validates the array on read, so a future shape drift fails loud (Zod error) instead of silently hiding fields.
+- **Typed `minyan_rule.time` insert helper** — `db/schema.ts` exports `serializeMinyanTime()` that wraps the tagged-union JSONB cast. Removes four `as unknown as object` casts across `build-data-source.ts`, `scrape-one-shul.ts`, and the admin extract route.
+- **Loosened Places filter** — `lib/geocoding.ts` `findShulPlace` drops the strict `includedType: "synagogue"` filter. Now relies on existing type-scoring (`synagogue` +0.4 / `place_of_worship` +0.25 / `religious_organization` +0.15) and the 0.7 confidence threshold to filter. Recovers shuls like The Shul of Bal Harbour that Places tags as `place_of_worship` but not `synagogue`.
+- **`.env.example` now tracked in git** — single-file exception in `.gitignore`. Documents `BROWSERLESS_API_KEY` and `GOOGLE_GEOCODING_API_KEY` for future contributors.
+- **Docs catch-up** — PROGRESS.md, SCOPE.md, IDEAS.md all reflect current state.
+
+### 2026-05-13 — AGENTS.md clarifying-questions rule + Places key in prod (commit `2a0c7bd`) ✅
+
+- **AGENTS.md** — new rule: before making code changes for any **new feature**, ask 3 clarifying questions via `AskUserQuestion` to lock down scope, surface, defaults, trigger. Carve-outs: concrete bug fixes, typo/copy edits, trivial renames, continuing approved work. Lists 7 candidate topics, picks 3 most load-bearing.
+- **Places API verified** — `scripts/verify-places-api.ts` runs three real shul lookups (Agudath South, The Shul of Bal Harbour, Lincoln Square Synagogue). After enabling Places API (New) on the GCP project AND adding it to the key's API restrictions, 2 of 3 returned matches with confidence ≥ 0.7. The 1 miss (Bal Harbour) prompted the filter-loosening above.
+- **`GOOGLE_GEOCODING_API_KEY` added to Vercel production** — was missing entirely (reverse-geocode + address-backfill features had been silently no-oping in prod).
+
+### 2026-05-13 — Public shul page restructure + Places address fallback (commit `1e831ef`) ✅
+
+- **"Verify Schedule source" section split into two paragraphs**: the "Times above are extracted..." prose, then "Verify against the source directly: <URL>" on its own line. Reduces wall-of-text feel.
+- **"Other days · weekly breakdown" disclosure** — site's main job is "current minyan times," so today's schedule stays as the headline. Date picker + recurring weekly table moved into a collapsed `<details>` that auto-opens when a non-today date is selected via URL.
+- **Address-from-search fallback** — `lib/geocoding.ts` `findShulPlace()` (Google Places Text Search v1) by shul name + URL hint. Scored by name-token overlap + type. Wired into Inngest `buildDataSource` AND the admin manual-extract route as a post-extraction step. Applies when confidence ≥ 0.7 and shul row has no address. Admin success banner shows `📍 Address backfilled from Google Places`.
+
+### 2026-05-13 — Weekly cron Sat 10pm ET + public "last updated" (commit `debd782`) ✅
+
+- **Cron**: was `0 13 * * MON` (Mon 13:00 UTC ≈ 9am ET). Now `0 3 * * SUN` (Sun 03:00 UTC = **Sat 22:00 ET**). Captures shul bulletins right after motzaei Shabbos, so Sunday daveners hit fresh data.
+- **Public shul page** now shows "Last updated <date/time>" in a separate paragraph below the source-attribution section. Pulls `data_source.lastRunAt` via new `getMostRecentScrapeForShul()` query.
+
+### 2026-05-13 — Vision/PDF identifier persistence (commit `e2dfefd`) ✅
+
+theshul.org's first successful vision extraction stored the data_source `identifier` as `Times-Bamidbar5786.png`. Next week the filename rotates to `Times-Naso5786.png` (parsha names change weekly) — weekly rescrape would chase a stale URL.
+
+Fix: for `vision_image` and `pdf_document` strategies, `data_source.identifier` = the submitted page URL (the stable target). `configJson.last_extracted_resource` = the per-week resource URL for the audit trail. Weekly rescrapes re-target the page and re-discover the current week's resource. Three places fixed (Inngest path, admin manual route, weekly rescrape). Admin success banner now strategy-aware: "extracted this week's schedule from <resource>" instead of "consider updating your source URL" (which was exactly wrong for rotating filenames).
+
+`scripts/backfill-resource-identifier.ts` — idempotent backfill; ran tonight against prod (1 row updated, theshul.org `ds 51`).
+
+### 2026-05-13 — Cascade reorder: Vision before PDF + timeout bump (commit `1820270`) ✅
+
+theshul.org's earlier cascade attempt hit Vercel's 60s function timeout because it was trying 3 multi-MB bulletin PDFs through Claude before reaching the Vision tier, where the actual clean schedule image lives.
+
+- **Tier order is now HTML → JS-rendered → Vision → PDF → failed.** Shul-published schedule images are typically small + clean weekly snapshots; bulletin PDFs are multi-MB kitchen-sink documents. Vision is faster AND higher-signal per dollar when both are available.
+- **PDF tier capped at 1 candidate** (was 3). Bulletin PDFs are slow to fetch and process; if the best-scored candidate misses, the next is unlikely to hit.
+- **Admin extract `maxDuration` bumped 60 → 300.** Vercel's platform default since 2026-Q1; we were overriding to 60.
+
+### 2026-05-13 — Cascade base64 input for robots.txt-protected CDNs (commit `9600363`) ✅
+
+theshul.org's cascade was finding all the right resources (3 PDFs + 3 schedule images) but every Claude call failed with `400 "This URL is disallowed by the website's robots.txt file."` Anthropic's URL fetcher respects robots.txt; ShulCloud's CDN (`images.shulcloud.com`) disallows automated agents — blocks every ShulCloud-hosted shul from URL-based extraction.
+
+- **`lib/scrapers/fetch-binary.ts`** (new) — fetches the bytes ourselves with our Tfila-Bot UA (browser-UA fallback on 403/406), 25 MB cap, returns `{bytes, mimeType, ok, fellBackToBrowserUa}`.
+- **`extract-pdf.ts` + `extract-vision.ts`** now fetch the resource locally then pass `Base64PDFSource` / `Base64ImageSource` to Claude. Anthropic only enforces robots.txt when it's the fetcher; daveners are legitimately viewing the shul's published bulletin.
+
+### 2026-05-13 — Cascade dual-HTML scan (commit `1cb340b`) ✅
+
+theshul.org's cascade reported "no .pdf links found" even though the weekly-magazine PDF is in the static curl-fetched HTML. Browserless's rendered output evidently strips/transforms those `<a href="*.pdf">` links during rendering.
+
+- **`findPdfCandidates` and `findImageCandidates`** now accept an array of HTML sources (static + rendered) and dedupe by absolute URL. Catches theshul.org case (PDF in static, stripped by Browserless) AND helps the inverse anash.ca case (image src empty in static, populated by JS in rendered).
+- **`scripts/reset-shul-status.ts`** (new) — un-marks shuls from `unsupported` → `pending_review` so admin can retry after a cascade bug fix lands.
+
+---
 
 ### 2026-05-13 — Cascade extraction bug fixes (commit `139000d`) ✅
 

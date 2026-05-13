@@ -195,8 +195,11 @@ export async function findShulPlace(
   const query = `${name.trim()} synagogue`;
   const body = {
     textQuery: query,
-    includedType: "synagogue",
-    // Bias slightly higher result quality; we'll only keep top 1.
+    // No `includedType` filter. We tried `includedType: "synagogue"` but
+    // it dropped places like The Shul of Bal Harbour that Places tags
+    // only as `place_of_worship`. Instead, the type scoring below
+    // (synagogue +0.4 / place_of_worship +0.25 / religious_organization
+    // +0.15) plus the 0.7 confidence threshold filter false positives.
     maxResultCount: 5,
   };
 

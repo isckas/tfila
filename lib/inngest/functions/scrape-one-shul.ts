@@ -17,6 +17,7 @@ import {
   minyanRule,
   scrapeRun,
   shul,
+  serializeMinyanTime,
   type MinyanTime,
 } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
@@ -94,21 +95,28 @@ export const scrapeOneShul = inngest.createFunction(
       return { skipped: true, reason: "unsupported" };
     }
 
+    // NULL `extractionStrategy` happens for pre-cascade rows that
+    // existed before migration 0003 ran but weren't backfilled
+    // (e.g. email_newsletter kind, or any legacy row we missed).
+    // Treat NULL as HTML — the original sprint-1 extractors all
+    // worked on HTML, so falling into the HTML path below is safe.
+    const strategy = loaded.extractionStrategy ?? "html";
+
     // ─── 1b. Non-HTML strategies: rerun the cascade pinned to it ─
     // The HTML-specific flow below has hash optimization + drop
     // detection tuned for HTML; for JS-rendered, PDF, vision sources
     // we just rerun the cascade with the stored strategy and apply
     // the result without the hash shortcut.
     if (
-      loaded.extractionStrategy === "js_rendered" ||
-      loaded.extractionStrategy === "pdf_document" ||
-      loaded.extractionStrategy === "vision_image"
+      strategy === "js_rendered" ||
+      strategy === "pdf_document" ||
+      strategy === "vision_image"
     ) {
       return rescrapeNonHtml({
         shulId,
         dataSourceId,
         identifier: loaded.identifier,
-        strategy: loaded.extractionStrategy,
+        strategy: strategy as "js_rendered" | "pdf_document" | "vision_image",
         previousConfig: loaded.configJson as object | null,
       });
     }
@@ -258,7 +266,7 @@ export const scrapeOneShul = inngest.createFunction(
           tefillah: r.tefillah,
           tefillahLabel: r.tefillahLabel ?? null,
           daysOfWeek: r.daysOfWeek ?? null,
-          time: time as unknown as object,
+          time: serializeMinyanTime(time),
           validFrom: r.validFrom ?? null,
           validTo: r.validTo ?? null,
           specialScheduleKind: r.specialScheduleKind,
@@ -469,7 +477,7 @@ async function rescrapeNonHtml(args: {
       tefillah: r.tefillah,
       tefillahLabel: r.tefillahLabel ?? null,
       daysOfWeek: r.daysOfWeek ?? null,
-      time: time as unknown as object,
+      time: serializeMinyanTime(time),
       validFrom: r.validFrom ?? null,
       validTo: r.validTo ?? null,
       specialScheduleKind: r.specialScheduleKind,

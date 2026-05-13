@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# Track .env.example so contributors can see what env vars are needed.
+!.env.example
 
 # vercel
 .vercel
@@ -48,3 +50,4 @@ next-env.d.ts
 .claude/settings.local.json
 
 .vercel
+.env*.local

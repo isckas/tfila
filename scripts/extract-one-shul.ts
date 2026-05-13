@@ -9,7 +9,13 @@ loadEnv({ path: ".env.local" });
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { shul, dataSource, minyanRule, type MinyanTime } from "../db/schema";
+import {
+  shul,
+  dataSource,
+  minyanRule,
+  serializeMinyanTime,
+  type MinyanTime,
+} from "../db/schema";
 import { fetchHtml } from "../lib/scrapers/fetch";
 import { extractFromHtml } from "../lib/llm/extract";
 
@@ -82,7 +88,7 @@ async function main() {
         tefillah: r.tefillah,
         tefillahLabel: r.tefillahLabel ?? null,
         daysOfWeek: r.daysOfWeek ?? null,
-        time: time as unknown as object,
+        time: serializeMinyanTime(time),
         validFrom: r.validFrom ?? null,
         validTo: r.validTo ?? null,
         specialScheduleKind: r.specialScheduleKind,

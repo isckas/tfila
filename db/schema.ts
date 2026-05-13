@@ -259,5 +259,15 @@ export function pointFromLatLng(lat: number, lng: number) {
   return sql`ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography`;
 }
 
+// Drizzle's `jsonb` column type accepts `object` for insert. Our `time`
+// column is a tagged union, which TS can't narrow to `object` without
+// a cast. Each call site had `time as unknown as object`. This helper
+// centralizes that cast and gives the call sites a self-documenting
+// name. If we ever migrate to a stricter JSONB typing, this is the
+// one place to update.
+export function serializeMinyanTime(t: MinyanTime): object {
+  return t as unknown as object;
+}
+
 // Reference the existing `sql` import for raw SQL needs.
 export { sql };

@@ -24,12 +24,32 @@ const BROWSERLESS_ENDPOINT = "https://production-sfo.browserless.io/content";
  * callers can treat "missing key" the same as "tier failed" without
  * a special case.
  */
+// Track whether we've warned about missing key in this process so we
+// don't spam Vercel logs on every cascade invocation. Reset between
+// cold starts is fine — the warn fires once per cold start, which is
+// the right signal frequency.
+let warnedMissingKey = false;
+
 export async function renderHtml(
   url: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<RenderResult> {
   const key = process.env.BROWSERLESS_API_KEY;
   if (!key) {
+    // In production this means the cascade's JS-rendered tier is
+    // silently degraded. Surface it once per cold start.
+    if (
+      process.env.NODE_ENV === "production" &&
+      process.env.VERCEL_ENV === "production" &&
+      !warnedMissingKey
+    ) {
+      warnedMissingKey = true;
+      console.warn(
+        "[scrapers/render] BROWSERLESS_API_KEY not set in production. " +
+          "Extraction cascade tier 2 (JS-rendered HTML) will be skipped for every request. " +
+          "Add the key in Vercel env to enable.",
+      );
+    }
     return {
       ok: false,
       status: 0,

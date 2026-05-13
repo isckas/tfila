@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDataSourceForReview } from "@/lib/queries";
 import type { MinyanTime } from "@/db/schema";
+import { parseCascadeAttempts } from "@/lib/llm/cascade";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -184,9 +185,8 @@ export default async function ReviewDetailPage({ params }: PageProps) {
 
       {/* Cascade attempt breakdown (always shown when present) */}
       {(() => {
-        const attempts =
-          (config.cascade_attempts as Array<Record<string, unknown>> | undefined) ?? null;
-        if (!attempts || attempts.length === 0) return null;
+        const attempts = parseCascadeAttempts(config.cascade_attempts);
+        if (attempts.length === 0) return null;
         return (
           <section className="mt-5">
             <h2 className="mb-1 text-sm font-medium text-neutral-700">
@@ -194,15 +194,12 @@ export default async function ReviewDetailPage({ params }: PageProps) {
             </h2>
             <ol className="space-y-2">
               {attempts.map((a, i) => {
-                const strategy = String(a.strategy ?? "?");
-                const status = String(a.status ?? "?");
-                const rules = Number(a.rulesCount ?? 0);
-                const conf =
-                  typeof a.confidence === "number" ? a.confidence : null;
-                const url =
-                  typeof a.resourceUrl === "string" ? a.resourceUrl : null;
-                const err =
-                  typeof a.errorMessage === "string" ? a.errorMessage : null;
+                const strategy = a.strategy;
+                const status = a.status;
+                const rules = a.rulesCount;
+                const conf = a.confidence;
+                const url = a.resourceUrl ?? null;
+                const err = a.errorMessage ?? null;
                 const isWinner = strategy === extractionStrategy;
                 const badge =
                   status === "extracted" && isWinner

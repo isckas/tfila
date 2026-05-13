@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { dataSource, minyanRule, shul, type MinyanTime } from "@/db/schema";
+import {
+  dataSource,
+  minyanRule,
+  shul,
+  serializeMinyanTime,
+  type MinyanTime,
+} from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { runCascade } from "@/lib/llm/cascade";
 import { findShulPlace } from "@/lib/geocoding";
@@ -174,7 +180,7 @@ export async function POST(
         tefillah: r.tefillah,
         tefillahLabel: r.tefillahLabel ?? null,
         daysOfWeek: r.daysOfWeek ?? null,
-        time: time as unknown as object,
+        time: serializeMinyanTime(time),
         validFrom: r.validFrom ?? null,
         validTo: r.validTo ?? null,
         specialScheduleKind: r.specialScheduleKind,

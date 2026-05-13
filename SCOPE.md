@@ -187,7 +187,7 @@ When email-derived and website-derived rules disagree on a time, **email wins**.
    │ Extraction cascade   │  │ R2 / S3         │  │ Postmark Inbound     │
    │  (added 2026-05-13)  │  │  raw HTML       │  │  (Phase 2)           │
    │  HTML → JS-rendered  │  │  archive        │  │  webhook → Inngest   │
-   │  → PDF → Vision →    │  │  LLM I/O audit  │  └──────────────────────┘
+   │  → Vision → PDF →    │  │  LLM I/O audit  │  └──────────────────────┘
    │  failed              │  │  raw .eml       │
    │                      │  │  (Phase 2)      │
    │  ├─ Anthropic API    │  └─────────────────┘
@@ -221,7 +221,8 @@ External (cascade tier 2): Browserless (~$0.001/render, free tier 1k/mo)
 - **Spatial**: PostGIS `GEOGRAPHY(Point)` + GIST index from day 1.
 - **PWA**: hand-rolled service worker (~80 LOC). `next-pwa` is not Next.js 16 ready.
 - **LLM**: Anthropic Haiku 4.5 first-pass → Sonnet 4.6 fallback. Prompt caching. Zod-validated outputs with retry-on-correction. Raw I/O archived to R2 for re-processing.
-- **Extraction cascade** (added 2026-05-13): four-tier escalation for shul sites that don't ship rules in clean HTML — `html → js_rendered (Browserless) → pdf_document (Claude PDF input) → vision_image (Claude vision)`. Strategy stored per data_source so weekly rescrapes skip earlier tiers. Failures land `shul.status = 'unsupported'` so cron stops wasting LLM calls.
+- **Extraction cascade** (added 2026-05-13): four-tier escalation for shul sites that don't ship rules in clean HTML — `html → js_rendered (Browserless) → vision_image (Claude vision) → pdf_document (Claude PDF input) → failed`. Vision runs before PDF because shul-published schedule images are typically small + clean snapshots; bulletin PDFs are multi-MB kitchen-sink documents. Strategy stored per data_source so weekly rescrapes skip earlier tiers. Failures land `shul.status = 'unsupported'` so cron stops wasting LLM calls. For vision/PDF strategies, `data_source.identifier` stays on the page URL (not the per-week resource URL whose filename rotates with the parsha) so rescrapes re-discover the current week's image/PDF.
+- **Address-from-search fallback** (added 2026-05-13): when LLM extraction doesn't surface a shul address, `findShulPlace()` (Google Places Text Search) searches by shul name + URL hint. Scored by name-token overlap + place type (synagogue / place_of_worship / religious_organization). Applies automatically when confidence ≥ 0.7.
 - **Geocoding**: Google Geocoding API.
 - **Zmanim**: `kosher-zmanim` in-process server-side.
 - **Admin auth**: Auth.js magic-link.

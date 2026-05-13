@@ -13,11 +13,7 @@ Parking lot for ideas that are out of MVP scope but worth not losing. Anything i
 
 ### Vision-extractor confidence calibration on real shul images (2026-05-13)
 
-Vision tier (`lib/llm/extract-vision.ts`) defaults to Sonnet 4.6 with a confidence-calibration prompt tuned for "typed schedules" vs "handwritten / stylized fonts". Hasn't been exercised on a real shul image end-to-end yet — anash.ca/daven would be the first test once the cascade reaches the image. Worth checking: does Sonnet over-extract from a stylized typography? Does it correctly skip non-schedule images (donation flyers, banners)? Once we have ~5 real vision extractions, look at confidence vs. rule-correctness to decide if the prompt needs adjustment.
-
-### JS-injected image src — anash.ca/daven pattern (2026-05-13)
-
-anash.ca/daven has `<img id="daven-image" src="" />` in the static HTML — the src is populated by JS after page load. Browserless rendering should populate it, but `findImageCandidates` in `cascade.ts` filters images by `src` keywords AND by alt/id/class containing schedule terms. The image's id IS `daven-image` which matches "daven", so it should rank well — but only IF the rendered HTML has the populated src. **Untested.** Tomorrow: run `debug-cascade.ts https://anash.ca/daven` after the PDF-scan fix lands, see whether vision tier finds the image.
+Vision tier (`lib/llm/extract-vision.ts`) defaults to Sonnet 4.6. **Now has one real data point**: theshul.org's `Times-Bamidbar5786.png` was extracted successfully (rules + reasonable confidence). Still pending: anash.ca/daven test + ~3-5 more vision extractions before we can assess prompt quality. Worth checking: does Sonnet over-extract from stylized typography? Does it correctly skip non-schedule images (donation flyers, banners)? Revisit prompt once we have ~5 vision extractions.
 
 ### Email-inbound vendor pick (2026-05-12, shelved mid-PR-11)
 

@@ -7,6 +7,10 @@
 //
 // Run: npx tsx scripts/verify-places-api.ts
 
+import { config as loadEnv } from "dotenv";
+loadEnv({ path: ".env.local" });
+loadEnv({ path: ".env" });
+
 import { findShulPlace } from "../lib/geocoding";
 
 const TEST_SHULS = [

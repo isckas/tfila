@@ -12,7 +12,13 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
-import { dataSource, minyanRule, shul, type MinyanTime } from "../../../db/schema";
+import {
+  dataSource,
+  minyanRule,
+  shul,
+  serializeMinyanTime,
+  type MinyanTime,
+} from "../../../db/schema";
 import { extractFromEmail } from "../../llm/extract-email";
 import { slugify, nameFromTitle } from "../../slug";
 
@@ -21,6 +27,11 @@ export const processEmail = inngest.createFunction(
     id: "email-received-process",
     concurrency: { key: "event.data.originalSenderEmail", limit: 1 },
     triggers: [{ event: "email.received" }],
+    // Cap the whole function. With per-sender concurrency=1, a hung
+    // step (LLM call timing out, DB lock, etc.) would block all other
+    // emails from the same sender from being processed. 5 min is
+    // generous — LLM extraction is ~30s worst case.
+    timeouts: { finish: "5m" },
   },
   async ({ event, step }) => {
     const {
@@ -200,7 +211,7 @@ async function persistFromEmail(args: PersistArgs) {
         tefillah: r.tefillah,
         tefillahLabel: r.tefillahLabel ?? null,
         daysOfWeek: r.daysOfWeek ?? null,
-        time: time as unknown as object,
+        time: serializeMinyanTime(time),
         validFrom: r.validFrom ?? null,
         validTo: r.validTo ?? null,
         specialScheduleKind: r.specialScheduleKind ?? "regular",

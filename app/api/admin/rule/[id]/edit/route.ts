@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { minyanRule, type MinyanTime } from "@/db/schema";
+import { minyanRule, serializeMinyanTime, type MinyanTime } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 
 const VALID_TEFILLAH = new Set([
@@ -113,7 +113,7 @@ export async function POST(
       tefillah: tefillah as never,
       tefillahLabel,
       daysOfWeek: daysOfWeek.length > 0 ? daysOfWeek : null,
-      time: time as unknown as object,
+      time: serializeMinyanTime(time),
       validFrom,
       validTo,
       specialScheduleKind: specialScheduleKind as never,
