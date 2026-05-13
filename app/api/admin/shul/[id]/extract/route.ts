@@ -4,6 +4,7 @@ import { db } from "@/db/client";
 import { dataSource, minyanRule, shul, type MinyanTime } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { runCascade } from "@/lib/llm/cascade";
+import { findShulPlace } from "@/lib/geocoding";
 
 /**
  * Trigger an immediate (inline, synchronous) extraction cascade for
@@ -205,7 +206,36 @@ export async function POST(
       .catch(() => {});
   });
 
+  // ─── Address fallback: Google Places search if shul has no address
+  let addressFromPlaces = false;
+  try {
+    const post = await db
+      .select({ name: shul.name, address: shul.address })
+      .from(shul)
+      .where(eq(shul.id, s.id))
+      .limit(1);
+    if (post[0] && !post[0].address) {
+      const match = await findShulPlace(post[0].name, {
+        urlHint: s.submittedUrl!,
+      });
+      if (match && match.confidence >= 0.7) {
+        await db.execute(sql`
+          UPDATE shul
+             SET address = ${match.address},
+                 location = ST_SetSRID(ST_MakePoint(${match.lng}, ${match.lat}), 4326)::geography,
+                 updated_at = NOW()
+           WHERE id = ${s.id}
+             AND address IS NULL
+        `);
+        addressFromPlaces = true;
+      }
+    }
+  } catch {
+    // Non-fatal — address backfill failure shouldn't block extraction success.
+  }
+
   const qs = new URLSearchParams({ extracted: "1", strategy });
+  if (addressFromPlaces) qs.set("address", "places");
   // The "from" param triggers the "you should update your source URL"
   // banner. That advice only applies for the HTML same-origin fallback
   // (e.g. submitted /calendar but rules came from /worship/shabbat).

@@ -3,6 +3,7 @@ import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { dataSource, minyanRule, shul, type MinyanTime } from "../../../db/schema";
 import { runCascade, type CascadeResult } from "../../llm/cascade";
+import { findShulPlace } from "../../geocoding";
 
 function hostOfUrl(url: string): string {
   try {
@@ -53,6 +54,14 @@ export const buildDataSource = inngest.createFunction(
       return persistCascade({ shulId, submittedUrl: url, sourceKind, result });
     });
 
+    // ─── Address fallback: Places search if shul has no address ─────
+    // Some shul sites don't expose their address in scrapable HTML
+    // (especially image/PDF-published shuls). Try Google Places by
+    // shul name + URL host hint. Apply when confidence ≥ 0.7.
+    const addressBackfill = await step.run("address-fallback", async () => {
+      return maybeBackfillAddress({ shulId, submittedUrl: url });
+    });
+
     return {
       dataSourceId: persisted.dataSourceId,
       strategy: result.strategy,
@@ -61,9 +70,69 @@ export const buildDataSource = inngest.createFunction(
       model: result.model,
       reasoning: result.extraction?.reasoning ?? null,
       winningUrl: result.winningUrl,
+      addressBackfill,
     };
   },
 );
+
+/**
+ * Attempt to find this shul's address via Google Places Text Search.
+ * Runs only when the shul row has no address yet (LLM extraction
+ * didn't surface one). Confidence ≥ 0.7 applies; below that we record
+ * the candidate to shul.configJson for admin review but don't write
+ * the address.
+ */
+async function maybeBackfillAddress(args: {
+  shulId: number;
+  submittedUrl: string;
+}): Promise<{
+  applied: boolean;
+  confidence?: number;
+  reason?: string;
+  candidate?: { name: string; address: string };
+}> {
+  const rows = await db
+    .select({
+      id: shul.id,
+      name: shul.name,
+      address: shul.address,
+    })
+    .from(shul)
+    .where(eq(shul.id, args.shulId))
+    .limit(1);
+  const s = rows[0];
+  if (!s) return { applied: false, reason: "shul not found" };
+  if (s.address) return { applied: false, reason: "address already set" };
+
+  const match = await findShulPlace(s.name, { urlHint: args.submittedUrl });
+  if (!match) {
+    return { applied: false, reason: "no places match" };
+  }
+
+  if (match.confidence < 0.7) {
+    return {
+      applied: false,
+      confidence: match.confidence,
+      reason: "confidence below 0.7 threshold",
+      candidate: { name: match.name, address: match.address },
+    };
+  }
+
+  await db.execute(sql`
+    UPDATE shul
+       SET address = ${match.address},
+           location = ST_SetSRID(ST_MakePoint(${match.lng}, ${match.lat}), 4326)::geography,
+           updated_at = NOW()
+     WHERE id = ${args.shulId}
+       AND address IS NULL
+  `);
+
+  return {
+    applied: true,
+    confidence: match.confidence,
+    candidate: { name: match.name, address: match.address },
+  };
+}
 
 interface PersistArgs {
   shulId: number;

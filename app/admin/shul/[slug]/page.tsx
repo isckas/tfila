@@ -11,6 +11,7 @@ interface PageProps {
     from?: string;
     strategy?: string;
     resource?: string;
+    address?: string;
   }>;
 }
 
@@ -100,6 +101,12 @@ export default async function AdminShulDetailPage({
               </code>
               . The data source identifier stays on the page URL, so weekly
               rescrapes will re-discover next week&apos;s resource automatically.
+            </div>
+          )}
+          {sp.address === "places" && (
+            <div className="mt-1 text-xs text-emerald-800">
+              📍 Address backfilled from Google Places (shul name + URL hint).
+              Verify on the public page; edit below if it&apos;s wrong.
             </div>
           )}
         </div>

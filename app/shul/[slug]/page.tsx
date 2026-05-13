@@ -191,42 +191,9 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </div>
       </header>
 
-      {/* ─── Date picker ────────────────────────────────────── */}
-      <form method="get" action={`/shul/${shul.slug}`} className="mt-5 flex items-center gap-2 text-sm">
-        <label className="flex items-center gap-2">
-          <span className="text-neutral-700">View date:</span>
-          <input
-            type="date"
-            name="date"
-            defaultValue={selectedIso}
-            className="rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
-          />
-        </label>
-        {userLat != null && userLng != null && (
-          <>
-            <input type="hidden" name="lat" value={userLat} />
-            <input type="hidden" name="lng" value={userLng} />
-          </>
-        )}
-        <button
-          type="submit"
-          className="rounded bg-neutral-900 px-3 py-1 text-xs text-white hover:bg-neutral-800"
-        >
-          Update
-        </button>
-        {selectedIso !== todayIso && (
-          <Link
-            href={`/shul/${shul.slug}${userLocSuffix.startsWith("&") ? "?" + userLocSuffix.slice(1) : ""}`}
-            className="text-xs text-neutral-500 underline-offset-2 hover:underline"
-          >
-            today
-          </Link>
-        )}
-      </form>
-
       {/* ─── Zmanim strip for selected date ─────────────────── */}
       {zmanim && (
-        <section className="mt-4">
+        <section className="mt-5">
           <ZmanimStrip snapshot={zmanim} />
         </section>
       )}
@@ -283,63 +250,118 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         )}
       </section>
 
-      {/* ─── Recurring weekly schedule ──────────────────────── */}
-      <section className="mt-8">
-        <h2 className="mb-2 text-sm font-medium text-neutral-700">
-          Recurring weekly schedule
-        </h2>
-        {Object.keys(recurring).length === 0 ? (
-          <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
-            No regular weekly rules on file.
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500">
-                  <th className="px-3 py-2">Tefillah</th>
-                  <th className="px-3 py-2">Days</th>
-                  <th className="px-3 py-2">Time</th>
-                  <th className="px-3 py-2">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {TEFILLAH_ORDER.flatMap((tef) =>
-                  (recurring[tef] ?? []).map((r) => (
-                    <tr
-                      key={r.id}
-                      className="border-b border-neutral-100 last:border-0"
-                    >
-                      <td className="px-3 py-2 font-medium">
-                        {TEFILLAH_LABEL[r.tefillah] ?? r.tefillah}
-                        {r.tefillahLabel && (
-                          <span className="ml-1 text-xs text-neutral-500">
-                            ({r.tefillahLabel})
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-neutral-700">
-                        {daysLabel(r.daysOfWeek)}
-                      </td>
-                      <td className="px-3 py-2 tabular-nums font-medium">
-                        {formatTimeLabel(r.time as MinyanTime)}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-neutral-500">
-                        {r.notes ?? ""}
-                        {r.nusach && (
-                          <span className="ml-1 rounded bg-blue-100 px-1 text-blue-800">
-                            {r.nusach}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  )),
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* ─── Other days + weekly breakdown (collapsed by default) ── */}
+      {/* The site's main purpose is "current minyan times" — today's
+          schedule above is the headline. The full weekly breakdown +
+          date picker live in this disclosure for users who want to
+          plan ahead. Auto-opens when a non-today date is already
+          selected (e.g. user navigated here with ?date=...). */}
+      <details
+        className="mt-6 rounded-xl border border-neutral-200 bg-white"
+        open={selectedIso !== todayIso}
+      >
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
+          Other days · weekly breakdown
+        </summary>
+        <div className="border-t border-neutral-200 px-4 py-4">
+          {/* Date picker */}
+          <form
+            method="get"
+            action={`/shul/${shul.slug}`}
+            className="mb-5 flex flex-wrap items-center gap-2 text-sm"
+          >
+            <label className="flex items-center gap-2">
+              <span className="text-neutral-700">View date:</span>
+              <input
+                type="date"
+                name="date"
+                defaultValue={selectedIso}
+                className="rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
+              />
+            </label>
+            {userLat != null && userLng != null && (
+              <>
+                <input type="hidden" name="lat" value={userLat} />
+                <input type="hidden" name="lng" value={userLng} />
+              </>
+            )}
+            <button
+              type="submit"
+              className="rounded bg-neutral-900 px-3 py-1 text-xs text-white hover:bg-neutral-800"
+            >
+              Update
+            </button>
+            {selectedIso !== todayIso && (
+              <Link
+                href={`/shul/${shul.slug}${
+                  userLocSuffix.startsWith("&")
+                    ? "?" + userLocSuffix.slice(1)
+                    : ""
+                }`}
+                className="text-xs text-neutral-500 underline-offset-2 hover:underline"
+              >
+                back to today
+              </Link>
+            )}
+          </form>
+
+          {/* Recurring weekly schedule */}
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-500">
+            Recurring weekly schedule
+          </h3>
+          {Object.keys(recurring).length === 0 ? (
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
+              No regular weekly rules on file.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500">
+                    <th className="px-3 py-2">Tefillah</th>
+                    <th className="px-3 py-2">Days</th>
+                    <th className="px-3 py-2">Time</th>
+                    <th className="px-3 py-2">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {TEFILLAH_ORDER.flatMap((tef) =>
+                    (recurring[tef] ?? []).map((r) => (
+                      <tr
+                        key={r.id}
+                        className="border-b border-neutral-100 last:border-0"
+                      >
+                        <td className="px-3 py-2 font-medium">
+                          {TEFILLAH_LABEL[r.tefillah] ?? r.tefillah}
+                          {r.tefillahLabel && (
+                            <span className="ml-1 text-xs text-neutral-500">
+                              ({r.tefillahLabel})
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-neutral-700">
+                          {daysLabel(r.daysOfWeek)}
+                        </td>
+                        <td className="px-3 py-2 tabular-nums font-medium">
+                          {formatTimeLabel(r.time as MinyanTime)}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-neutral-500">
+                          {r.notes ?? ""}
+                          {r.nusach && (
+                            <span className="ml-1 rounded bg-blue-100 px-1 text-blue-800">
+                              {r.nusach}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )),
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </details>
 
       {/* ─── Map ────────────────────────────────────────────── */}
       {shul.lat != null && shul.lng != null && (
@@ -385,7 +407,10 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
           </h2>
           <p className="text-xs text-neutral-600">
             Times above are extracted from the shul&apos;s own schedule page,
-            re-checked weekly. Verify against the source directly:{" "}
+            re-checked weekly.
+          </p>
+          <p className="mt-2 text-xs text-neutral-600">
+            Verify against the source directly:{" "}
             <a
               href={shul.submittedUrl}
               target="_blank"
