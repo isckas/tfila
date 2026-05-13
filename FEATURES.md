@@ -153,50 +153,100 @@ Each step is small and independent. Could ship across 3 PRs (schema + backfill /
 
 ---
 
-## Address backfill parity: email path needs Places lookup too
+## Unified post-ingestion pipeline: URL and email paths must do the same work
 
-Added: 2026-05-13 · **Status: not yet built.**
+Added: 2026-05-13 · **Status: principle locked, not yet built.**
 
-**Question:** URL submissions get a Google Places address backfill when the LLM doesn't extract a street address from the page. Email submissions don't — they just store whatever the LLM pulled from the body (often nothing, because weekly schedule emails rarely contain the shul's street address). Result: email-submitted shuls land without addresses and don't show up on map / geo queries.
+**Principle:** Submission channels are an ingestion concern, not a processing concern. Whether a shul reaches us via URL submit, forwarded email, or any future channel (claimed shul, public API, mailing-list subscribe), every step *after* the raw data is in hand must be identical. The channel only owns "how the bytes arrive"; everything else — extraction, dedup, address backfill, persistence, guardrails, admin treatment — runs through one shared pipeline.
 
-### Current behavior
+### Why
 
-**URL submissions** ([`lib/inngest/functions/build-data-source.ts`](./lib/inngest/functions/build-data-source.ts) calling [`findShulPlace()`](./lib/geocoding.ts) in `lib/geocoding.ts`): after the cascade finishes, if `extraction.shulAddress` is null AND `extraction.confidence >= 0.7`, we call Google Places Text Search v1 with the shul name + URL hint. Score the candidates by name-token overlap + place type (synagogue +0.4 / place_of_worship +0.25 / religious_organization +0.15). If a candidate scores well, write its `formatted_address` to `shul.address`, store `place_id` and lat/lng, surface "📍 backfilled from Places" banner in admin.
+Today the two channels run divergent code paths in `lib/inngest/functions/build-data-source.ts` (URL) and `lib/inngest/functions/process-email.ts` (email). Each one re-implements similar logic — slug allocation, name/address preference rules, data_source insertion, configJson shape — and they've already drifted on at least three things (address backfill, identifier collision handling for shared MTAs, dedup-merge semantics for new vs existing shuls). The Safra forward (shul id=59) made this concrete: 12 rules extracted, 0.88 confidence, but no `shul.address` and no `shul.location` because the email path skips Places backfill. Email-derived shuls are second-class on the home-page geo feed, the OpenStreetMap embed, and any distance-sort query.
 
-**Email submissions** ([`lib/inngest/functions/process-email.ts`](./lib/inngest/functions/process-email.ts) `persistFromEmail()`): writes `shul.address = extraction.shulAddress ?? null` and that's it. No Places fallback. First real case: Edmond J. Safra Synagogue (shul id=59) — confidence 0.88, 12 rules extracted, but `address` is null because the weekly bulletin has no street address. Address has to be filled in by admin manually.
+Every new feature we add to one path is at risk of forgetting the other. The fix is structural, not "remember to add it both places."
 
-### Why it matters
+### Current divergences (audit, 2026-05-13)
 
-- The home-page minyan feed sorts by distance from user; shuls without lat/lng can't appear in geo queries
-- The OpenStreetMap embed on `/shul/[slug]` shows nothing without coords
-- Reverse-geocoded "neighborhood" chips on the public detail page rely on lat/lng
+Run side-by-side in `build-data-source.ts` vs `persistFromEmail()`:
 
-Email-derived shuls are second-class until this gap closes.
+| Concern | URL path | Email path |
+|---|---|---|
+| LLM extraction call site | After cascade picks a winning tier | Direct on body text |
+| Same-origin URL fallback (`/calendar` → `/services` etc.) | Yes (HTML tier only) | N/A — no URL to fall back from |
+| `findShulPlace()` Places backfill at confidence ≥ 0.7 | Yes | **No** ← blocks geo queries |
+| Hash-comparison shortcut on rescrape | Yes | N/A — emails are push, no rescrape |
+| Broken-config guardrails (confidence < 0.6 OR 50%+ rule-count drop flags as pending) | Yes | **No** ← bad week's email could wipe rules silently |
+| Slug-collision allocation loop | Yes (inlined in /api/submit) | Yes (inlined in process-email.ts) ← duplicated |
+| `cfg.cascade_attempts` audit trail | Yes | **No** — emails get `cfg.last_model` / `cfg.last_usage` instead |
+| `match_domain` source | Submitted URL eTLD+1 | LLM-extracted shulWebsite (or regex fallback) |
+| `data_source.identifier` shape | Submitted URL | Sender email (or compound `email::domain` for shared MTAs) |
+| Priority | 40 (website_llm) | 60 (email_newsletter) |
+| Rule-replacement semantics | Replace all "live" rules per data_source on rescrape | Regular rules REPLACE, special rules ADD |
+
+Some of these are legitimate channel differences (LLM input shape, identifier shape, priority). Others are *accidental* divergences (Places backfill, guardrails, audit trail) that should converge.
+
+### Target architecture
+
+```
+INGESTION (per channel — small, channel-specific)
+  ├── URL: fetch cascade → produce { extractedText, sourceUrl, ... }
+  └── Email: parse forward → produce { extractedText, sourceEmail, shulWebsite?, ... }
+
+NORMALIZATION
+  Each channel emits a uniform "submission payload":
+  { rawText, rawHash, sourceKind, identifier, matchDomainHint?, ...channelMetadata }
+
+SHARED PIPELINE (one implementation, called by both)
+  1. LLM extract → name, address, website, rules, confidence, reasoning
+  2. Dedup: lookup by match_domain → merge into existing shul OR create new
+  3. Slug allocation (existing helper, called once)
+  4. Persist shul row (preferring LLM-extracted name > channelMetadata > derived defaults)
+  5. Persist data_source row (with channel-appropriate identifier + priority + configJson)
+  6. Persist rules (with channel-appropriate replace-vs-add semantics)
+  7. Address backfill via findShulPlace() if shul.address is null AND confidence ≥ 0.7
+  8. Broken-config guardrails (flag as pending_review on confidence/rule-count anomalies)
+  9. Admin notification (already shared via notifyAdmin())
+
+ADMIN SURFACE
+  Already unified — /admin/queue, /admin/shul/[slug], /admin/data-source/[id]
+  treat both channels identically. No change needed.
+```
+
+The shared pipeline lives in a single function, probably `lib/pipeline/persist-submission.ts` or expanded into a new `lib/extraction/` module. Both Inngest functions call it after their channel-specific ingestion completes.
 
 ### Implementation sketch (when ready to build)
 
-1. Factor out the address-backfill logic from `build-data-source.ts` into a reusable helper like `lib/geocoding.ts` → `backfillAddressForShul(shulId, name, urlHint)`. Currently it's inlined alongside the cascade.
-2. In `process-email.ts` `persistFromEmail()`, after the LLM extraction completes and we know the shul exists (whether new or merged), call the helper with:
-   - `name` = `extraction.shulName ?? shul.name`
-   - `urlHint` = `extraction.shulWebsite ?? null` (already extracted for dedup; use the same value here)
-   - Apply the same 0.7-confidence floor as URL path
-3. Guard: only attempt backfill on **new** shul creation. If we're attaching to an existing shul (domain-match merge), the existing shul should already have an address from when it was originally created.
-4. Store the same `cfg.address_source = "places"` marker so admin UI banner works identically.
-5. Test cases (manual once built):
-   - MyShul-hosted email with extracted website (Safra) → Places should find it via name + website
-   - Email with no shulWebsite extracted (just rules + name) → Places search by name only
-   - Generic-sounding shul name with multiple Places hits → confidence scorer picks the right one
-   - Non-shul email that somehow passes the 0.3 confidence floor → address backfill should yield no high-scoring candidate, leave null
+This is bigger than a single PR. Stage it:
 
-### Edge cases
+1. **Extract `findShulPlace()` backfill into a reusable helper** — `lib/geocoding.ts` → `backfillShulLocation(tx, shulId, name, urlHint)`. Currently inlined in `build-data-source.ts`. Cheapest win — call from email path immediately, even before deeper refactor.
+2. **Extract slug-collision-avoidance** into `lib/slug.ts` → `allocateUniqueSlug(tx, baseSlug)`. Currently duplicated across `/api/submit/route.ts` and `process-email.ts`.
+3. **Extract broken-config guardrails** into `lib/pipeline/guardrails.ts` → `applyExtractionGuardrails(prevConfidence, prevRuleCount, newExtraction)` returning `{ shouldFlagPending, reason }`.
+4. **Extract the shared persist body** into `lib/pipeline/persist-submission.ts` → `persistSubmission(tx, normalizedPayload, extraction)`. Returns `{ shulId, dataSourceId, isNewShul, rulesAdded, rulesRemoved }`.
+5. **Rewrite `build-data-source.ts`** to call the shared persist after the cascade. Channel-specific work shrinks to: fetch + cascade + (optional same-origin fallback) + build normalizedPayload.
+6. **Rewrite `persistFromEmail()`** to call the shared persist. Channel-specific work shrinks to: extract original-sender + compute compound identifier for shared MTAs + build normalizedPayload.
+7. **Add address backfill + guardrails to email path automatically** as a side effect of step 6 (since they're now in the shared helper).
 
-- **Same shul, two submissions, one with address, one without.** URL submission creates shul-row + Places-derived address. Later, a different forwarder sends an email for the same shul; we dedup-merge into existing row. Existing address stays — correct.
-- **Email creates first, URL second.** First email creates a new shul with no address. The proposed step 3 guard means email-only run doesn't backfill. Later, a URL is submitted, dedup-merges into the email row. The URL path's backfill should run on the merge — which means we may also need to call the helper when domain-merge attaches a URL data_source to an email-created shul. To handle, check `if shul.address is null` before calling backfill, regardless of submission path.
+After this, adding a new submission channel = implement ingestion + emit a normalizedPayload. Everything downstream is free.
 
-### Cost note
+### Edge cases the shared pipeline must handle correctly
 
-Places Text Search v1 is paid (~$0.032/call after free tier). Bounding by confidence ≥ 0.7 keeps spend down — we don't search Places for low-confidence extractions that are likely junk anyway. Email-path additions roughly double Places calls in steady state if half of submissions arrive via email. Worth monitoring once shipped.
+- **Email creates first, URL second.** First email creates a shul with no address (no backfill ran because confidence was, say, below 0.7). Later, a URL submission domain-merges into the email-created shul. The URL path's persist call should: detect `shul.address IS NULL`, run backfill with the URL as hint, populate the address. Means backfill check is "if shul.address is null", not "if isNewShul".
+- **URL creates first, email second, with conflicting names.** URL extraction returned "The Shul of NYC". Email extraction returns "Edmond J. Safra Synagogue" for the same `match_domain`. The shared persist must NOT overwrite an admin-approved name. Use the existing `build-data-source.ts:288` guard pattern: only update name when current value looks like a placeholder (matches hostname OR contains a `.`).
+- **Rule replacement semantics differ.** URL: all live rules under that data_source get replaced on rescrape. Email regular rules: replace within the same data_source. Email special-schedule rules: ADD (date-bounded). Shared persist should accept a `ruleReplacementStrategy: "replace-all" | "replace-regular-add-special"` flag from the caller.
+- **configJson shape.** URL stores `cascade_attempts`. Email stores `last_subject`, `last_model`, `last_usage`. The shared persist accepts an opaque `configJsonExtras` from the caller and merges it. The shared pipeline owns common fields (`version`, `prompt_version`, `first_received_at`, `last_received_at`).
+
+### Cost / scope note
+
+Places Text Search v1 is paid (~$0.032/call after free tier). The 0.7-confidence floor keeps the email-path cost contained. Adding backfill to email-path roughly doubles Places calls in steady state if half of submissions arrive via email. Probably worth it for full geo coverage, but worth monitoring once shipped.
+
+Estimated effort: 1-2 days of focused work for the full refactor (steps 1-7). Step 1 alone (extract `backfillShulLocation`, call from email path) is ~30 minutes and unblocks the most visible symptom — the Safra address gap. Reasonable to ship step 1 immediately as an unblocker and tackle the larger unification when there's a quiet day.
 
 ### Decision
 
-Not decided yet — captured here so we don't lose the gap. Build whenever the address-blank email shuls start blocking real geo queries. Until then, admin can hand-fill `shul.address` and click Save in /admin/shul/[slug].
+**Principle locked 2026-05-13:** every new feature added to either path must either (a) live in the shared pipeline, or (b) be explicitly justified as a channel-specific concern. No more silent drift.
+
+**Build order:**
+- **Now (~30 min):** Step 1 only — factor `backfillShulLocation` out and call from email path. Unblocks the Safra-style "no address" symptom.
+- **Soon (1-2 days):** Steps 2-7, the full unification.
+
+Until full unification ships, admin can hand-fill `shul.address` in `/admin/shul/[slug]` for email-derived shuls that need to show up in the map view.
