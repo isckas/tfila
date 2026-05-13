@@ -2,8 +2,11 @@
 // approved (shul, data_source) pair. The actual scrape work happens
 // in scrapeOneShul.
 //
-// Schedule: Mondays 13:00 UTC (~9am ET / 8am EST / 3pm GMT+2) —
-// after the weekend, before most workday traffic.
+// Schedule: Sundays 03:00 UTC = Saturdays 22:00 ET (motzaei Shabbos
+// year-round, accounting for both EST/EDT). Shuls typically publish
+// next week's bulletin on Saturday night or Sunday morning, so a
+// Saturday-night run captures the freshest schedule before Sunday
+// daveners hit the feed.
 
 import { and, eq } from "drizzle-orm";
 import { inngest } from "../client";
@@ -13,7 +16,7 @@ import { dataSource, shul } from "../../../db/schema";
 export const weeklyRescrape = inngest.createFunction(
   {
     id: "shul-weekly-rescrape",
-    triggers: [{ cron: "0 13 * * MON" }],
+    triggers: [{ cron: "0 3 * * SUN" }],
   },
   async ({ step }) => {
     if (process.env.SCRAPE_ENABLED === "false") {

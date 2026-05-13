@@ -18,6 +18,30 @@ export async function listActiveShuls() {
     .orderBy(asc(shul.name));
 }
 
+/**
+ * Most recent successful (ok / no_change) scrape timestamp across
+ * any active data_source for a shul. Used on the public shul page
+ * to display a "last updated" freshness signal. Returns null when no
+ * scrape has ever succeeded.
+ */
+export async function getMostRecentScrapeForShul(
+  shulId: number,
+): Promise<Date | null> {
+  const rows = await db
+    .select({ lastRunAt: dataSource.lastRunAt })
+    .from(dataSource)
+    .where(
+      and(
+        eq(dataSource.shulId, shulId),
+        sql`${dataSource.lastRunStatus} IN ('ok', 'no_change')`,
+        sql`${dataSource.lastRunAt} IS NOT NULL`,
+      ),
+    )
+    .orderBy(desc(dataSource.lastRunAt))
+    .limit(1);
+  return rows[0]?.lastRunAt ?? null;
+}
+
 export async function getShulBySlug(slug: string) {
   const rows = await db
     .select({

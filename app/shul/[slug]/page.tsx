@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getShulBySlug, getPublicRulesForShul } from "@/lib/queries";
+import {
+  getShulBySlug,
+  getPublicRulesForShul,
+  getMostRecentScrapeForShul,
+} from "@/lib/queries";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
@@ -50,6 +54,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
   const selectedDow = new Date(selectedIso + "T12:00:00Z").getUTCDay();
 
   const rules = await getPublicRulesForShul(shul.id);
+  const lastScrapedAt = await getMostRecentScrapeForShul(shul.id);
 
   // User location (from URL params, propagated by home feed link)
   const userLat = sp.lat ? Number(sp.lat) : null;
@@ -372,11 +377,11 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </section>
       )}
 
-      {/* ─── Source attribution ─────────────────────────────── */}
+      {/* ─── Verify Schedule source ─────────────────────────── */}
       {shul.submittedUrl && (
         <section className="mt-8">
           <h2 className="mb-1 text-sm font-medium text-neutral-700">
-            Schedule source
+            Verify Schedule source
           </h2>
           <p className="text-xs text-neutral-600">
             Times above are extracted from the shul&apos;s own schedule page,
@@ -390,21 +395,45 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
               {shul.submittedUrl}
             </a>
           </p>
+          <p className="mt-2 text-xs text-neutral-500">
+            Status: <span className="font-mono">{shul.status}</span>
+            {" · "}
+            <Link href="/" className="underline-offset-2 hover:underline">
+              home feed
+            </Link>
+            {" · "}
+            <Link href="/find" className="underline-offset-2 hover:underline">
+              find another shul
+            </Link>
+          </p>
         </section>
       )}
 
-      {/* ─── Footer ─────────────────────────────────────────── */}
-      <footer className="mt-10 text-xs text-neutral-500">
-        Status: <span className="font-mono">{shul.status}</span>
-        {" · "}
-        <Link href="/" className="underline-offset-2 hover:underline">
-          home feed
-        </Link>
-        {" · "}
-        <Link href="/find" className="underline-offset-2 hover:underline">
-          find another shul
-        </Link>
-      </footer>
+      {/* ─── Last updated (separate paragraph) ──────────────── */}
+      <p className="mt-6 text-xs text-neutral-500">
+        Last updated{" "}
+        {lastScrapedAt ? (
+          <time
+            dateTime={lastScrapedAt.toISOString()}
+            className="font-medium text-neutral-700"
+          >
+            {lastScrapedAt.toLocaleString(undefined, {
+              timeZone: tz,
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+              hour12: true,
+              timeZoneName: "short",
+            })}
+          </time>
+        ) : (
+          <span className="italic">never scraped yet</span>
+        )}
+        .
+      </p>
     </main>
   );
 }
