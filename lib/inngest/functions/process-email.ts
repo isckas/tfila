@@ -25,6 +25,7 @@ import { matchDomainOf } from "../../dedup";
 import {
   extractCanonicalWebsiteFromEmail,
   isSharedMtaDomain,
+  normalizeWebsiteUrl,
 } from "../../inbound/extract-website";
 
 export const processEmail = inngest.createFunction(
@@ -80,9 +81,16 @@ export const processEmail = inngest.createFunction(
     // list provider (info@myshul.com, news@constantcontact.com) that
     // many different shuls use — match_domain on that would silently
     // merge every shul on the platform into one row.
+    //
+    // Both the LLM-extracted shulWebsite AND the regex fallback are
+    // run through normalizeWebsiteUrl() so we get either a guaranteed-
+    // parseable `https://<host>` or null. Without this, an LLM that
+    // emits a bare domain crashes `new URL()` inside the persist
+    // transaction, and an LLM that emits a shared-MTA domain (despite
+    // the prompt) re-introduces the wrong-merge bug.
     const websiteUrl =
-      extracted.extraction.shulWebsite ??
-      extractCanonicalWebsiteFromEmail(body);
+      normalizeWebsiteUrl(extracted.extraction.shulWebsite) ??
+      normalizeWebsiteUrl(extractCanonicalWebsiteFromEmail(body));
     const shulMatchDomain = websiteUrl ? matchDomainOf(websiteUrl) : null;
 
     // ─── 3. Compute the data_source identifier ──────────────────

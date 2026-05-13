@@ -103,6 +103,44 @@ const IMAGE_OR_DOC_RE = /\.(png|jpe?g|gif|svg|webp|ico|bmp|pdf|zip)(\?|$)/i;
 const URL_RE = /https?:\/\/[^\s"'<>)\]]+/gi;
 
 /**
+ * Normalize any string the LLM (or other channel) hands us as a "shul
+ * website" into a guaranteed-parseable `https://<host>` URL — or null
+ * if it can't be made into one or resolves to a shared-MTA domain.
+ *
+ * Why this exists: ExtractionSchema.shulWebsite is a free string; the
+ * LLM occasionally emits bare domains ("edmondjsafrasynagogue.com"),
+ * tracker URLs that slipped past the prompt, or shared-MTA domains
+ * ("myshul.com") despite explicit instructions to skip them. Without
+ * this guard, downstream `new URL(raw)` throws inside the persist
+ * transaction, or a shared-MTA value gets written to shul.matchDomain
+ * and re-introduces the wrong-merge bug this normalization is here
+ * to prevent.
+ *
+ * Returns null when:
+ *  - input is empty / nullish
+ *  - the parsed hostname's registrable domain is in SHARED_MTA_DOMAINS
+ *  - no hostname can be parsed even after prepending https://
+ */
+export function normalizeWebsiteUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let u: URL;
+  try {
+    u = new URL(candidate);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase();
+  if (!host) return null;
+  const domain = getDomain(host);
+  if (!domain) return null;
+  if (isSharedMtaDomain(domain)) return null;
+  return `https://${host}`;
+}
+
+/**
  * Scan a (forwarded) email body for the shul's canonical website root.
  * Returns null if nothing plausible found.
  *
