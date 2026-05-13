@@ -1,0 +1,21 @@
+{
+  "name": "tfila-inbound-email-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Email Worker that receives mail at submit@inbound.tfila.co, parses it, and forwards a Postmark-shaped JSON payload to tfila.co's /api/inbound/email webhook.",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251007.0",
+    "typescript": "^5",
+    "wrangler": "^4"
+  }
+}

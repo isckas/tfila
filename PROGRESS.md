@@ -25,7 +25,7 @@ Three sections:
 
 ### Still pending user-side setup (not new)
 
-- **Postmark inbound vendor pick** — shelved since PR 11; see [IDEAS.md](./IDEAS.md)
+- **Cloudflare Email Worker deploy** — code shipped in `cloudflare-worker/`. See [`cloudflare-worker/README.md`](./cloudflare-worker/README.md) for the 8-step walkthrough (~15 min): Cloudflare Email Routing on tfila.co → wrangler login → secrets → deploy → dashboard rule wiring.
 - **Anthropic Auto-Reload + monthly cap** — recommended after the cascade work bumped per-extraction cost ~10×
 - **Inngest dashboard sync** — `nightly-version-bump` cron needs to be synced on the Inngest app so it actually fires at midnight ET
 

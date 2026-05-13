@@ -15,26 +15,23 @@ Parking lot for ideas that are out of MVP scope but worth not losing. Anything i
 
 Vision tier (`lib/llm/extract-vision.ts`) defaults to Sonnet 4.6. **Now has one real data point**: theshul.org's `Times-Bamidbar5786.png` was extracted successfully (rules + reasonable confidence). Still pending: anash.ca/daven test + ~3-5 more vision extractions before we can assess prompt quality. Worth checking: does Sonnet over-extract from stylized typography? Does it correctly skip non-schedule images (donation flyers, banners)? Revisit prompt once we have ~5 vision extractions.
 
-### Email-inbound vendor pick (2026-05-12, shelved mid-PR-11)
+### Email-inbound vendor pick (2026-05-12, **decided 2026-05-13: Option C — Cloudflare Email Routing + Workers**)
 
-**Status**: PR 11 app-code is shipped (webhook, Inngest function, LLM extractor, `/submit` UI). Postmark setup blocked because Postmark won't let us configure inbound on a public/free-email domain (`@gmail.com` etc). We need to pick + wire one of these vendors before the email flow goes live:
+**Decision**: Option C (free at any volume — cost-conscious bootstrap call). Code shipped in `cloudflare-worker/` directory; see [`cloudflare-worker/README.md`](./cloudflare-worker/README.md) for the end-to-end setup walkthrough.
 
-- **Option A — Postmark bare hashed inbound address** (`<hash>@inbound.postmarkapp.com`): zero DNS, immediate, ugly address.
-- **Option B — Postmark on `inbound.tfila.co`** (preferred, we own tfila.co): one MX record on tfila.co's DNS → Postmark. Result: `submit@inbound.tfila.co`.
-- **Option C — Cloudflare Email Routing + Workers**: free, custom domain, slightly different code path (Workers, not Postmark JSON webhook).
+Worker has a Postmark-compatible adapter — POSTs Postmark-shaped JSON to the main app's existing `/api/inbound/email` endpoint with HTTP Basic Auth. No tfila.co code changes needed; the webhook receiver doesn't know it's talking to Cloudflare instead of Postmark.
 
-**Code already deployed**, just inert until a webhook fires it:
-- `app/api/inbound/email/route.ts` — accepts Postmark-shaped JSON, HTTP Basic auth via env, fires Inngest event
-- `lib/inngest/functions/process-email.ts` — finds/creates shul, runs LLM extract, persists rules
-- `lib/llm/extract-email.ts` — email-tuned extractor
-- `lib/inbound/extract-original-sender.ts` — heuristic for forwarded "From:" line
-- `app/submit/page.tsx` — UI shows the inbound address (hardcoded `submit@inbound.tfila.co`, swap after pick)
+**Pending user-side setup** (~15 min one-time, see Worker README):
+1. Cloudflare Email Routing on `tfila.co` (or `inbound.tfila.co`)
+2. `npx wrangler login` + `npx wrangler secret put` for `WEBHOOK_URL` / `WEBHOOK_USER` / `WEBHOOK_PASS`
+3. Mirror `WEBHOOK_USER` / `WEBHOOK_PASS` to Vercel as `POSTMARK_INBOUND_USERNAME` / `POSTMARK_INBOUND_PASSWORD`
+4. `npx wrangler deploy`
+5. Wire the Email Routing rule `submit@inbound.tfila.co → tfila-inbound-email` in the Cloudflare dashboard
 
-**Tied to env vars** (production):
-- `POSTMARK_INBOUND_USERNAME` + `POSTMARK_INBOUND_PASSWORD` — optional HTTP Basic auth; if unset, webhook accepts unauthenticated POSTs (fine for dev; production should set these)
-- If switching to Cloudflare: ditch the Postmark-shaped JSON; either build a Workers-side adapter or have the Worker POST the same shape
-
-**To resume**: pick A/B/C, sign up + configure, paste the webhook URL `https://tfila.vercel.app/api/inbound/email`, optionally add Basic Auth creds to Vercel, update the hardcoded `INBOUND_ADDRESS` in `app/submit/page.tsx`, redeploy.
+**Why C over B (Postmark on tfila.co subdomain):**
+- Free at any volume (Cloudflare) vs ~$15/mo (Postmark)
+- Same end-user address (`submit@inbound.tfila.co`)
+- Cost-conscious bootstrap stage; vendor change is reversible (just turn off the Worker and configure Postmark)
 
 ---
 

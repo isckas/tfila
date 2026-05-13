@@ -1,0 +1,21 @@
+name = "tfila-inbound-email"
+main = "src/index.ts"
+compatibility_date = "2025-09-15"
+# `nodejs_compat` lets us use Buffer/etc. if needed by postal-mime.
+compatibility_flags = ["nodejs_compat"]
+
+# Account ID is set by the user via `wrangler login` or env var
+# CLOUDFLARE_ACCOUNT_ID. We deliberately do NOT hardcode it.
+
+# Email Routing wiring happens in the Cloudflare dashboard, not here.
+# This Worker just exposes an `email()` handler; the dashboard rule
+# `submit@inbound.tfila.co → send to a Worker → tfila-inbound-email`
+# is what actually routes mail to it. See README.md.
+
+# Vars + secrets (set via `wrangler secret put <name>`):
+# - WEBHOOK_URL: e.g. "https://tfila.co/api/inbound/email"
+# - WEBHOOK_USER, WEBHOOK_PASS: HTTP Basic Auth credentials shared
+#   with Vercel's POSTMARK_INBOUND_USERNAME / POSTMARK_INBOUND_PASSWORD.
+
+[observability]
+enabled = true
