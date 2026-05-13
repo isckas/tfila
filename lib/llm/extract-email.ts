@@ -13,7 +13,21 @@ const HAIKU_CONFIDENCE_FLOOR = 0.4;
 const SYSTEM_PROMPT = String.raw`You are extracting minyan times from a Jewish shul's weekly email newsletter.
 
 INPUT: subject line + plain-text body (email may include forwarded headers — ignore those, focus on the schedule).
-OUTPUT: a single strict JSON object matching the schema {confidence, reasoning, rules[], shulName?, shulAddress?}. No prose preamble, no markdown fences.
+OUTPUT: a single strict JSON object matching the schema {confidence, reasoning, rules[], shulName?, shulAddress?, shulWebsite?}. No prose preamble, no markdown fences.
+
+## Identifying the shul (shulName, shulAddress, shulWebsite)
+
+The "From" header of a forwarded shul email is OFTEN a shared mailing-list service (e.g. info@myshul.com, list@mailchimp.com, news@constantcontact.com) — NOT the shul itself. To identify the actual shul:
+- shulName: look for the shul's name in the subject line, body greeting, header, or footer (e.g. "Edmond J. Safra Synagogue", "Bris Avrohom of Fair Lawn"). Do NOT use the mailing-list provider's name.
+- shulWebsite: extract the shul's own website root URL (e.g. "https://edmondjsafrasynagogue.com"). RULES:
+  * Return ONLY the bare origin: "https://hostname" with no path, query, or fragment.
+  * SKIP link-tracking redirects (url429.myshul.com, click.*, track.*, url\d+\..*, sendgrid wrappers).
+  * SKIP mailing-list platforms (myshul.com, mailchimp.com, list-manage.com, constantcontact.com, sendgrid.*, mailgun.*).
+  * SKIP image CDNs (cdn.*, *.cloudfront.net, mcauto-images-production.sendgrid.net).
+  * SKIP social media (facebook.com, instagram.com, x.com, twitter.com, youtube.com, tiktok.com, linkedin.com).
+  * SKIP shortlinks (bit.ly, goo.gl, t.co, tinyurl.com).
+  * SKIP generic mail providers (gmail.com, yahoo.com, outlook.com).
+  * If nothing qualifying is present, OMIT the field — do not invent one.
 
 ## What counts as a minyan
 Shacharis (incl Vasikin/Hashkamah), Mincha, Maariv, Selichos, Neilah.
@@ -59,6 +73,8 @@ BODY: |
 JSON: {
   "confidence": 0.92,
   "reasoning": "Clean routine weekly schedule for Parshas Behar. Recurring weekly times.",
+  "shulName": "Bris Avrohom of Fair Lawn",
+  "shulWebsite": "https://brisavrohomfl.org",
   "rules": [
     {"tefillah":"shacharis","daysOfWeek":[1,2,3,4,5],"time":{"kind":"fixed","clock":"07:00"}},
     {"tefillah":"shacharis","daysOfWeek":[0],"time":{"kind":"fixed","clock":"08:00"}},

@@ -13,6 +13,7 @@ import { db } from "@/db/client";
 import { dataSource, shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { matchDomainOf } from "@/lib/dedup";
+import { isSharedMtaDomain } from "@/lib/inbound/extract-website";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -61,8 +62,18 @@ export async function POST(): Promise<NextResponse> {
         )
         .limit(1);
       if (emailSource[0]) {
-        md = matchDomainOf(emailSource[0].identifier);
-        if (md) source = "email_data_source";
+        // identifier may be plain "info@myshul.com" or compound
+        // "info@myshul.com::edmondjsafrasynagogue.com" — strip the
+        // compound suffix first so we evaluate the right half.
+        const idParts = emailSource[0].identifier.split("::");
+        const candidate = idParts.length === 2 ? idParts[1] : idParts[0];
+        const derived = matchDomainOf(candidate);
+        // Never use a shared-MTA registrable domain as match_domain —
+        // that silently merges every shul on the platform into one row.
+        if (derived && !isSharedMtaDomain(derived)) {
+          md = derived;
+          source = "email_data_source";
+        }
       }
     }
 

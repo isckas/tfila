@@ -125,6 +125,21 @@ Keep the current literal-string dedup. Add an admin action: "Merge shul B into s
 
 Open sub-question (to resolve before building): the false-positive escape hatch. Either (1) auto-merge on domain match + admin "split" action to undo, or (2) flag-as-likely-duplicate on the new submission and require admin click-through to merge. The doc currently leans toward (1) auto-merge + admin split, but (2) is safer for the shared-hosting edge case (e.g. many community sites under `chabad.org`).
 
+### Amendment 2026-05-13: shared-MTA correction (email path)
+
+**Bug found in production.** The original Option A built the email path keying `match_domain` off the **sender's** email domain. But many shuls forward through a shared mailing-list service (MyShul, Mailchimp, Constant Contact, etc.) — every shul on that platform ends up with the same `match_domain` (e.g. `myshul.com`), so the *next* forward silently wrong-merges into the *first* shul on that platform. Discovered when a forwarded MyShul email for Edmond J. Safra Synagogue landed with `match_domain = "myshul.com"`.
+
+**Fix (built 2026-05-13).** Email path now keys dedup off the *shul's own website*, not the sender:
+1. LLM extraction prompt asks for `shulWebsite` (new optional field in `ExtractionSchema`).
+2. Regex fallback in `lib/inbound/extract-website.ts` scans the body for non-tracking, non-MTA, non-image URLs when the LLM didn't return one.
+3. If neither finds a usable URL, `match_domain` stays NULL (no dedup) — safer than wrong-merging.
+4. `data_source.identifier` becomes compound (`info@myshul.com::edmondjsafrasynagogue.com`) when the sender is on the shared-MTA denylist, so two different shuls on the same MTA still get separate `data_source` rows.
+5. The shared-MTA denylist (`SHARED_MTA_DOMAINS` in `lib/inbound/extract-website.ts`) covers shul-specific platforms (myshul.com), generic ESPs (mailchimp, sendgrid, constantcontact, mailerlite), generic mail providers (gmail, yahoo, outlook), and social/shortlinks.
+6. `/api/admin/backfill-match-domain` updated with the same denylist check, so re-running backfill never re-introduces a shared-MTA value.
+7. `/api/admin/null-mta-match-domain` (new POST) nulls existing rows that were poisoned with a shared-MTA value.
+
+URL submission path is unchanged — `match_domain` from URL is correct by construction.
+
 ### Implementation plan (when ready to build)
 
 1. **Schema**: add `shul.match_domain` (varchar 253, indexed)

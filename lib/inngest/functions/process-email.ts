@@ -22,6 +22,10 @@ import {
 import { extractFromEmail } from "../../llm/extract-email";
 import { slugify, nameFromTitle } from "../../slug";
 import { matchDomainOf } from "../../dedup";
+import {
+  extractCanonicalWebsiteFromEmail,
+  isSharedMtaDomain,
+} from "../../inbound/extract-website";
 
 export const processEmail = inngest.createFunction(
   {
@@ -70,7 +74,36 @@ export const processEmail = inngest.createFunction(
       };
     }
 
-    // ─── 2. Find or create the data_source ──────────────────────
+    // ─── 2. Resolve the shul's canonical website ────────────────
+    // Dedup keys off the shul's OWN domain, never the sender's. The
+    // "From" address on a forwarded email is often a shared mailing-
+    // list provider (info@myshul.com, news@constantcontact.com) that
+    // many different shuls use — match_domain on that would silently
+    // merge every shul on the platform into one row.
+    const websiteUrl =
+      extracted.extraction.shulWebsite ??
+      extractCanonicalWebsiteFromEmail(body);
+    const shulMatchDomain = websiteUrl ? matchDomainOf(websiteUrl) : null;
+
+    // ─── 3. Compute the data_source identifier ──────────────────
+    // For non-shared senders, identifier = the sender email (so a
+    // weekly forward from the same gabbai re-uses the same row).
+    // For shared senders we need to disambiguate between shuls that
+    // happen to use the same MTA: use a compound identifier when we
+    // know which shul this is, or a body-hash-suffixed sentinel when
+    // we don't (so we never wrong-merge by sender alone).
+    const senderDomain = matchDomainOf(originalSenderEmail);
+    const senderIsShared = isSharedMtaDomain(senderDomain);
+    let identifier: string;
+    if (senderIsShared && shulMatchDomain) {
+      identifier = `${originalSenderEmail}::${shulMatchDomain}`;
+    } else if (senderIsShared) {
+      identifier = `${originalSenderEmail}::unknown-${extracted.bodyHash.slice(0, 12)}`;
+    } else {
+      identifier = originalSenderEmail;
+    }
+
+    // ─── 4. Find or create the data_source ──────────────────────
     const result = await step.run("persist", async () =>
       persistFromEmail({
         originalSenderEmail,
@@ -78,6 +111,9 @@ export const processEmail = inngest.createFunction(
         forwarderEmail,
         subject,
         extracted,
+        identifier,
+        shulMatchDomain,
+        websiteUrl,
       }),
     );
 
@@ -91,21 +127,34 @@ interface PersistArgs {
   forwarderEmail: string;
   subject: string;
   extracted: Awaited<ReturnType<typeof extractFromEmail>>;
+  identifier: string;
+  shulMatchDomain: string | null;
+  websiteUrl: string | null;
 }
 
 async function persistFromEmail(args: PersistArgs) {
-  const { originalSenderEmail, originalSenderName, subject, extracted } = args;
+  const {
+    originalSenderEmail,
+    originalSenderName,
+    subject,
+    extracted,
+    identifier,
+    shulMatchDomain,
+    websiteUrl,
+  } = args;
   const now = new Date();
 
   return db.transaction(async (tx) => {
-    // Look up existing data_source by (kind=email_newsletter, identifier=email)
+    // Look up existing data_source by (kind=email_newsletter, identifier).
+    // Identifier may be the plain sender email or a compound key when the
+    // sender is a shared MTA — see processEmail() for the construction.
     const existing = await tx
       .select({ id: dataSource.id, shulId: dataSource.shulId, configJson: dataSource.configJson })
       .from(dataSource)
       .where(
         and(
           eq(dataSource.kind, "email_newsletter"),
-          eq(dataSource.identifier, originalSenderEmail),
+          eq(dataSource.identifier, identifier),
         ),
       )
       .limit(1);
@@ -115,21 +164,20 @@ async function persistFromEmail(args: PersistArgs) {
     let isNewShul = false;
 
     if (existing[0]) {
-      // Exact sender match — refresh rules on the existing data_source.
+      // Exact identifier match — refresh rules on the existing data_source.
       shulId = existing[0].shulId;
       dataSourceId = existing[0].id;
     } else {
-      // No exact sender match. Try domain-match dedup before creating a
-      // brand-new shul: if there's already a shul with the same
-      // registrable domain as the sender's email, attach this email
-      // sender as a new email_newsletter data_source under it.
-      const senderMatchDomain = matchDomainOf(originalSenderEmail);
+      // No exact identifier match. Try domain-match dedup before creating a
+      // brand-new shul: if there's already a shul with the same registrable
+      // domain as the shul's OWN website (LLM-extracted, NOT the sender),
+      // attach this email source as a new data_source under it.
       let mergedShul: { id: number } | null = null;
-      if (senderMatchDomain) {
+      if (shulMatchDomain) {
         const sameDomain = await tx
           .select({ id: shul.id })
           .from(shul)
-          .where(eq(shul.matchDomain, senderMatchDomain))
+          .where(eq(shul.matchDomain, shulMatchDomain))
           .limit(1);
         if (sameDomain[0]) mergedShul = sameDomain[0];
       }
@@ -143,14 +191,16 @@ async function persistFromEmail(args: PersistArgs) {
           .values({
             shulId,
             kind: "email_newsletter",
-            identifier: originalSenderEmail,
+            identifier,
             configJson: {
               version: 1,
               prompt_version: "tfila-email-v1",
               first_received_at: now.toISOString(),
               last_subject: subject,
               forwarder: args.forwarderEmail,
-              auto_merged_by_domain: senderMatchDomain,
+              sender_email: originalSenderEmail,
+              shul_website: websiteUrl,
+              auto_merged_by_domain: shulMatchDomain,
             },
             confidenceScore: args.extracted.extraction.confidence,
             priority: 60,
@@ -164,12 +214,13 @@ async function persistFromEmail(args: PersistArgs) {
           .returning({ id: dataSource.id });
         dataSourceId = insertedSource.id;
       } else {
-        // First-ever email from this sender AND no domain match →
-        // create a new shul + data_source. Shul name preference:
-        // LLM-extracted name > sender's display name > sender domain.
+        // First-ever email for this shul AND no domain match → create a
+        // new shul + data_source. Shul name preference: LLM-extracted
+        // name > sender's display name > website hostname > sender domain.
         const detectedName =
           args.extracted.extraction.shulName ??
           originalSenderName ??
+          (websiteUrl ? nameFromTitle(new URL(websiteUrl).hostname.replace(/^www\./, "")) : null) ??
           nameFromTitle(originalSenderEmail.split("@")[1] ?? "") ??
           originalSenderEmail;
 
@@ -192,7 +243,8 @@ async function persistFromEmail(args: PersistArgs) {
             name: detectedName,
             address: args.extracted.extraction.shulAddress ?? null,
             contactEmail: originalSenderEmail,
-            matchDomain: senderMatchDomain,
+            submittedUrl: websiteUrl,
+            matchDomain: shulMatchDomain,
             status: "pending_review",
           })
           .returning({ id: shul.id });
@@ -204,13 +256,15 @@ async function persistFromEmail(args: PersistArgs) {
           .values({
             shulId,
             kind: "email_newsletter",
-            identifier: originalSenderEmail,
+            identifier,
             configJson: {
               version: 1,
               prompt_version: "tfila-email-v1",
               first_received_at: now.toISOString(),
               last_subject: subject,
               forwarder: args.forwarderEmail,
+              sender_email: originalSenderEmail,
+              shul_website: websiteUrl,
             },
             confidenceScore: args.extracted.extraction.confidence,
             priority: 60, // email > website (SCOPE.md §6 lock)

@@ -130,6 +130,13 @@ export const ExtractionSchema = z.object({
     .max(300)
     .optional()
     .describe("If a street address is visible (footer, contact section), include it verbatim."),
+  shulWebsite: z
+    .string()
+    .max(300)
+    .optional()
+    .describe(
+      "Canonical root URL of the shul's own website if it appears in the source (e.g. 'https://edmondjsafrasynagogue.com'). Skip mailing-list platforms, link-tracking redirects, social media, image CDNs, and generic mail providers.",
+    ),
 });
 
 export type Extraction = z.infer<typeof ExtractionSchema>;

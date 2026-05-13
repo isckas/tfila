@@ -6,6 +6,19 @@ Day-versioned log of features, functions, and stack/code notes. Rendered in the 
 
 ---
 
+## v2 — 2026-05-13
+
+### Fixes
+
+- **Dedup: stop merging different shuls that share a mailing-list provider.** Forwarded email submissions now derive `match_domain` from the shul's own website (LLM-extracted from the email body, with a regex fallback over body URLs), NOT from the sender's email domain. Before this fix, every shul on a shared platform like MyShul or Mailchimp ended up with `match_domain = "myshul.com"` / `match_domain = "list-manage.com"`, so the next forwarded email would silently auto-merge into the first shul on that platform regardless of which shul it was actually about.
+  - New `lib/inbound/extract-website.ts` exports `extractCanonicalWebsiteFromEmail()` + `isSharedMtaDomain()` + the `SHARED_MTA_DOMAINS` denylist (shul/marketing platforms, generic mail providers, social, shortlinks).
+  - LLM extraction (`ExtractionSchema.shulWebsite`) is the primary source; regex over body URLs is the fallback. If neither finds anything, `match_domain` stays NULL (no dedup) — safer than wrong-merging.
+  - For shared-MTA senders, `data_source.identifier` becomes compound (`info@myshul.com::edmondjsafrasynagogue.com`) so two different shuls on the same MTA get separate data_sources.
+  - `/api/admin/backfill-match-domain` updated to apply the same denylist check.
+- **One-shot cleanup endpoint** `POST /api/admin/null-mta-match-domain` nulls `match_domain` on existing rows that were poisoned with a shared-MTA value, so they stop wrong-merging future submissions.
+
+---
+
 ## v1 — 2026-05-13
 
 Baseline release. Everything below covers the full build from sprint 1 through end of 2026-05-13. Future versions list incremental day-over-day changes.
