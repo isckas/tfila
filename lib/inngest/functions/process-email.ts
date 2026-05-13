@@ -22,6 +22,7 @@ import {
 import { extractFromEmail } from "../../llm/extract-email";
 import { slugify, nameFromTitle } from "../../slug";
 import { matchDomainOf } from "../../dedup";
+import { backfillShulLocation } from "../../geocoding";
 import {
   extractCanonicalWebsiteFromEmail,
   isSharedMtaDomain,
@@ -125,7 +126,22 @@ export const processEmail = inngest.createFunction(
       }),
     );
 
-    return result;
+    // ─── 5. Address backfill via Google Places ──────────────────
+    // Weekly bulletin emails rarely include the shul's street address,
+    // so extraction.shulAddress is usually null. Use the same Places
+    // helper the URL path uses (FEATURES.md "Unified post-ingestion
+    // pipeline") so email-derived shuls aren't second-class on the
+    // geo feed. Guarded by helper: no-ops if shul already has an
+    // address (e.g. attached to an existing shul via domain-merge).
+    const addressBackfill = await step.run("address-fallback", async () =>
+      backfillShulLocation({
+        shulId: result.shulId,
+        name: extracted.extraction.shulName ?? "",
+        urlHint: websiteUrl,
+      }),
+    );
+
+    return { ...result, addressBackfill };
   },
 );
 

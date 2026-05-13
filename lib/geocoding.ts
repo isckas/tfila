@@ -1,6 +1,10 @@
 // Google Geocoding API client. One-time per-shul use during onboarding;
 // never called per-request from the davener-facing path.
 
+import { eq, sql } from "drizzle-orm";
+import { db } from "../db/client";
+import { shul } from "../db/schema";
+
 export interface GeocodeResult {
   lat: number;
   lng: number;
@@ -283,4 +287,73 @@ export async function findShulPlace(
   // we don't yet use it (kept in signature for future refinement).
   void opts.urlHint;
   return best;
+}
+
+export interface BackfillResult {
+  applied: boolean;
+  confidence?: number;
+  reason?: string;
+  candidate?: { name: string; address: string };
+}
+
+/**
+ * Look up a shul on Google Places by name (with optional URL hint),
+ * and write the result to shul.address + shul.location when confidence
+ * is high enough. Idempotent: only writes when shul.address IS NULL.
+ *
+ * Shared by both submission channels (URL via build-data-source and
+ * email via process-email) — see FEATURES.md "Unified post-ingestion
+ * pipeline" entry for the broader principle this is a slice of.
+ *
+ * Returns a structured result so callers can log the decision +
+ * surface "📍 backfilled from Places" banners in admin UI.
+ */
+export async function backfillShulLocation(args: {
+  shulId: number;
+  /** Preferred name to search Places by — usually LLM-extracted. */
+  name: string;
+  /** Optional URL hint (the shul's submittedUrl or LLM-extracted website). */
+  urlHint?: string | null;
+  /** Minimum Places confidence to apply. Default 0.7 — same as URL path. */
+  minConfidence?: number;
+}): Promise<BackfillResult> {
+  const minConfidence = args.minConfidence ?? 0.7;
+
+  const rows = await db
+    .select({ id: shul.id, address: shul.address })
+    .from(shul)
+    .where(eq(shul.id, args.shulId))
+    .limit(1);
+  const s = rows[0];
+  if (!s) return { applied: false, reason: "shul not found" };
+  if (s.address) return { applied: false, reason: "address already set" };
+
+  const match = await findShulPlace(args.name, {
+    urlHint: args.urlHint ?? undefined,
+  });
+  if (!match) return { applied: false, reason: "no places match" };
+
+  if (match.confidence < minConfidence) {
+    return {
+      applied: false,
+      confidence: match.confidence,
+      reason: `confidence below ${minConfidence} threshold`,
+      candidate: { name: match.name, address: match.address },
+    };
+  }
+
+  await db.execute(sql`
+    UPDATE shul
+       SET address = ${match.address},
+           location = ST_SetSRID(ST_MakePoint(${match.lng}, ${match.lat}), 4326)::geography,
+           updated_at = NOW()
+     WHERE id = ${args.shulId}
+       AND address IS NULL
+  `);
+
+  return {
+    applied: true,
+    confidence: match.confidence,
+    candidate: { name: match.name, address: match.address },
+  };
 }
