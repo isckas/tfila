@@ -6,6 +6,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { ExtractionSchema, type Extraction } from "./schema";
+import { fetchBinary } from "../scrapers/fetch-binary";
 
 const HAIKU_CONFIDENCE_FLOOR = 0.4;
 
@@ -116,7 +117,7 @@ function extractJsonObject(text: string): string {
 
 async function callClaude(
   model: "claude-haiku-4-5" | "claude-sonnet-4-6",
-  pdfUrl: string,
+  pdfBase64: string,
 ): Promise<{ extraction: Extraction; usage: TokenUsage }> {
   const r = await getClient().messages.create({
     model,
@@ -130,7 +131,11 @@ async function callClaude(
         content: [
           {
             type: "document",
-            source: { type: "url", url: pdfUrl },
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: pdfBase64,
+            },
           },
           {
             type: "text",
@@ -175,7 +180,24 @@ async function callClaude(
 export async function extractFromPdfUrl(
   pdfUrl: string,
 ): Promise<PdfExtractionResult> {
-  const haiku = await callClaude("claude-haiku-4-5", pdfUrl);
+  // Fetch the PDF ourselves (UA fallback for WAF/bot blocks) and send as
+  // base64. Claude's URL fetcher respects robots.txt; ShulCloud's CDN
+  // disallows automated agents there, but daveners are legitimately
+  // viewing the shul's published bulletin.
+  const fetched = await fetchBinary(pdfUrl, {
+    timeoutMs: 25_000,
+    accept: "application/pdf",
+  });
+  if (!fetched.ok || !fetched.bytes) {
+    throw new Error(
+      `PDF fetch failed for ${pdfUrl}: HTTP ${fetched.status}${
+        fetched.fellBackToBrowserUa ? " (after browser-UA fallback)" : ""
+      }`,
+    );
+  }
+  const pdfBase64 = fetched.bytes.toString("base64");
+
+  const haiku = await callClaude("claude-haiku-4-5", pdfBase64);
   if (haiku.extraction.confidence >= HAIKU_CONFIDENCE_FLOOR) {
     return {
       extraction: haiku.extraction,
@@ -184,7 +206,7 @@ export async function extractFromPdfUrl(
       usage: { haiku: haiku.usage },
     };
   }
-  const sonnet = await callClaude("claude-sonnet-4-6", pdfUrl);
+  const sonnet = await callClaude("claude-sonnet-4-6", pdfBase64);
   const winner =
     sonnet.extraction.confidence > haiku.extraction.confidence ? sonnet : haiku;
   return {

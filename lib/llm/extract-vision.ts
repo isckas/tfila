@@ -9,6 +9,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { ExtractionSchema, type Extraction } from "./schema";
+import { fetchBinary, normalizeImageMimeType } from "../scrapers/fetch-binary";
 
 // Skip Haiku entirely for vision — Sonnet is the right starting tier
 // for image-based schedules. Haiku's vision is too weak to be worth
@@ -119,6 +120,27 @@ function extractJsonObject(text: string): string {
 export async function extractFromImageUrl(
   imageUrl: string,
 ): Promise<VisionExtractionResult> {
+  // Fetch the image ourselves (UA fallback) and send as base64. Claude's
+  // URL fetcher respects robots.txt; some shul-hosting CDNs disallow bots.
+  const fetched = await fetchBinary(imageUrl, {
+    timeoutMs: 25_000,
+    accept: "image/*",
+  });
+  if (!fetched.ok || !fetched.bytes) {
+    throw new Error(
+      `Image fetch failed for ${imageUrl}: HTTP ${fetched.status}${
+        fetched.fellBackToBrowserUa ? " (after browser-UA fallback)" : ""
+      }`,
+    );
+  }
+  const mediaType = normalizeImageMimeType(fetched.mimeType, imageUrl);
+  if (!mediaType) {
+    throw new Error(
+      `Image ${imageUrl}: unsupported MIME type "${fetched.mimeType}" — Claude accepts jpeg/png/gif/webp only`,
+    );
+  }
+  const imageBase64 = fetched.bytes.toString("base64");
+
   const r = await getClient().messages.create({
     model: VISION_MODEL,
     max_tokens: 6_000,
@@ -131,7 +153,11 @@ export async function extractFromImageUrl(
         content: [
           {
             type: "image",
-            source: { type: "url", url: imageUrl },
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: imageBase64,
+            },
           },
           {
             type: "text",
