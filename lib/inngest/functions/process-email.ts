@@ -21,6 +21,7 @@ import {
 } from "../../../db/schema";
 import { extractFromEmail } from "../../llm/extract-email";
 import { slugify, nameFromTitle } from "../../slug";
+import { matchDomainOf } from "../../dedup";
 
 export const processEmail = inngest.createFunction(
   {
@@ -114,67 +115,115 @@ async function persistFromEmail(args: PersistArgs) {
     let isNewShul = false;
 
     if (existing[0]) {
+      // Exact sender match — refresh rules on the existing data_source.
       shulId = existing[0].shulId;
       dataSourceId = existing[0].id;
     } else {
-      // First-ever email from this sender → create a new shul + data_source.
-      // Shul name preference: LLM-extracted name > original sender's display
-      // name > derived from the sender's email domain.
-      const detectedName =
-        args.extracted.extraction.shulName ??
-        originalSenderName ??
-        nameFromTitle(originalSenderEmail.split("@")[1] ?? "") ??
-        originalSenderEmail;
-
-      let baseSlug = slugify(detectedName) || slugify(originalSenderEmail);
-      let candidateSlug = baseSlug;
-      for (let n = 2; n < 100; n++) {
-        const collision = await tx
+      // No exact sender match. Try domain-match dedup before creating a
+      // brand-new shul: if there's already a shul with the same
+      // registrable domain as the sender's email, attach this email
+      // sender as a new email_newsletter data_source under it.
+      const senderMatchDomain = matchDomainOf(originalSenderEmail);
+      let mergedShul: { id: number } | null = null;
+      if (senderMatchDomain) {
+        const sameDomain = await tx
           .select({ id: shul.id })
           .from(shul)
-          .where(eq(shul.slug, candidateSlug))
+          .where(eq(shul.matchDomain, senderMatchDomain))
           .limit(1);
-        if (!collision[0]) break;
-        candidateSlug = `${baseSlug}-${n}`;
+        if (sameDomain[0]) mergedShul = sameDomain[0];
       }
 
-      const [insertedShul] = await tx
-        .insert(shul)
-        .values({
-          slug: candidateSlug,
-          name: detectedName,
-          address: args.extracted.extraction.shulAddress ?? null,
-          contactEmail: originalSenderEmail,
-          status: "pending_review",
-        })
-        .returning({ id: shul.id });
-      shulId = insertedShul.id;
-      isNewShul = true;
+      if (mergedShul) {
+        // Attach as new email_newsletter data_source under existing shul.
+        shulId = mergedShul.id;
 
-      const [insertedSource] = await tx
-        .insert(dataSource)
-        .values({
-          shulId,
-          kind: "email_newsletter",
-          identifier: originalSenderEmail,
-          configJson: {
-            version: 1,
-            prompt_version: "tfila-email-v1",
-            first_received_at: now.toISOString(),
-            last_subject: subject,
-            forwarder: args.forwarderEmail,
-          },
-          confidenceScore: args.extracted.extraction.confidence,
-          priority: 60, // email > website (SCOPE.md §6 lock)
-          builtAt: now,
-          builtBy: "llm",
-          lastRunAt: now,
-          lastReceivedAt: now,
-          lastRunStatus: "ok",
-          reviewStatus: "pending",
-        })
-        .returning({ id: dataSource.id });
-      dataSourceId = insertedSource.id;
+        const [insertedSource] = await tx
+          .insert(dataSource)
+          .values({
+            shulId,
+            kind: "email_newsletter",
+            identifier: originalSenderEmail,
+            configJson: {
+              version: 1,
+              prompt_version: "tfila-email-v1",
+              first_received_at: now.toISOString(),
+              last_subject: subject,
+              forwarder: args.forwarderEmail,
+              auto_merged_by_domain: senderMatchDomain,
+            },
+            confidenceScore: args.extracted.extraction.confidence,
+            priority: 60,
+            builtAt: now,
+            builtBy: "llm",
+            lastRunAt: now,
+            lastReceivedAt: now,
+            lastRunStatus: "ok",
+            reviewStatus: "pending",
+          })
+          .returning({ id: dataSource.id });
+        dataSourceId = insertedSource.id;
+      } else {
+        // First-ever email from this sender AND no domain match →
+        // create a new shul + data_source. Shul name preference:
+        // LLM-extracted name > sender's display name > sender domain.
+        const detectedName =
+          args.extracted.extraction.shulName ??
+          originalSenderName ??
+          nameFromTitle(originalSenderEmail.split("@")[1] ?? "") ??
+          originalSenderEmail;
+
+        const baseSlug = slugify(detectedName) || slugify(originalSenderEmail);
+        let candidateSlug = baseSlug;
+        for (let n = 2; n < 100; n++) {
+          const collision = await tx
+            .select({ id: shul.id })
+            .from(shul)
+            .where(eq(shul.slug, candidateSlug))
+            .limit(1);
+          if (!collision[0]) break;
+          candidateSlug = `${baseSlug}-${n}`;
+        }
+
+        const [insertedShul] = await tx
+          .insert(shul)
+          .values({
+            slug: candidateSlug,
+            name: detectedName,
+            address: args.extracted.extraction.shulAddress ?? null,
+            contactEmail: originalSenderEmail,
+            matchDomain: senderMatchDomain,
+            status: "pending_review",
+          })
+          .returning({ id: shul.id });
+        shulId = insertedShul.id;
+        isNewShul = true;
+
+        const [insertedSource] = await tx
+          .insert(dataSource)
+          .values({
+            shulId,
+            kind: "email_newsletter",
+            identifier: originalSenderEmail,
+            configJson: {
+              version: 1,
+              prompt_version: "tfila-email-v1",
+              first_received_at: now.toISOString(),
+              last_subject: subject,
+              forwarder: args.forwarderEmail,
+            },
+            confidenceScore: args.extracted.extraction.confidence,
+            priority: 60, // email > website (SCOPE.md §6 lock)
+            builtAt: now,
+            builtBy: "llm",
+            lastRunAt: now,
+            lastReceivedAt: now,
+            lastRunStatus: "ok",
+            reviewStatus: "pending",
+          })
+          .returning({ id: dataSource.id });
+        dataSourceId = insertedSource.id;
+      }
     }
 
     // ─── 3. Apply rules ─────────────────────────────────────────

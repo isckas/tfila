@@ -13,6 +13,7 @@ interface PageProps {
     strategy?: string;
     resource?: string;
     address?: string;
+    split?: string;
   }>;
 }
 
@@ -116,6 +117,23 @@ export default async function AdminShulDetailPage({
         <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           ✓ Re-extraction queued. A new data source will appear here once the
           LLM finishes (~30 seconds; check back).
+        </div>
+      )}
+      {sp.split === "1" && (
+        <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          ✂ Data source split into this new shul.
+          {sp.from && (
+            <>
+              {" "}Source shul:{" "}
+              <Link
+                href={`/admin/shul/${sp.from}`}
+                className="font-medium underline-offset-2 hover:underline"
+              >
+                /admin/shul/{sp.from}
+              </Link>
+            </>
+          )}
+          . Review and approve as usual.
         </div>
       )}
       {sp.err && (
@@ -439,6 +457,22 @@ export default async function AdminShulDetailPage({
                       Re-extract from source
                     </button>
                   </form>
+                  {/* Split: only relevant when shul has 2+ data_sources */}
+                  {dataSources.length > 1 && (
+                    <form
+                      method="post"
+                      action={`/api/admin/data-source/${ds.id}/split`}
+                      className="inline"
+                    >
+                      <button
+                        type="submit"
+                        className="rounded border border-rose-300 px-2.5 py-1 text-rose-700 hover:bg-rose-50"
+                        title="Move this data source to a brand new shul (undo a wrong dedup merge)"
+                      >
+                        Split into separate shul
+                      </button>
+                    </form>
+                  )}
                 </div>
               </li>
             ))}

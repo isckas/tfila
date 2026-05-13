@@ -104,6 +104,14 @@ export const shul = pgTable(
     nusach: varchar("nusach", { length: 32 }),
     submittedUrl: text("submitted_url"),
     contactEmail: text("contact_email"),
+    // Registrable domain (eTLD+1) computed from submittedUrl OR from an
+    // email_newsletter data_source's identifier. Used to dedupe new
+    // submissions across both channels — same shul submitted as
+    // `https://theshul.org` AND `https://www.theshul.org/calendar` AND
+    // `gabbai@theshul.org` all collapse to one shul row with three
+    // data_sources. Admin can split if the merge was wrong (e.g.
+    // shared-hosting false positive).
+    matchDomain: varchar("match_domain", { length: 253 }),
     status: shulStatusEnum("status").default("pending_review").notNull(),
     submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
@@ -113,6 +121,7 @@ export const shul = pgTable(
   (t) => [
     uniqueIndex("shul_slug_idx").on(t.slug),
     index("shul_status_idx").on(t.status),
+    index("shul_match_domain_idx").on(t.matchDomain),
     // GIST index on the geography column is created via raw SQL in the
     // migration file (see PR 1 migration). Drizzle's `using()` helper
     // doesn't yet support a geography-typed operator class cleanly.

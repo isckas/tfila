@@ -27,7 +27,9 @@ So: IDEAS is "free-form notes I don't want to lose"; FEATURES is "I'm about to b
 
 ## Deduplication: same shul, different submissions
 
-Added: 2026-05-13 · **Decision: Option A (registrable-domain dedup), 2026-05-13. Not yet built.**
+Added: 2026-05-13 · **Decision: Option A (registrable-domain dedup), 2026-05-13. Built 2026-05-13.**
+
+**Built with the auto-merge + admin Split escape hatch.** New submissions whose registrable domain (eTLD+1) matches an existing shul auto-attach as a new `data_source` under that shul. If the merge was wrong (e.g. shared hosting), admin clicks "Split into separate shul" on the data_source row to undo.
 
 **Question:** When two people submit the same shul through different channels, how do we recognize them as the same shul and avoid creating duplicate rows?
 
