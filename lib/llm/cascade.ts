@@ -5,9 +5,15 @@
 //
 //   1. HTML       — fetch + extract from raw HTML (cheapest)
 //   2. JS-rendered — fetch through Browserless (runs JS) + HTML extract
-//   3. PDF        — find a .pdf link on the page, send to Claude
-//   4. Vision     — find a schedule-looking <img>, send to Claude w/ vision
+//   3. Vision     — find a schedule-looking <img>, send to Claude w/ vision
+//   4. PDF        — find a .pdf link on the page, send to Claude
 //   5. Failed     — give up, mark the shul unsupported
+//
+// Vision runs BEFORE PDF deliberately: shul-published schedule images
+// are typically small (~100KB), clean single-page snapshots, while
+// shul bulletin PDFs are often multi-MB multi-page documents with the
+// schedule buried among announcements/ads. Vision is faster and
+// usually higher-signal per dollar when both are available.
 //
 // Each tier only runs if the previous one yielded no useful rules. The
 // strategy that succeeded is persisted on data_source so weekly
@@ -99,9 +105,12 @@ function findPdfCandidates(htmls: string[], baseUrl: string): string[] {
       ranked.push({ url: absUrl, rank });
     }
   }
+  // Cap at 1 — bulletin PDFs are slow to fetch + process; if the
+  // best-scored candidate doesn't yield rules, the next is unlikely
+  // to either, and we'd blow the function timeout.
   return ranked
     .sort((a, b) => b.rank - a.rank)
-    .slice(0, 3)
+    .slice(0, 1)
     .map((r) => r.url);
 }
 
@@ -302,72 +311,9 @@ export async function runCascade(
     (h): h is string => typeof h === "string" && h.length > 0,
   );
 
-  // ─── Tier 3: PDF ────────────────────────────────────────────
-  if (!opts.preferredStrategy || opts.preferredStrategy === "pdf_document") {
-    if (searchHtmls.length === 0) {
-      attempts.push({
-        strategy: "pdf_document",
-        status: "skipped",
-        rulesCount: 0,
-        confidence: null,
-        errorMessage: "no HTML available to scan for PDF links",
-      });
-    } else {
-      const pdfCandidates = findPdfCandidates(searchHtmls, baseUrl);
-      if (pdfCandidates.length === 0) {
-        attempts.push({
-          strategy: "pdf_document",
-          status: "skipped",
-          rulesCount: 0,
-          confidence: null,
-          errorMessage: "no .pdf links found on the page",
-        });
-      }
-      for (const pdfUrl of pdfCandidates) {
-        try {
-          const r = await extractFromPdfUrl(pdfUrl);
-          attempts.push({
-            strategy: "pdf_document",
-            status: "extracted",
-            rulesCount: r.extraction.rules.length,
-            confidence: r.extraction.confidence,
-            resourceUrl: pdfUrl,
-          });
-          usage["pdf_document"] = r.usage;
-          if (isUseful(r.extraction.rules.length, r.extraction.confidence)) {
-            return {
-              strategy: "pdf_document",
-              extraction: r.extraction,
-              model: r.model,
-              pageContentHash: null,
-              usage,
-              winningUrl: pdfUrl,
-              attempts,
-            };
-          }
-        } catch (err) {
-          attempts.push({
-            strategy: "pdf_document",
-            status: "extract_failed",
-            rulesCount: 0,
-            confidence: null,
-            resourceUrl: pdfUrl,
-            errorMessage: (err as Error).message.slice(0, 200),
-          });
-        }
-      }
-    }
-  } else {
-    attempts.push({
-      strategy: "pdf_document",
-      status: "skipped",
-      rulesCount: 0,
-      confidence: null,
-      errorMessage: `pinned to ${opts.preferredStrategy}`,
-    });
-  }
-
-  // ─── Tier 4: Vision ─────────────────────────────────────────
+  // ─── Tier 3: Vision ─────────────────────────────────────────
+  // Runs BEFORE PDF — schedule images are typically small + clean;
+  // bulletin PDFs are multi-MB and slow to process.
   if (!opts.preferredStrategy || opts.preferredStrategy === "vision_image") {
     if (searchHtmls.length === 0) {
       attempts.push({
@@ -426,6 +372,73 @@ export async function runCascade(
   } else {
     attempts.push({
       strategy: "vision_image",
+      status: "skipped",
+      rulesCount: 0,
+      confidence: null,
+      errorMessage: `pinned to ${opts.preferredStrategy}`,
+    });
+  }
+
+  // ─── Tier 4: PDF ────────────────────────────────────────────
+  // Last resort — bulletin PDFs are slow (multi-page, multi-MB).
+  // Capped at 1 candidate to stay within Vercel function timeouts.
+  if (!opts.preferredStrategy || opts.preferredStrategy === "pdf_document") {
+    if (searchHtmls.length === 0) {
+      attempts.push({
+        strategy: "pdf_document",
+        status: "skipped",
+        rulesCount: 0,
+        confidence: null,
+        errorMessage: "no HTML available to scan for PDF links",
+      });
+    } else {
+      const pdfCandidates = findPdfCandidates(searchHtmls, baseUrl);
+      if (pdfCandidates.length === 0) {
+        attempts.push({
+          strategy: "pdf_document",
+          status: "skipped",
+          rulesCount: 0,
+          confidence: null,
+          errorMessage: "no .pdf links found on the page",
+        });
+      }
+      for (const pdfUrl of pdfCandidates) {
+        try {
+          const r = await extractFromPdfUrl(pdfUrl);
+          attempts.push({
+            strategy: "pdf_document",
+            status: "extracted",
+            rulesCount: r.extraction.rules.length,
+            confidence: r.extraction.confidence,
+            resourceUrl: pdfUrl,
+          });
+          usage["pdf_document"] = r.usage;
+          if (isUseful(r.extraction.rules.length, r.extraction.confidence)) {
+            return {
+              strategy: "pdf_document",
+              extraction: r.extraction,
+              model: r.model,
+              pageContentHash: null,
+              usage,
+              winningUrl: pdfUrl,
+              attempts,
+            };
+          }
+        } catch (err) {
+          attempts.push({
+            strategy: "pdf_document",
+            status: "extract_failed",
+            rulesCount: 0,
+            confidence: null,
+            resourceUrl: pdfUrl,
+            errorMessage: (err as Error).message.slice(0, 200),
+          });
+        }
+      }
+    }
+  } else {
+    attempts.push({
+      strategy: "pdf_document",
       status: "skipped",
       rulesCount: 0,
       confidence: null,

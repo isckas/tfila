@@ -7,14 +7,15 @@ import { runCascade } from "@/lib/llm/cascade";
 
 /**
  * Trigger an immediate (inline, synchronous) extraction cascade for
- * a shul. The cascade runs HTML → JS-rendered → PDF → Vision → failed.
+ * a shul. The cascade runs HTML → JS-rendered → Vision → PDF → failed.
  * Whatever strategy succeeds gets persisted on the data_source so
  * weekly rescrapes skip the earlier tiers.
  *
- * Caps at 60s. Cascade timeouts are tuned to fit (HTML 5s + JS 30s +
- * PDF/Vision ~10s each in worst case).
+ * Caps at 300s (Vercel platform default since 2026-Q1). Worst case is
+ * all four tiers — HTML ~10s + JS render ~30s + Vision ~20s + PDF
+ * ~60s for a large multi-page bulletin = ~120s.
  */
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(
   req: Request,
