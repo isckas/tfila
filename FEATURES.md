@@ -150,3 +150,53 @@ URL submission path is unchanged — `match_domain` from URL is correct by const
 6. **Admin "split" tool**: if two shuls were incorrectly merged, admin can split them apart
 
 Each step is small and independent. Could ship across 3 PRs (schema + backfill / submission paths / admin tool) or one if we have a quiet day.
+
+---
+
+## Address backfill parity: email path needs Places lookup too
+
+Added: 2026-05-13 · **Status: not yet built.**
+
+**Question:** URL submissions get a Google Places address backfill when the LLM doesn't extract a street address from the page. Email submissions don't — they just store whatever the LLM pulled from the body (often nothing, because weekly schedule emails rarely contain the shul's street address). Result: email-submitted shuls land without addresses and don't show up on map / geo queries.
+
+### Current behavior
+
+**URL submissions** ([`lib/inngest/functions/build-data-source.ts`](./lib/inngest/functions/build-data-source.ts) calling [`findShulPlace()`](./lib/geocoding.ts) in `lib/geocoding.ts`): after the cascade finishes, if `extraction.shulAddress` is null AND `extraction.confidence >= 0.7`, we call Google Places Text Search v1 with the shul name + URL hint. Score the candidates by name-token overlap + place type (synagogue +0.4 / place_of_worship +0.25 / religious_organization +0.15). If a candidate scores well, write its `formatted_address` to `shul.address`, store `place_id` and lat/lng, surface "📍 backfilled from Places" banner in admin.
+
+**Email submissions** ([`lib/inngest/functions/process-email.ts`](./lib/inngest/functions/process-email.ts) `persistFromEmail()`): writes `shul.address = extraction.shulAddress ?? null` and that's it. No Places fallback. First real case: Edmond J. Safra Synagogue (shul id=59) — confidence 0.88, 12 rules extracted, but `address` is null because the weekly bulletin has no street address. Address has to be filled in by admin manually.
+
+### Why it matters
+
+- The home-page minyan feed sorts by distance from user; shuls without lat/lng can't appear in geo queries
+- The OpenStreetMap embed on `/shul/[slug]` shows nothing without coords
+- Reverse-geocoded "neighborhood" chips on the public detail page rely on lat/lng
+
+Email-derived shuls are second-class until this gap closes.
+
+### Implementation sketch (when ready to build)
+
+1. Factor out the address-backfill logic from `build-data-source.ts` into a reusable helper like `lib/geocoding.ts` → `backfillAddressForShul(shulId, name, urlHint)`. Currently it's inlined alongside the cascade.
+2. In `process-email.ts` `persistFromEmail()`, after the LLM extraction completes and we know the shul exists (whether new or merged), call the helper with:
+   - `name` = `extraction.shulName ?? shul.name`
+   - `urlHint` = `extraction.shulWebsite ?? null` (already extracted for dedup; use the same value here)
+   - Apply the same 0.7-confidence floor as URL path
+3. Guard: only attempt backfill on **new** shul creation. If we're attaching to an existing shul (domain-match merge), the existing shul should already have an address from when it was originally created.
+4. Store the same `cfg.address_source = "places"` marker so admin UI banner works identically.
+5. Test cases (manual once built):
+   - MyShul-hosted email with extracted website (Safra) → Places should find it via name + website
+   - Email with no shulWebsite extracted (just rules + name) → Places search by name only
+   - Generic-sounding shul name with multiple Places hits → confidence scorer picks the right one
+   - Non-shul email that somehow passes the 0.3 confidence floor → address backfill should yield no high-scoring candidate, leave null
+
+### Edge cases
+
+- **Same shul, two submissions, one with address, one without.** URL submission creates shul-row + Places-derived address. Later, a different forwarder sends an email for the same shul; we dedup-merge into existing row. Existing address stays — correct.
+- **Email creates first, URL second.** First email creates a new shul with no address. The proposed step 3 guard means email-only run doesn't backfill. Later, a URL is submitted, dedup-merges into the email row. The URL path's backfill should run on the merge — which means we may also need to call the helper when domain-merge attaches a URL data_source to an email-created shul. To handle, check `if shul.address is null` before calling backfill, regardless of submission path.
+
+### Cost note
+
+Places Text Search v1 is paid (~$0.032/call after free tier). Bounding by confidence ≥ 0.7 keeps spend down — we don't search Places for low-confidence extractions that are likely junk anyway. Email-path additions roughly double Places calls in steady state if half of submissions arrive via email. Worth monitoring once shipped.
+
+### Decision
+
+Not decided yet — captured here so we don't lose the gap. Build whenever the address-blank email shuls start blocking real geo queries. Until then, admin can hand-fill `shul.address` and click Save in /admin/shul/[slug].
