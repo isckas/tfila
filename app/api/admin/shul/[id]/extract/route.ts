@@ -116,18 +116,32 @@ export async function POST(
 
   // ─── Success: persist ──────────────────────────────────────────────
   const { extraction, model, winningUrl, strategy, attempts } = cascade;
+
+  // For non-HTML strategies (vision_image, pdf_document), the winning URL
+  // is a specific resource (this week's schedule image / bulletin PDF)
+  // whose filename will change next week — e.g. Times-Bamidbar5786.png
+  // becomes Times-Naso5786.png. Storing it as the identifier would make
+  // weekly rescrapes 404. Instead we keep the submitted page URL as the
+  // identifier so rescrapes re-discover the current week's resource;
+  // the actual resource URL goes to configJson.last_extracted_resource
+  // as an informational audit trail.
+  const isResourceStrategy =
+    strategy === "vision_image" || strategy === "pdf_document";
+  const identifier = isResourceStrategy ? s.submittedUrl! : winningUrl;
+
   await db.transaction(async (tx) => {
     const [ds] = await tx
       .insert(dataSource)
       .values({
         shulId: s.id,
         kind: "website_llm",
-        identifier: winningUrl,
+        identifier,
         configJson: {
           version: 2,
-          page_url: winningUrl,
+          page_url: isResourceStrategy ? s.submittedUrl : winningUrl,
           submitted_url: s.submittedUrl,
           extraction_strategy: strategy,
+          last_extracted_resource: isResourceStrategy ? winningUrl : undefined,
           cascade_attempts: attempts,
           page_content_hash: cascade.pageContentHash,
           model,
@@ -192,7 +206,17 @@ export async function POST(
   });
 
   const qs = new URLSearchParams({ extracted: "1", strategy });
-  if (winningUrl !== s.submittedUrl) qs.set("from", winningUrl);
+  // The "from" param triggers the "you should update your source URL"
+  // banner. That advice only applies for the HTML same-origin fallback
+  // (e.g. submitted /calendar but rules came from /worship/shabbat).
+  // For vision/PDF, the winning URL is a per-week resource — admin
+  // shouldn't change the source URL to chase a weekly-rotating filename.
+  if (!isResourceStrategy && winningUrl !== s.submittedUrl) {
+    qs.set("from", winningUrl);
+  }
+  if (isResourceStrategy) {
+    qs.set("resource", winningUrl);
+  }
   return NextResponse.redirect(
     new URL(`/admin/shul/${s.slug}?${qs.toString()}`, req.url),
     303,

@@ -9,6 +9,8 @@ interface PageProps {
     err?: string;
     rebuilt?: string;
     from?: string;
+    strategy?: string;
+    resource?: string;
   }>;
 }
 
@@ -78,7 +80,8 @@ export default async function AdminShulDetailPage({
       {/* Status banner from a recent action */}
       {sp.extracted === "1" && (
         <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          ✓ Extraction complete. Review the new data source below.
+          ✓ Extraction complete{sp.strategy ? ` via ${sp.strategy.replace(/_/g, " ")}` : ""}.
+          Review the new data source below.
           {sp.from && (
             <div className="mt-1 text-xs text-emerald-800">
               The submitted URL had no times; used a fallback URL on the same
@@ -87,6 +90,16 @@ export default async function AdminShulDetailPage({
                 {sp.from}
               </code>
               . Consider updating the source URL to match.
+            </div>
+          )}
+          {sp.resource && (
+            <div className="mt-1 text-xs text-emerald-800">
+              Extracted this week&apos;s schedule from{" "}
+              <code className="rounded bg-emerald-100 px-1.5 py-0.5 break-all">
+                {sp.resource}
+              </code>
+              . The data source identifier stays on the page URL, so weekly
+              rescrapes will re-discover next week&apos;s resource automatically.
             </div>
           )}
         </div>

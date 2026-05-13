@@ -119,11 +119,23 @@ async function persistCascade(args: PersistArgs): Promise<{
   // the compiler can't follow that to result.extraction being non-null.
   // Pull it into a local for clean access.
   const extraction = result.extraction;
+
+  // Vision/PDF strategies extract from a per-week resource (e.g.
+  // Times-Bamidbar5786.png) whose filename rotates weekly. Store the
+  // submitted page URL as the identifier so weekly rescrapes re-target
+  // the page (which re-discovers the new week's resource); keep the
+  // specific resource URL in configJson for the audit trail.
+  const isResourceStrategy =
+    result.strategy === "vision_image" || result.strategy === "pdf_document";
+  const identifier = isResourceStrategy ? args.submittedUrl : result.winningUrl;
+  const pageUrl = isResourceStrategy ? args.submittedUrl : result.winningUrl;
+
   const configJson = {
     version: 2,
-    page_url: result.winningUrl,
+    page_url: pageUrl,
     submitted_url: args.submittedUrl,
     extraction_strategy: result.strategy,
+    last_extracted_resource: isResourceStrategy ? result.winningUrl : undefined,
     cascade_attempts: result.attempts,
     page_content_hash: result.pageContentHash,
     model: result.model,
@@ -139,7 +151,7 @@ async function persistCascade(args: PersistArgs): Promise<{
       .values({
         shulId: args.shulId,
         kind: args.sourceKind,
-        identifier: result.winningUrl,
+        identifier,
         configJson,
         confidenceScore: extraction.confidence,
         extractionStrategy: result.strategy,

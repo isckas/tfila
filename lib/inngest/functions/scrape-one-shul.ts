@@ -484,7 +484,10 @@ async function rescrapeNonHtml(args: {
   await db
     .update(dataSource)
     .set({
-      identifier: cascade.winningUrl,
+      // Keep identifier on the page URL so next week's rescrape still
+      // re-targets the page (and re-discovers the new week's resource).
+      // The specific image/PDF URL goes to configJson.last_extracted_resource.
+      identifier: submittedUrl,
       lastRunAt: now,
       lastRunStatus: "ok",
       confidenceScore: cascade.extraction.confidence,
@@ -493,9 +496,10 @@ async function rescrapeNonHtml(args: {
       configJson: {
         ...(args.previousConfig ?? {}),
         version: 2,
-        page_url: cascade.winningUrl,
+        page_url: submittedUrl,
         submitted_url: submittedUrl,
         extraction_strategy: cascade.strategy,
+        last_extracted_resource: cascade.winningUrl,
         cascade_attempts: cascade.attempts,
         model: cascade.model,
         prompt_version: "tfila-v1",
