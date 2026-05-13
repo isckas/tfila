@@ -1,6 +1,6 @@
 # tfila inbound-email Cloudflare Worker
 
-Receives mail sent to `submit@inbound.tfila.co`, parses it, and forwards a Postmark-shaped JSON payload to the main app at `https://tfila.co/api/inbound/email`. Free at any volume — replaces the originally-planned Postmark setup.
+Receives mail sent to `submit@tfila.co`, parses it, and forwards a Postmark-shaped JSON payload to the main app at `https://tfila.co/api/inbound/email`. Free at any volume — replaces the originally-planned Postmark setup.
 
 This Worker is **standalone**: it has its own `package.json`, its own `wrangler.toml`, and deploys independently. The main app (in the parent directory) does not depend on it and is not affected when the Worker is updated.
 
@@ -84,14 +84,14 @@ In the Cloudflare dashboard:
 
 1. **Email → Email Routing → Routes**
 2. **Custom address → Create address**
-3. Custom address: `submit@inbound.tfila.co`
+3. Custom address: `submit@tfila.co`
 4. Action: **Send to a Worker**
 5. Worker: pick `tfila-inbound-email` from the dropdown
 6. **Save**
 
 ### 8. Verify
 
-Send a test email to `submit@inbound.tfila.co` (e.g. forward one of your own shul's weekly bulletins).
+Send a test email to `submit@tfila.co` (e.g. forward one of your own shul's weekly bulletins).
 
 - **In Cloudflare Worker logs** (`npx wrangler tail`): should see a successful invocation with HTTP 202 from the webhook.
 - **In Vercel logs**: should see `POST /api/inbound/email` return 202 and an Inngest event being sent.

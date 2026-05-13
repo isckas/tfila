@@ -31,8 +31,9 @@ export interface InngestEvents {
   };
 
   /**
-   * Sent by the Postmark inbound webhook after a forwarded shul email
-   * lands at submit@inbound.tfila.co.
+   * Sent by the inbound-email webhook (Cloudflare Email Worker in
+   * production; synthetic test harness in dev) after a forwarded
+   * shul email lands at submit@tfila.co.
    */
   "email.received": {
     data: {

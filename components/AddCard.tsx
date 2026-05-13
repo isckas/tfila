@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-const INBOUND_ADDRESS = "submit@inbound.tfila.co";
+const INBOUND_ADDRESS = "submit@tfila.co";
 
 /**
  * "Add a shul" card on the home landing. Embeds both submission

@@ -15,7 +15,7 @@ Baseline release. Everything below covers the full build from sprint 1 through e
 - **Mobile-first home page** with three equal-weight tiles for the site's three jobs:
   - 📍 **Find a minyan** — `Use my location` button + address fallback input. Auto-restores saved location.
   - 🔍 **Look up a shul** — live fuzzy search across all active shuls (subsequence matching, no API roundtrip per keystroke).
-  - ➕ **Add a shul** — embedded URL submit form + inline email-forward instructions for `submit@inbound.tfila.co`.
+  - ➕ **Add a shul** — embedded URL submit form + inline email-forward instructions for `submit@tfila.co`.
 - **Geolocated minyan feed** sorted by start time with configurable radius (½ mi to 25 mi). Includes minyanim that started up to 30 min ago for late arrivals; 24-hour forward window.
 - **Reverse-geocoded place chip** — feed header shows "Crown Heights, NY" instead of raw lat/lng.
 - **Sticky feed header** keeps Find / Look-up / Add reachable on every scroll.

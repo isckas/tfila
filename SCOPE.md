@@ -119,7 +119,7 @@
 **`data_source`** (1:N from shul — replaces sprint-1 `scrape_config`)
 - `id`, `shul_id`
 - `kind`: `shulcloud_website` | `website_llm` | `email_newsletter` | `manual`
-- `identifier`: URL for website kinds; unique inbound address like `shul-{token}@inbound.tfila.co` for email
+- `identifier`: URL for website kinds; the original shul-sender email address for `email_newsletter` kind (extracted from forwarded headers when a davener forwards to `submit@tfila.co`)
 - `config_json` (selectors/regex/time semantics for website_llm; extraction hints for email; also stores `cascade_attempts[]` audit trail)
 - `confidence_score` (0.0–1.0)
 - `extraction_strategy` (added 2026-05-13): `html` | `js_rendered` | `pdf_document` | `vision_image` | `failed`. Which tier of the extraction cascade produced the rules. Weekly rescrapes pin to this tier so they skip earlier tiers.
@@ -233,7 +233,7 @@ External (cascade tier 2): Browserless (~$0.001/render, free tier 1k/mo)
 ### Phase 2 email pipeline (designed-for in Phase 1)
 
 - **Vendor**: Postmark Inbound (~$15/mo unlimited). SendGrid Parse as cheaper backup.
-- **Subscription mechanism**: manual — gabbai adds unique address like `shul-{token}@inbound.tfila.co` to their list.
+- **Subscription mechanism** (revised 2026-05-13): any davener forwards their shul's weekly email to `submit@tfila.co` (no gabbai action required). LLM extracts the original sender from forward headers; subsequent forwards from the same sender refresh the rules.
 - **Privacy**: strip PII at parse time (keep only schedule + extraction audit), publish retention policy on `/bot` page.
 
 ### Deferred (anticipated, not Phase 1)

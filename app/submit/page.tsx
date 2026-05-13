@@ -14,7 +14,7 @@ interface PageProps {
 // The address daveners forward their shul's weekly email to. When prod
 // inbound email is wired (Postmark), this should match the Reply-To /
 // MAIL FROM address. Until then, surfaced as a string only.
-const INBOUND_ADDRESS = "submit@inbound.tfila.co";
+const INBOUND_ADDRESS = "submit@tfila.co";
 
 export default async function SubmitPage({ searchParams }: PageProps) {
   const sp = await searchParams;

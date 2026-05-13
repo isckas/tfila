@@ -55,7 +55,7 @@ async function main() {
   const payload = {
     FromName: "Davener Test",
     From: "davener.test@gmail.com",
-    To: "submit@inbound.tfila.co",
+    To: "submit@tfila.co",
     Subject: "Fwd: Weekly Schedule – Parshas Behar",
     TextBody: SAMPLE_FORWARDED_EMAIL,
     HtmlBody: `<pre>${SAMPLE_FORWARDED_EMAIL}</pre>`,

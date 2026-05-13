@@ -4,12 +4,16 @@ compatibility_date = "2025-09-15"
 # `nodejs_compat` lets us use Buffer/etc. if needed by postal-mime.
 compatibility_flags = ["nodejs_compat"]
 
+# This Worker is invoked ONLY via Cloudflare Email Routing — it has no
+# HTTP routes. Suppress wrangler's default workers.dev subdomain step.
+workers_dev = false
+
 # Account ID is set by the user via `wrangler login` or env var
 # CLOUDFLARE_ACCOUNT_ID. We deliberately do NOT hardcode it.
 
 # Email Routing wiring happens in the Cloudflare dashboard, not here.
 # This Worker just exposes an `email()` handler; the dashboard rule
-# `submit@inbound.tfila.co → send to a Worker → tfila-inbound-email`
+# `submit@tfila.co → send to a Worker → tfila-inbound-email`
 # is what actually routes mail to it. See README.md.
 
 # Vars + secrets (set via `wrangler secret put <name>`):

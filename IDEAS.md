@@ -26,11 +26,11 @@ Worker has a Postmark-compatible adapter — POSTs Postmark-shaped JSON to the m
 2. `npx wrangler login` + `npx wrangler secret put` for `WEBHOOK_URL` / `WEBHOOK_USER` / `WEBHOOK_PASS`
 3. Mirror `WEBHOOK_USER` / `WEBHOOK_PASS` to Vercel as `POSTMARK_INBOUND_USERNAME` / `POSTMARK_INBOUND_PASSWORD`
 4. `npx wrangler deploy`
-5. Wire the Email Routing rule `submit@inbound.tfila.co → tfila-inbound-email` in the Cloudflare dashboard
+5. Wire the Email Routing rule `submit@tfila.co → tfila-inbound-email` in the Cloudflare dashboard
 
 **Why C over B (Postmark on tfila.co subdomain):**
 - Free at any volume (Cloudflare) vs ~$15/mo (Postmark)
-- Same end-user address (`submit@inbound.tfila.co`)
+- Same end-user address (`submit@tfila.co`)
 - Cost-conscious bootstrap stage; vendor change is reversible (just turn off the Worker and configure Postmark)
 
 ---

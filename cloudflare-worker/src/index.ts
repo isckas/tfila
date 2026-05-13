@@ -1,6 +1,6 @@
 // tfila-inbound-email — Cloudflare Email Worker
 //
-// Receives mail at submit@inbound.tfila.co (wired via the Cloudflare
+// Receives mail at submit@tfila.co (wired via the Cloudflare
 // Email Routing dashboard, NOT in this code). Parses the raw RFC 822
 // message with postal-mime, then POSTs a Postmark-compatible JSON
 // payload to tfila.co's existing /api/inbound/email endpoint.
