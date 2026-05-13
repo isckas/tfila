@@ -180,8 +180,6 @@ async function callClaude(
         role: "user",
         content: [{ type: "text", text: `SUBJECT: ${subject}\nBODY:\n${body}` }],
       },
-      // Prefill forces the response to start at "{" — no prose preamble possible.
-      { role: "assistant", content: [{ type: "text", text: "{" }] },
     ],
   });
 
@@ -189,13 +187,13 @@ async function callClaude(
   if (!textBlock || textBlock.type !== "text") {
     throw new Error(`${model} returned no text block.`);
   }
-  const json = extractJsonObject("{" + textBlock.text);
+  const json = extractJsonObject(textBlock.text);
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch (err) {
     throw new Error(
-      `${model} returned invalid JSON: ${(err as Error).message}. Preview: ${("{" + textBlock.text).slice(0, 200)}`,
+      `${model} returned invalid JSON: ${(err as Error).message}. Preview: ${textBlock.text.slice(0, 200)}`,
     );
   }
   const validated = ExtractionSchema.safeParse(parsed);

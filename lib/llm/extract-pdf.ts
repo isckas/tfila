@@ -134,12 +134,10 @@ async function callClaude(
           },
           {
             type: "text",
-            text: "Extract the minyan schedule from this PDF.",
+            text: "Extract the minyan schedule from this PDF. Output ONLY a JSON object matching the schema. No prose preamble, no markdown fences.",
           },
         ],
       },
-      // Prefill forces JSON-only output.
-      { role: "assistant", content: [{ type: "text", text: "{" }] },
     ],
   });
 
@@ -147,7 +145,7 @@ async function callClaude(
   if (!textBlock || textBlock.type !== "text") {
     throw new Error(`${model} returned no text block.`);
   }
-  const fullText = "{" + textBlock.text;
+  const fullText = textBlock.text;
   const json = extractJsonObject(fullText);
   let parsed: unknown;
   try {

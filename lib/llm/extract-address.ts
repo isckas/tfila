@@ -111,8 +111,6 @@ export async function extractAddressFromHtml(html: string): Promise<{
     system: SYSTEM_PROMPT,
     messages: [
       { role: "user", content: [{ type: "text", text: truncated }] },
-      // Prefill forces JSON-only output, no prose preamble possible.
-      { role: "assistant", content: [{ type: "text", text: "{" }] },
     ],
   });
 
@@ -120,7 +118,7 @@ export async function extractAddressFromHtml(html: string): Promise<{
   if (!textBlock || textBlock.type !== "text") {
     throw new Error("Haiku returned no text block for address extraction.");
   }
-  const fullText = "{" + textBlock.text;
+  const fullText = textBlock.text;
   const json = extractJsonObject(fullText);
   let parsed: unknown;
   try {

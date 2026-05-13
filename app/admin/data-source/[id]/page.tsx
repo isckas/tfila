@@ -182,6 +182,87 @@ export default async function ReviewDetailPage({ params }: PageProps) {
         re-extract the data source so the LLM produces a fresh one.
       </p>
 
+      {/* Cascade attempt breakdown (always shown when present) */}
+      {(() => {
+        const attempts =
+          (config.cascade_attempts as Array<Record<string, unknown>> | undefined) ?? null;
+        if (!attempts || attempts.length === 0) return null;
+        return (
+          <section className="mt-5">
+            <h2 className="mb-1 text-sm font-medium text-neutral-700">
+              Cascade attempts
+            </h2>
+            <ol className="space-y-2">
+              {attempts.map((a, i) => {
+                const strategy = String(a.strategy ?? "?");
+                const status = String(a.status ?? "?");
+                const rules = Number(a.rulesCount ?? 0);
+                const conf =
+                  typeof a.confidence === "number" ? a.confidence : null;
+                const url =
+                  typeof a.resourceUrl === "string" ? a.resourceUrl : null;
+                const err =
+                  typeof a.errorMessage === "string" ? a.errorMessage : null;
+                const isWinner = strategy === extractionStrategy;
+                const badge =
+                  status === "extracted" && isWinner
+                    ? "bg-emerald-200 text-emerald-900"
+                    : status === "extracted"
+                      ? "bg-amber-200 text-amber-900"
+                      : status === "skipped"
+                        ? "bg-neutral-200 text-neutral-700"
+                        : "bg-rose-200 text-rose-900";
+                return (
+                  <li
+                    key={i}
+                    className={`rounded-xl border p-3 text-sm ${
+                      isWinner
+                        ? "border-emerald-300 bg-emerald-50"
+                        : "border-neutral-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-baseline gap-2 text-xs">
+                      <span className="font-semibold text-neutral-700">
+                        [{i + 1}]
+                      </span>
+                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-neutral-800">
+                        {strategy.replace(/_/g, " ")}
+                      </span>
+                      <span className={`rounded px-1.5 py-0.5 ${badge}`}>
+                        {status.replace(/_/g, " ")}
+                      </span>
+                      {isWinner && (
+                        <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-emerald-900">
+                          winner
+                        </span>
+                      )}
+                      <span className="text-neutral-600 tabular-nums">
+                        rules: {rules}
+                      </span>
+                      {conf != null && (
+                        <span className="text-neutral-600 tabular-nums">
+                          conf: {conf.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    {url && (
+                      <div className="mt-1 truncate font-mono text-[11px] text-neutral-500">
+                        {url}
+                      </div>
+                    )}
+                    {err && (
+                      <div className="mt-1 break-words text-[11px] text-rose-700">
+                        {err}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        );
+      })()}
+
       {/* LLM reasoning */}
       {reasoning && (
         <section className="mt-5">

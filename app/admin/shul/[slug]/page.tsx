@@ -103,6 +103,95 @@ export default async function AdminShulDetailPage({
         </div>
       )}
 
+      {/* Verbose cascade-attempt breakdown when the latest extraction failed */}
+      {(() => {
+        const latestFailed = dataSources.find(
+          (ds) => ds.extractionStrategy === "failed",
+        );
+        if (!latestFailed) return null;
+        const cfg = (latestFailed.configJson as Record<string, unknown>) ?? {};
+        const attempts =
+          (cfg.cascade_attempts as Array<Record<string, unknown>> | undefined) ?? [];
+        return (
+          <section className="mt-4 rounded-xl border-2 border-rose-300 bg-rose-50 p-4 text-sm">
+            <header className="mb-3 flex items-baseline justify-between gap-3">
+              <h3 className="font-semibold text-rose-900">
+                Extraction failed across all tiers
+              </h3>
+              <span className="text-xs text-rose-700">
+                data_source #{latestFailed.id}
+              </span>
+            </header>
+            <p className="mb-3 text-xs text-rose-800">
+              Shul marked <code className="rounded bg-rose-100 px-1 py-0.5">unsupported</code>{" "}
+              so the weekly cron won&apos;t re-attempt. Edit the source URL
+              and click <strong>Extract now</strong> to try again.
+            </p>
+            {attempts.length === 0 ? (
+              <p className="text-xs text-rose-800">
+                (No cascade_attempts recorded — legacy data_source row.)
+              </p>
+            ) : (
+              <ol className="space-y-2">
+                {attempts.map((a, i) => {
+                  const strategy = String(a.strategy ?? "?");
+                  const status = String(a.status ?? "?");
+                  const rules = Number(a.rulesCount ?? 0);
+                  const conf =
+                    typeof a.confidence === "number" ? a.confidence : null;
+                  const url =
+                    typeof a.resourceUrl === "string" ? a.resourceUrl : null;
+                  const err =
+                    typeof a.errorMessage === "string" ? a.errorMessage : null;
+                  const badge =
+                    status === "extracted"
+                      ? "bg-amber-200 text-amber-900"
+                      : status === "skipped"
+                        ? "bg-neutral-200 text-neutral-700"
+                        : "bg-rose-200 text-rose-900";
+                  return (
+                    <li
+                      key={i}
+                      className="rounded border border-rose-200 bg-white p-2.5"
+                    >
+                      <div className="flex flex-wrap items-baseline gap-2 text-xs">
+                        <span className="font-semibold text-neutral-700">
+                          [{i + 1}]
+                        </span>
+                        <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-neutral-800">
+                          {strategy.replace(/_/g, " ")}
+                        </span>
+                        <span className={`rounded px-1.5 py-0.5 ${badge}`}>
+                          {status.replace(/_/g, " ")}
+                        </span>
+                        <span className="text-neutral-600 tabular-nums">
+                          rules: {rules}
+                        </span>
+                        {conf != null && (
+                          <span className="text-neutral-600 tabular-nums">
+                            conf: {conf.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                      {url && (
+                        <div className="mt-1 truncate font-mono text-[11px] text-neutral-500">
+                          {url}
+                        </div>
+                      )}
+                      {err && (
+                        <div className="mt-1 break-words text-[11px] text-rose-800">
+                          {err}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </section>
+        );
+      })()}
+
       {/* No-data-source warning (still shown when relevant) */}
       {dataSources.length === 0 && s.submittedUrl && (
         <section className="mt-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">

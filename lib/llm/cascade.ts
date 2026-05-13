@@ -65,28 +65,32 @@ function isUseful(rules: number, confidence: number): boolean {
 }
 
 /**
- * Find PDF links on a page. We bias toward links whose URL or anchor
- * text contains schedule-y keywords.
+ * Find PDF links on a page. We rank by URL keywords (link text is often
+ * unhelpful — many sites wrap PDF links around <img> thumbnails rather
+ * than text, so we don't require text content in the <a>).
  */
 function findPdfCandidates(html: string, baseUrl: string): string[] {
+  // Permissive: just grab every href ending in .pdf, regardless of inner content.
   const matches = Array.from(
-    html.matchAll(/<a\b[^>]*href=["']([^"']+\.pdf[^"']*)["'][^>]*>([^<]*)<\/a>/gi),
+    html.matchAll(/href=["']([^"']+\.pdf(?:\?[^"']*)?)["']/gi),
   );
+  const seen = new Set<string>();
   const ranked: Array<{ url: string; rank: number }> = [];
   for (const m of matches) {
     const href = m[1];
-    const text = (m[2] || "").toLowerCase();
-    const combined = (href + " " + text).toLowerCase();
-    let rank = 0;
-    if (/(schedule|minyan|davening|bulletin|weekly|magazine|times)/.test(combined)) rank += 10;
-    if (/(parsha|parashas|behar|shabbos|shabbat)/.test(combined)) rank += 5;
-    if (/(donation|sponsor|partner|fundrais|membership)/.test(combined)) rank -= 20;
     let absUrl: string;
     try {
       absUrl = new URL(href, baseUrl).toString();
     } catch {
       continue;
     }
+    if (seen.has(absUrl)) continue;
+    seen.add(absUrl);
+    const combined = absUrl.toLowerCase();
+    let rank = 0;
+    if (/(schedule|minyan|davening|bulletin|weekly|magazine|times|zmanim|tefilla)/.test(combined)) rank += 10;
+    if (/(parsha|parashas|behar|bamidbar|vayikra|shabbos|shabbat)/.test(combined)) rank += 5;
+    if (/(donation|sponsor|partner|fundrais|membership|brochure|application)/.test(combined)) rank -= 20;
     ranked.push({ url: absUrl, rank });
   }
   return ranked
@@ -96,14 +100,12 @@ function findPdfCandidates(html: string, baseUrl: string): string[] {
 }
 
 /**
- * Find candidate schedule images. Heuristics: large-looking image
- * URLs, alt text mentioning schedule/davening/minyan, IDs/classes
- * mentioning the same.
+ * Find candidate schedule images. Heuristics: alt text / IDs /
+ * classes mentioning schedule keywords, file extensions, etc.
  */
 function findImageCandidates(html: string, baseUrl: string): string[] {
-  const matches = Array.from(
-    html.matchAll(/<img\b([^>]*)>/gi),
-  );
+  const matches = Array.from(html.matchAll(/<img\b([^>]*)>/gi));
+  const seen = new Set<string>();
   const ranked: Array<{ url: string; rank: number }> = [];
   for (const m of matches) {
     const attrs = m[1];
@@ -113,6 +115,14 @@ function findImageCandidates(html: string, baseUrl: string): string[] {
     if (!src || src.startsWith("data:")) continue;
     // Skip obvious non-content images
     if (/(logo|icon|favicon|sprite|pixel|tracking|avatar|profile)/i.test(src)) continue;
+    let absUrl: string;
+    try {
+      absUrl = new URL(src, baseUrl).toString();
+    } catch {
+      continue;
+    }
+    if (seen.has(absUrl)) continue;
+    seen.add(absUrl);
     const altMatch = attrs.match(/\balt=["']([^"']*)["']/i);
     const idMatch = attrs.match(/\bid=["']([^"']*)["']/i);
     const classMatch = attrs.match(/\bclass=["']([^"']*)["']/i);
@@ -126,15 +136,9 @@ function findImageCandidates(html: string, baseUrl: string): string[] {
       (classMatch?.[1] ?? "")
     ).toLowerCase();
     let rank = 0;
-    if (/(schedule|davening|daven|minyan|bulletin|times|zmanim)/.test(combined)) rank += 20;
+    if (/(schedule|davening|daven|minyan|bulletin|times|zmanim|tefilla)/.test(combined)) rank += 20;
     if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(src)) rank += 2;
     if (/(banner|hero|cover|background)/i.test(combined)) rank -= 5;
-    let absUrl: string;
-    try {
-      absUrl = new URL(src, baseUrl).toString();
-    } catch {
-      continue;
-    }
     ranked.push({ url: absUrl, rank });
   }
   return ranked
@@ -281,8 +285,25 @@ export async function runCascade(
 
   // ─── Tier 3: PDF ────────────────────────────────────────────
   if (!opts.preferredStrategy || opts.preferredStrategy === "pdf_document") {
-    if (searchHtml) {
+    if (!searchHtml) {
+      attempts.push({
+        strategy: "pdf_document",
+        status: "skipped",
+        rulesCount: 0,
+        confidence: null,
+        errorMessage: "no HTML available to scan for PDF links",
+      });
+    } else {
       const pdfCandidates = findPdfCandidates(searchHtml, baseUrl);
+      if (pdfCandidates.length === 0) {
+        attempts.push({
+          strategy: "pdf_document",
+          status: "skipped",
+          rulesCount: 0,
+          confidence: null,
+          errorMessage: "no .pdf links found on the page",
+        });
+      }
       for (const pdfUrl of pdfCandidates) {
         try {
           const r = await extractFromPdfUrl(pdfUrl);
@@ -294,9 +315,7 @@ export async function runCascade(
             resourceUrl: pdfUrl,
           });
           usage["pdf_document"] = r.usage;
-          if (
-            isUseful(r.extraction.rules.length, r.extraction.confidence)
-          ) {
+          if (isUseful(r.extraction.rules.length, r.extraction.confidence)) {
             return {
               strategy: "pdf_document",
               extraction: r.extraction,
@@ -314,24 +333,43 @@ export async function runCascade(
             rulesCount: 0,
             confidence: null,
             resourceUrl: pdfUrl,
-            errorMessage: (err as Error).message.slice(0, 120),
+            errorMessage: (err as Error).message.slice(0, 200),
           });
         }
       }
-    } else {
-      attempts.push({
-        strategy: "pdf_document",
-        status: "skipped",
-        rulesCount: 0,
-        confidence: null,
-      });
     }
+  } else {
+    attempts.push({
+      strategy: "pdf_document",
+      status: "skipped",
+      rulesCount: 0,
+      confidence: null,
+      errorMessage: `pinned to ${opts.preferredStrategy}`,
+    });
   }
 
   // ─── Tier 4: Vision ─────────────────────────────────────────
   if (!opts.preferredStrategy || opts.preferredStrategy === "vision_image") {
-    if (searchHtml) {
+    if (!searchHtml) {
+      attempts.push({
+        strategy: "vision_image",
+        status: "skipped",
+        rulesCount: 0,
+        confidence: null,
+        errorMessage: "no HTML available to scan for schedule images",
+      });
+    } else {
       const imgCandidates = findImageCandidates(searchHtml, baseUrl);
+      if (imgCandidates.length === 0) {
+        attempts.push({
+          strategy: "vision_image",
+          status: "skipped",
+          rulesCount: 0,
+          confidence: null,
+          errorMessage:
+            "no schedule-looking images on the page (alt/id/class with 'schedule|davening|minyan|bulletin' etc.)",
+        });
+      }
       for (const imgUrl of imgCandidates) {
         try {
           const r = await extractFromImageUrl(imgUrl);
@@ -343,9 +381,7 @@ export async function runCascade(
             resourceUrl: imgUrl,
           });
           usage["vision_image"] = r.usage;
-          if (
-            isUseful(r.extraction.rules.length, r.extraction.confidence)
-          ) {
+          if (isUseful(r.extraction.rules.length, r.extraction.confidence)) {
             return {
               strategy: "vision_image",
               extraction: r.extraction,
@@ -363,18 +399,19 @@ export async function runCascade(
             rulesCount: 0,
             confidence: null,
             resourceUrl: imgUrl,
-            errorMessage: (err as Error).message.slice(0, 120),
+            errorMessage: (err as Error).message.slice(0, 200),
           });
         }
       }
-    } else {
-      attempts.push({
-        strategy: "vision_image",
-        status: "skipped",
-        rulesCount: 0,
-        confidence: null,
-      });
     }
+  } else {
+    attempts.push({
+      strategy: "vision_image",
+      status: "skipped",
+      rulesCount: 0,
+      confidence: null,
+      errorMessage: `pinned to ${opts.preferredStrategy}`,
+    });
   }
 
   // ─── All tiers exhausted ────────────────────────────────────

@@ -135,11 +135,10 @@ export async function extractFromImageUrl(
           },
           {
             type: "text",
-            text: "Extract the minyan schedule from this image.",
+            text: "Extract the minyan schedule from this image. Output ONLY a JSON object matching the schema. No prose preamble, no markdown fences.",
           },
         ],
       },
-      { role: "assistant", content: [{ type: "text", text: "{" }] },
     ],
   });
 
@@ -147,7 +146,7 @@ export async function extractFromImageUrl(
   if (!textBlock || textBlock.type !== "text") {
     throw new Error(`${VISION_MODEL} returned no text block.`);
   }
-  const fullText = "{" + textBlock.text;
+  const fullText = textBlock.text;
   const json = extractJsonObject(fullText);
   let parsed: unknown;
   try {

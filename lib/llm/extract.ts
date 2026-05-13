@@ -87,12 +87,6 @@ async function callClaude(
         role: "user",
         content: [{ type: "text", text: userText }],
       },
-      // Prefill forces the assistant response to continue from "{",
-      // making any prose preamble structurally impossible.
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "{" }],
-      },
     ],
   });
 
@@ -100,8 +94,11 @@ async function callClaude(
   if (!textBlock || textBlock.type !== "text") {
     throw new ExtractionError(`Model ${model} returned no text block.`);
   }
-  // Re-prepend the prefilled "{" so we parse the full JSON object.
-  const fullText = "{" + textBlock.text;
+  // The tolerant extractor handles prose preambles + trailing chatter.
+  // We don't use assistant-message prefill here because some models
+  // recently started rejecting it with a 400 ("model does not support
+  // assistant message prefilling").
+  const fullText = textBlock.text;
   const jsonStr = extractJsonObject(fullText);
   let parsedJson: unknown;
   try {

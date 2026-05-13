@@ -160,6 +160,7 @@ export async function getShulForAdmin(slug: string) {
       lastRunAt: dataSource.lastRunAt,
       lastRunStatus: dataSource.lastRunStatus,
       extractionStrategy: dataSource.extractionStrategy,
+      configJson: dataSource.configJson,
     })
     .from(dataSource)
     .where(eq(dataSource.shulId, s.id))

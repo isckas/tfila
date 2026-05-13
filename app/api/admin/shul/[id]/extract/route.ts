@@ -105,7 +105,7 @@ export async function POST(
     return NextResponse.redirect(
       new URL(
         `/admin/shul/${s.slug}?err=${encodeURIComponent(
-          "no-rules: every tier of the extraction cascade returned 0 rules. Shul marked unsupported.",
+          "Extraction failed across all tiers. See the per-tier breakdown below for what each strategy tried and why it didn't produce rules.",
         )}`,
         req.url,
       ),
