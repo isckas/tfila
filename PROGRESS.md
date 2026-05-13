@@ -13,12 +13,11 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: end of 2026-05-13.** Cascade is healthy in production; one shul-side test pending, plus a deferred refactor.
+**Last working session: end of 2026-05-13.** Cascade is healthy in production and verified end-to-end on multiple shul types. v1 baseline locked in CHANGELOG.md.
 
-### Pending verification on real sites
+### Decided + designed, ready to build
 
-- **anash.ca/daven** — never fully end-to-end tested with the cascade. Page has `<img id="daven-image" src="" />` (JS-injected). Submit it via the home Add card and watch the cascade pick `vision_image` strategy.
-- **theshul.org** — vision-tier extraction succeeded on 2026-05-13; address is still null. Now that Google Places address backfill is wired + the key is live in prod, clicking "Re-extract from source" on the admin page should populate the address. Optional but cheap.
+- **Deduplication (FEATURES.md Option A)** — registrable-domain dedup across URL and email submissions via `tldts`. 6-step plan in [FEATURES.md](./FEATURES.md). Real bug waiting to happen at scale: same shul submitted twice (URL + URL with www, URL + email) currently creates duplicate rows.
 
 ### Deferred refactor (med priority)
 
@@ -28,10 +27,18 @@ Three sections:
 
 - **Postmark inbound vendor pick** — shelved since PR 11; see [IDEAS.md](./IDEAS.md)
 - **Anthropic Auto-Reload + monthly cap** — recommended after the cascade work bumped per-extraction cost ~10×
+- **Inngest dashboard sync** — `nightly-version-bump` cron needs to be synced on the Inngest app so it actually fires at midnight ET
 
 ---
 
 ## Done
+
+### 2026-05-13 — Cascade verified end-to-end on real shuls ✅
+
+- **anash.ca/daven** — JS-injected image src case. Cascade picked `vision_image` strategy via Browserless rendering. Worked.
+- **theshul.org** — re-ran "Extract now" after the Places key landed in production. Google Places address backfill populated the address from the shul name + URL hint. Worked.
+
+Both confirm the production cascade behaves as designed across the four tiers (HTML / JS-rendered / Vision / PDF) and that the address fallback fires correctly when LLM extraction doesn't surface an address.
 
 ### 2026-05-13 — Housekeeping pass (commit `<pending>`) ✅
 
