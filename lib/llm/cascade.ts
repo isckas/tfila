@@ -65,33 +65,39 @@ function isUseful(rules: number, confidence: number): boolean {
 }
 
 /**
- * Find PDF links on a page. We rank by URL keywords (link text is often
- * unhelpful — many sites wrap PDF links around <img> thumbnails rather
- * than text, so we don't require text content in the <a>).
+ * Find PDF links on a page. Accepts multiple HTML sources (e.g. static
+ * + JS-rendered) because Browserless's rendered output sometimes strips
+ * links present in the static HTML (saw this with theshul.org's
+ * weekly-magazine PDF). Dedupes by absolute URL.
+ *
+ * Ranks by URL keywords — link text is often unhelpful since many sites
+ * wrap PDF links around <img> thumbnails rather than text.
  */
-function findPdfCandidates(html: string, baseUrl: string): string[] {
-  // Permissive: just grab every href ending in .pdf, regardless of inner content.
-  const matches = Array.from(
-    html.matchAll(/href=["']([^"']+\.pdf(?:\?[^"']*)?)["']/gi),
-  );
+function findPdfCandidates(htmls: string[], baseUrl: string): string[] {
   const seen = new Set<string>();
   const ranked: Array<{ url: string; rank: number }> = [];
-  for (const m of matches) {
-    const href = m[1];
-    let absUrl: string;
-    try {
-      absUrl = new URL(href, baseUrl).toString();
-    } catch {
-      continue;
+  for (const html of htmls) {
+    if (!html) continue;
+    const matches = Array.from(
+      html.matchAll(/href=["']([^"']+\.pdf(?:\?[^"']*)?)["']/gi),
+    );
+    for (const m of matches) {
+      const href = m[1];
+      let absUrl: string;
+      try {
+        absUrl = new URL(href, baseUrl).toString();
+      } catch {
+        continue;
+      }
+      if (seen.has(absUrl)) continue;
+      seen.add(absUrl);
+      const combined = absUrl.toLowerCase();
+      let rank = 0;
+      if (/(schedule|minyan|davening|bulletin|weekly|magazine|times|zmanim|tefilla)/.test(combined)) rank += 10;
+      if (/(parsha|parashas|behar|bamidbar|vayikra|shabbos|shabbat)/.test(combined)) rank += 5;
+      if (/(donation|sponsor|partner|fundrais|membership|brochure|application)/.test(combined)) rank -= 20;
+      ranked.push({ url: absUrl, rank });
     }
-    if (seen.has(absUrl)) continue;
-    seen.add(absUrl);
-    const combined = absUrl.toLowerCase();
-    let rank = 0;
-    if (/(schedule|minyan|davening|bulletin|weekly|magazine|times|zmanim|tefilla)/.test(combined)) rank += 10;
-    if (/(parsha|parashas|behar|bamidbar|vayikra|shabbos|shabbat)/.test(combined)) rank += 5;
-    if (/(donation|sponsor|partner|fundrais|membership|brochure|application)/.test(combined)) rank -= 20;
-    ranked.push({ url: absUrl, rank });
   }
   return ranked
     .sort((a, b) => b.rank - a.rank)
@@ -100,46 +106,54 @@ function findPdfCandidates(html: string, baseUrl: string): string[] {
 }
 
 /**
- * Find candidate schedule images. Heuristics: alt text / IDs /
- * classes mentioning schedule keywords, file extensions, etc.
+ * Find candidate schedule images. Accepts multiple HTML sources because
+ * some sites have empty `src` attrs in static HTML (e.g. anash.ca/daven's
+ * `<img id="daven-image" src="" />` populated by JS), while others have
+ * the working URLs in static but not rendered.
+ *
+ * Heuristics: alt text / IDs / classes mentioning schedule keywords,
+ * file extensions, etc.
  */
-function findImageCandidates(html: string, baseUrl: string): string[] {
-  const matches = Array.from(html.matchAll(/<img\b([^>]*)>/gi));
+function findImageCandidates(htmls: string[], baseUrl: string): string[] {
   const seen = new Set<string>();
   const ranked: Array<{ url: string; rank: number }> = [];
-  for (const m of matches) {
-    const attrs = m[1];
-    const srcMatch = attrs.match(/\bsrc=["']([^"']+)["']/i);
-    if (!srcMatch) continue;
-    const src = srcMatch[1];
-    if (!src || src.startsWith("data:")) continue;
-    // Skip obvious non-content images
-    if (/(logo|icon|favicon|sprite|pixel|tracking|avatar|profile)/i.test(src)) continue;
-    let absUrl: string;
-    try {
-      absUrl = new URL(src, baseUrl).toString();
-    } catch {
-      continue;
+  for (const html of htmls) {
+    if (!html) continue;
+    const matches = Array.from(html.matchAll(/<img\b([^>]*)>/gi));
+    for (const m of matches) {
+      const attrs = m[1];
+      const srcMatch = attrs.match(/\bsrc=["']([^"']+)["']/i);
+      if (!srcMatch) continue;
+      const src = srcMatch[1];
+      if (!src || src.startsWith("data:")) continue;
+      // Skip obvious non-content images
+      if (/(logo|icon|favicon|sprite|pixel|tracking|avatar|profile)/i.test(src)) continue;
+      let absUrl: string;
+      try {
+        absUrl = new URL(src, baseUrl).toString();
+      } catch {
+        continue;
+      }
+      if (seen.has(absUrl)) continue;
+      seen.add(absUrl);
+      const altMatch = attrs.match(/\balt=["']([^"']*)["']/i);
+      const idMatch = attrs.match(/\bid=["']([^"']*)["']/i);
+      const classMatch = attrs.match(/\bclass=["']([^"']*)["']/i);
+      const combined = (
+        src +
+        " " +
+        (altMatch?.[1] ?? "") +
+        " " +
+        (idMatch?.[1] ?? "") +
+        " " +
+        (classMatch?.[1] ?? "")
+      ).toLowerCase();
+      let rank = 0;
+      if (/(schedule|davening|daven|minyan|bulletin|times|zmanim|tefilla)/.test(combined)) rank += 20;
+      if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(src)) rank += 2;
+      if (/(banner|hero|cover|background)/i.test(combined)) rank -= 5;
+      ranked.push({ url: absUrl, rank });
     }
-    if (seen.has(absUrl)) continue;
-    seen.add(absUrl);
-    const altMatch = attrs.match(/\balt=["']([^"']*)["']/i);
-    const idMatch = attrs.match(/\bid=["']([^"']*)["']/i);
-    const classMatch = attrs.match(/\bclass=["']([^"']*)["']/i);
-    const combined = (
-      src +
-      " " +
-      (altMatch?.[1] ?? "") +
-      " " +
-      (idMatch?.[1] ?? "") +
-      " " +
-      (classMatch?.[1] ?? "")
-    ).toLowerCase();
-    let rank = 0;
-    if (/(schedule|davening|daven|minyan|bulletin|times|zmanim|tefilla)/.test(combined)) rank += 20;
-    if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(src)) rank += 2;
-    if (/(banner|hero|cover|background)/i.test(combined)) rank -= 5;
-    ranked.push({ url: absUrl, rank });
   }
   return ranked
     .filter((r) => r.rank > 0)
@@ -280,12 +294,17 @@ export async function runCascade(
     });
   }
 
-  // Prefer the JS-rendered HTML (more complete) when looking for PDFs/images.
-  const searchHtml = renderedHtml ?? html;
+  // Scan BOTH static and rendered HTML for PDF/image candidates and
+  // dedupe by absolute URL. Browserless's rendered output sometimes
+  // strips links that exist in the static HTML (saw this with
+  // theshul.org's weekly-magazine PDF link).
+  const searchHtmls = [renderedHtml, html].filter(
+    (h): h is string => typeof h === "string" && h.length > 0,
+  );
 
   // ─── Tier 3: PDF ────────────────────────────────────────────
   if (!opts.preferredStrategy || opts.preferredStrategy === "pdf_document") {
-    if (!searchHtml) {
+    if (searchHtmls.length === 0) {
       attempts.push({
         strategy: "pdf_document",
         status: "skipped",
@@ -294,7 +313,7 @@ export async function runCascade(
         errorMessage: "no HTML available to scan for PDF links",
       });
     } else {
-      const pdfCandidates = findPdfCandidates(searchHtml, baseUrl);
+      const pdfCandidates = findPdfCandidates(searchHtmls, baseUrl);
       if (pdfCandidates.length === 0) {
         attempts.push({
           strategy: "pdf_document",
@@ -350,7 +369,7 @@ export async function runCascade(
 
   // ─── Tier 4: Vision ─────────────────────────────────────────
   if (!opts.preferredStrategy || opts.preferredStrategy === "vision_image") {
-    if (!searchHtml) {
+    if (searchHtmls.length === 0) {
       attempts.push({
         strategy: "vision_image",
         status: "skipped",
@@ -359,7 +378,7 @@ export async function runCascade(
         errorMessage: "no HTML available to scan for schedule images",
       });
     } else {
-      const imgCandidates = findImageCandidates(searchHtml, baseUrl);
+      const imgCandidates = findImageCandidates(searchHtmls, baseUrl);
       if (imgCandidates.length === 0) {
         attempts.push({
           strategy: "vision_image",
