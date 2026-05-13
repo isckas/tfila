@@ -11,13 +11,105 @@ Three sections:
 
 ---
 
-## Now
+## Now — pickup tomorrow
 
-⏸ **PR 11 awaits your Postmark + DNS setup.** App code is shipped; need an inbound email vendor wired to the webhook URL.
+**Last working session: 2026-05-13.** Stopped for the night with the extraction cascade landed and one known bug. Pick up here:
+
+### 🔧 Bug to fix first (15-30 min)
+
+**theshul.org PDF tier reports "no .pdf links found" despite the links existing in the static HTML.** Root cause traced: the cascade scans `renderedHtml ?? html` for PDF/image candidates, but Browserless's rendered output doesn't contain the same `<a href="*.pdf">` links as the static curl-fetched HTML.
+
+**Fix:** in `lib/llm/cascade.ts` `findPdfCandidates` and `findImageCandidates`, scan **both** rendered AND static HTML, then deduplicate by absolute URL. Verify with `scripts/inspect-failed-extraction.ts theshul.org` after deploy.
+
+After the fix, retry "Extract now" on:
+- **theshul.org** (id 56, currently `status=unsupported`) — expected to land as `pdf_document` strategy
+- **anash.ca/daven** — first end-to-end test of the JS-rendered → vision/PDF flow. Note: the image src is JS-injected, so `findImageCandidates` may need to also look for `<img id="daven-image">` patterns with empty src (JS will populate). Possibly a separate "named-id image" heuristic.
+
+### ⏸ Other high-severity items from tonight's review (not blocking)
+
+Reviewed by Explore agent on 2026-05-13. Not fixed; pick what to tackle:
+
+1. **Browserless silently no-ops if `BROWSERLESS_API_KEY` unset in prod** — add a `console.warn` in `lib/scrapers/render.ts` so a misconfig in prod surfaces in Vercel logs
+2. **Same-origin URL fallback only runs in HTML tier** — the JS-rendered, PDF, Vision tiers don't try `/worship/shabbat`, `/services`, etc. Consider hoisting the fallback to the cascade level
+3. **`cascade_attempts` rendered with `as Record<string, unknown>`** — no runtime shape validation; add a Zod schema to `lib/llm/cascade.ts` and validate on read
+4. **Four `as unknown as object` casts on `minyan_rule.time`** — Drizzle JSONB doesn't model tagged unions well; create a typed insert helper
+5. **`extractionStrategy = NULL` not explicitly guarded** in `scrape-one-shul.ts` — backfill covers today's rows, but new `email_newsletter` data sources will have NULL strategy
+6. **`process-email.ts` concurrency lock has no timeout** — could queue forever if an Inngest step hangs
+
+### ⏸ Still pending user-side setup (not new)
+
+- **Postmark inbound vendor pick** (shelved since PR 11; see [IDEAS.md](./IDEAS.md))
+- **Anthropic Auto-Reload + monthly cap** (recommended after this session's cascade work bumped per-extraction cost ~10×)
 
 ---
 
 ## Done
+
+### 2026-05-13 — Cascade extraction bug fixes (commit `139000d`) ✅
+
+Diagnosed and fixed the three issues that surfaced on the first theshul.org extraction attempt:
+
+- **Removed assistant-message prefill** from all 5 extractors (HTML, email, address, PDF, vision). Anthropic returned 400 "model does not support assistant message prefilling" on some calls; the tolerant `extractJsonObject` parser (PR 21) already handles prose preambles, so prefill was belt-and-suspenders.
+- **Made PDF/image candidate regex permissive** — previously required text-only `<a href="*.pdf">text</a>`, missed links wrapped around `<img>` thumbnails (which is how most shul sites publish weekly bulletin PDFs).
+- **Cascade now ALWAYS records an attempt entry** — previously when a tier found 0 candidates or had no HTML, no `attempts[]` entry was pushed and admin couldn't see the tier was reached.
+- **Verbose admin breakdown UI**: both `/admin/shul/[slug]` (when latest data_source is `failed`) and `/admin/data-source/[id]` now show a per-tier cascade-attempt list with strategy, status, rules count, confidence, resource URL, and error message. The data-source detail page highlights the winning tier with a green "winner" badge.
+- **Diagnostic scripts**: `scripts/inspect-failed-extraction.ts` (DB query for latest failed extractions), `scripts/debug-cascade.ts` (run cascade with full per-tier output, no DB writes), `scripts/verify-migration-0003.ts` (sanity check migration applied).
+
+**Result on theshul.org**: cascade now runs all 4 tiers but PDF tier reports "no .pdf links found" — see "Now" section above for the next fix.
+
+### 2026-05-13 — Extraction cascade: HTML → JS → PDF → Vision → failed (commit `ce0fae6`) ✅
+
+Implements the layered extraction pipeline the user designed. Each tier is more expensive than the last; the cascade only fires the next tier on a real miss. The winning strategy is persisted on `data_source.extraction_strategy` (new enum) so weekly rescrapes skip the cascade and go straight to the known-good tier. Sites where every tier fails get `shul.status='unsupported'` and the weekly cron skips them entirely.
+
+- **`lib/llm/cascade.ts`** (new) — orchestrator with PDF/image candidate scoring. Favors `schedule|bulletin|minyan` keywords in URL + alt text; penalizes `donation|sponsor|membership`. Bounded at 3 candidates per tier per page.
+- **`lib/scrapers/render.ts`** (new) — Browserless `/content` integration. Waits for `networkidle2`. Silently no-ops if `BROWSERLESS_API_KEY` is unset.
+- **`lib/llm/extract-pdf.ts`** (new) — Claude PDF input via `URLPDFSource` document block. Haiku → Sonnet escalation. Native PDF handling = OCRs scanned PDFs automatically.
+- **`lib/llm/extract-vision.ts`** (new) — Claude vision via `URLImageSource` image block. Sonnet only (Haiku vision is too weak for handwritten / stylized schedules).
+- **Migration `0003_extraction_strategy.sql`** — new `extraction_strategy` enum + column on `data_source`, plus `'unsupported'` added to `shul_status`. Backfills 46 existing website data sources to `extraction_strategy='html'`.
+- **Wired into**: `buildDataSource` (Inngest, new submissions), `/api/admin/shul/[id]/extract` (manual admin trigger), `scrapeOneShul` (weekly cron — skips failed/unsupported, pins to stored strategy for non-HTML).
+- **Admin UI**: strategy chip on `/admin/data-source/[id]` with hover description, strategy chip on each data_source row in `/admin/shul/[slug]`, `'Unsupported'` added to status labels + filter on `/admin/shuls`.
+- **User-side setup completed tonight**: `BROWSERLESS_API_KEY` added to Vercel production env, migration 0003 run on Neon (verified by `scripts/verify-migration-0003.ts` — 46 rows backfilled, all checks pass).
+
+Test cases on the menu for tomorrow: theshul.org (PDF tier), anash.ca/daven (JS-rendered + PDF/vision).
+
+### 2026-05-13 — Light-mode CSS fix (commit `f5f71f7`) ✅
+
+Phone screenshots showed black page background with white tiles floating. Cause: `create-next-app` boilerplate `globals.css` had a `@media (prefers-color-scheme: dark)` block setting `--background: #0a0a0a`. The body's `background: var(--background)` (unlayered selector) won over Tailwind's `bg-stone-50` utility (in `@layer utilities`). We never designed a real dark theme, so OS dark mode exposed an inconsistency.
+
+Fixed by removing the dark-mode block from `globals.css` and adding `viewport.colorScheme = "light"` to `app/layout.tsx` (Next 16 pattern, emits `<meta name="color-scheme" content="light">`). Latter also blocks Chrome on Android's "Force Dark for Web" setting from inverting the page.
+
+### 2026-05-13 — Add-a-shul tile becomes functional + STYLE.md (commit `5501aa3`) ✅
+
+The Add tile now embeds the URL submit form (POSTs to `/api/submit`, no client JS) and shows `submit@inbound.tfila.co` inline in an amber pill. `/submit` is reserved for the optional auto-forward setup walkthrough only. Aligns Add with the Find + Look-up cards as a functional widget.
+
+**`STYLE.md`** (new) — codifies the project's UX north star: minimal clicking, simple clean aesthetics. Documents the form-on-card pattern, no-auto-redirects rule, palette (`amber-800` accent only), density/spacing, copy voice, and a "done" checklist. Future UI changes should reference this.
+
+### 2026-05-13 — Live fuzzy shul lookup + reachable home (commit `5fa44ab`) ✅
+
+Two issues off real-use feedback:
+
+1. **Home page reachable when location is saved.** Previously `FindCard` auto-redirected on mount, so clicking the logo bounced back to the feed. Removed auto-redirect. New `ResumeBanner` shows at the top of the landing if a saved location exists, with one-click `Resume →` and `Clear` actions.
+2. **Look-up tile has live fuzzy search embedded.** Client-side subsequence matching (same algorithm as VSCode's command palette) — type "agdh sth" and "Agudath South" matches. Scoring favors exact substrings, name over address, word-boundary hits. Shows up to 8 results, each → `/shul/[slug]`. Shul list (~150 rows) fetched once on SSR, zero API roundtrip per keystroke.
+
+### 2026-05-13 — Three-card home + sticky feed header (commit `4ba8ebd`) ✅
+
+Reworked the home page to surface tfila.co's three jobs (Find a minyan, Look up a shul, Add a shul) as equal-weight cards on the landing. Stacked on mobile, 3-col on tablet+.
+
+- **No-location landing**: three cards — Find (functional: `📍 Use my location` button + address-input fallback), Look-up (nav tile → `/find`), Add (nav tile → `/submit`).
+- **Feed view (with location)**: new sticky `FeedHeader` keeps the three jobs reachable on every scroll — logo, 🔍 search, `+ Add shul`, place chip with reverse-geocoded name ("Crown Heights, NY") instead of raw `lat,lng`. Drops the awkward "Switch:" inline search and the lat/lng coord line.
+- **Reverse geocoding** added to `lib/geocoding.ts` via Google's `latlng` API.
+- **Zmanim tooltips** added to `ZmanimStrip` — hover any chip to see the full name + meaning of "Sof Tef", "Plag", "Mincha G", etc.
+
+### 2026-05-13 — Admin: Rejected section + unreject (commit `167e05d`) ✅
+
+Rejected data_sources previously had no way back into the review flow. New `/admin/rejected` page lists every rejected data_source with three actions per row:
+- Review rules → opens detail page
+- Move back to pending → new `/api/admin/data-source/[id]/unreject` route flips status back to pending so it shows in the queue again
+- Approve → same direct-approve flow as the queue
+
+Data-source detail page now shows "Move back to pending" instead of "Reject" when the data_source is already rejected. New "Rejected" nav link in the admin header.
+
+---
 
 ### 2026-05-12 — PR 21: same-origin candidate-URL fallback for LLM extraction ✅
 

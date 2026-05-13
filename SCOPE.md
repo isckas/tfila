@@ -120,12 +120,15 @@
 - `id`, `shul_id`
 - `kind`: `shulcloud_website` | `website_llm` | `email_newsletter` | `manual`
 - `identifier`: URL for website kinds; unique inbound address like `shul-{token}@inbound.tfila.co` for email
-- `config_json` (selectors/regex/time semantics for website_llm; extraction hints for email)
+- `config_json` (selectors/regex/time semantics for website_llm; extraction hints for email; also stores `cascade_attempts[]` audit trail)
 - `confidence_score` (0.0–1.0)
+- `extraction_strategy` (added 2026-05-13): `html` | `js_rendered` | `pdf_document` | `vision_image` | `failed`. Which tier of the extraction cascade produced the rules. Weekly rescrapes pin to this tier so they skip earlier tiers.
 - `priority`: email > website > manual default (higher wins on rule conflict)
 - `built_at`, `built_by` (`llm` | `manual` | `admin_edit`)
 - `last_run_at`, `last_received_at`, `last_run_status`, `last_run_diff_summary`
 - `review_status`: `pending` | `approved` | `rejected`, `reviewer_notes`
+
+**`shul.status`** values: `pending_review` | `active` | `broken` | `archived` | `unsupported`. `unsupported` (added 2026-05-13) means every tier of the extraction cascade returned 0 rules; weekly cron skips these unless an admin manually re-triggers.
 
 **`minyan_rule`**
 - `id`, `shul_id`, `data_source_id` (provenance)
@@ -180,17 +183,30 @@ When email-derived and website-derived rules disagree on a time, **email wins**.
                                           │
                 ┌─────────────────────────┼──────────────────────┐
                 ▼                         ▼                      ▼
-   ┌──────────────────┐  ┌────────────────────┐  ┌──────────────────────┐
-   │ Anthropic API    │  │ R2 / S3            │  │ Postmark Inbound     │
-   │  Haiku 4.5 →     │  │  raw HTML archive  │  │  (Phase 2)           │
-   │  Sonnet 4.6      │  │  LLM I/O audit log │  │  webhook → Inngest   │
-   │  fallback        │  │  raw .eml archive  │  └──────────────────────┘
-   │  + prompt cache  │  │  (Phase 2)         │
-   │  + Zod validate  │  └────────────────────┘
-   └──────────────────┘
+   ┌──────────────────────┐  ┌─────────────────┐  ┌──────────────────────┐
+   │ Extraction cascade   │  │ R2 / S3         │  │ Postmark Inbound     │
+   │  (added 2026-05-13)  │  │  raw HTML       │  │  (Phase 2)           │
+   │  HTML → JS-rendered  │  │  archive        │  │  webhook → Inngest   │
+   │  → PDF → Vision →    │  │  LLM I/O audit  │  └──────────────────────┘
+   │  failed              │  │  raw .eml       │
+   │                      │  │  (Phase 2)      │
+   │  ├─ Anthropic API    │  └─────────────────┘
+   │  │   Haiku 4.5 →     │
+   │  │   Sonnet 4.6      │
+   │  │   + prompt cache  │
+   │  │   + Zod validate  │
+   │  │   + tolerant JSON │
+   │  ├─ Browserless      │
+   │  │   (JS render)     │
+   │  ├─ Claude PDF       │
+   │  │   document blocks │
+   │  └─ Claude vision    │
+   │      image blocks    │
+   └──────────────────────┘
 
 Cross-cutting: Sentry · Axiom logs · Better Stack uptime · kosher-zmanim (in-process)
-External: Google Geocoding (one-time per shul, ~$0.005/req)
+External: Google Geocoding (one-time per shul + reverse-geocode for feed place name)
+External (cascade tier 2): Browserless (~$0.001/render, free tier 1k/mo)
 ```
 
 ### Locked stack choices
@@ -205,6 +221,7 @@ External: Google Geocoding (one-time per shul, ~$0.005/req)
 - **Spatial**: PostGIS `GEOGRAPHY(Point)` + GIST index from day 1.
 - **PWA**: hand-rolled service worker (~80 LOC). `next-pwa` is not Next.js 16 ready.
 - **LLM**: Anthropic Haiku 4.5 first-pass → Sonnet 4.6 fallback. Prompt caching. Zod-validated outputs with retry-on-correction. Raw I/O archived to R2 for re-processing.
+- **Extraction cascade** (added 2026-05-13): four-tier escalation for shul sites that don't ship rules in clean HTML — `html → js_rendered (Browserless) → pdf_document (Claude PDF input) → vision_image (Claude vision)`. Strategy stored per data_source so weekly rescrapes skip earlier tiers. Failures land `shul.status = 'unsupported'` so cron stops wasting LLM calls.
 - **Geocoding**: Google Geocoding API.
 - **Zmanim**: `kosher-zmanim` in-process server-side.
 - **Admin auth**: Auth.js magic-link.

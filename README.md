@@ -11,7 +11,9 @@ A mobile-first directory of Jewish shul minyan times. Open the app, see the next
 - **Frontend**: Next.js 16 App Router + Tailwind v4 + TypeScript + React 19
 - **Data**: Neon Postgres + Drizzle ORM + PostGIS (for radius queries)
 - **Jobs**: Inngest (background scrapes, LLM schema-build, email ingestion)
-- **LLM**: Anthropic API (Haiku 4.5 first-pass → Sonnet 4.6 fallback) for per-shul scrape-config generation
+- **Extraction cascade**: `html → js_rendered → pdf_document → vision_image → failed`. Each tier escalates only if the previous yielded 0 useful rules; the winning tier is persisted on `data_source` so weekly rescrapes skip earlier ones.
+  - **LLM**: Anthropic API (Haiku 4.5 first-pass → Sonnet 4.6 fallback). Used for HTML, PDF, and image extraction. Prompt caching + Zod validation + tolerant JSON parser.
+  - **JS rendering**: Browserless `/content` endpoint for SPAs / sites with JS-injected schedules.
 - **Hosting**: Vercel
 - **Observability**: Sentry + structured logs
 
@@ -38,19 +40,28 @@ Then open <http://localhost:3000>.
 
 ## Scripts
 
+**npm scripts** (in `package.json`):
 - `npm run dev` — Next.js dev server (Turbopack default in v16)
 - `npm run build` — production build
 - `npm run db:generate` — generate Drizzle migrations
 - `npm run db:push` — push schema to DB
 - `npm run db:studio` — open Drizzle Studio
-- `npm run discover:shulcloud` — discover ShulCloud-hosted shuls
-- `npm run scrape:shulcloud` — scrape known ShulCloud shuls (respects `SCRAPE_ENABLED`)
-- `npm run seed` — seed DB from scrape results
+
+**Diagnostic / one-shot scripts** (run with `npx tsx scripts/<name>.ts`):
+- `verify-migration-0003.ts` — sanity check migration 0003 (extraction_strategy)
+- `inspect-failed-extraction.ts <url-substring>` — show the cascade_attempts breakdown for failed extractions
+- `debug-cascade.ts <url>` — run the cascade end-to-end without DB writes; full per-tier output
+- `test-llm-extract.ts <url>` — manual HTML extraction test
+- `test-inbound-email.ts` — synthetic Postmark webhook payload (for the email flow)
+
+**Legacy** (sprint-1, kept for occasional re-runs):
+- `npm run discover:shulcloud`, `npm run scrape:shulcloud`, `npm run migrate:sprint1`
 
 ## Docs
 
 - [`SCOPE.md`](./SCOPE.md) — locked product scope, source of truth
-- [`PROGRESS.md`](./PROGRESS.md) — rolling build log
+- [`PROGRESS.md`](./PROGRESS.md) — rolling build log + **"Now — pickup tomorrow"** section for active work
+- [`STYLE.md`](./STYLE.md) — UX principles (minimal clicking, simple clean aesthetics)
 - [`IDEAS.md`](./IDEAS.md) — parking lot for non-MVP ideas
 - `/bot` page (live) — public description of `Tfila-Bot/1.0` scraper for shul webmasters
 
