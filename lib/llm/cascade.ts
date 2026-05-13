@@ -374,9 +374,14 @@ export async function runCascade(
             "no schedule-looking images on the page (alt/id/class with 'schedule|davening|minyan|bulletin' etc.)",
         });
       }
+      // Accumulate usage across all attempted candidates. Vision tier
+      // tries up to 3 images — if we only stored r.usage on each step
+      // (overwrite), cost-tracking would only see the last candidate.
+      const visionUsages: unknown[] = [];
       for (const imgUrl of imgCandidates) {
         try {
           const r = await extractFromImageUrl(imgUrl);
+          visionUsages.push(r.usage);
           attempts.push({
             strategy: "vision_image",
             status: "extracted",
@@ -384,8 +389,8 @@ export async function runCascade(
             confidence: r.extraction.confidence,
             resourceUrl: imgUrl,
           });
-          usage["vision_image"] = r.usage;
           if (isUseful(r.extraction.rules.length, r.extraction.confidence)) {
+            usage["vision_image"] = visionUsages;
             return {
               strategy: "vision_image",
               extraction: r.extraction,
@@ -407,6 +412,7 @@ export async function runCascade(
           });
         }
       }
+      if (visionUsages.length > 0) usage["vision_image"] = visionUsages;
     }
   } else {
     attempts.push({
@@ -441,9 +447,15 @@ export async function runCascade(
           errorMessage: "no .pdf links found on the page",
         });
       }
+      // Accumulate usage across all attempted PDFs (same pattern as
+      // Vision tier above). PDF tier is currently capped at 1 candidate
+      // so this is defensive — keeps the shape consistent if the cap
+      // ever loosens.
+      const pdfUsages: unknown[] = [];
       for (const pdfUrl of pdfCandidates) {
         try {
           const r = await extractFromPdfUrl(pdfUrl);
+          pdfUsages.push(r.usage);
           attempts.push({
             strategy: "pdf_document",
             status: "extracted",
@@ -451,8 +463,8 @@ export async function runCascade(
             confidence: r.extraction.confidence,
             resourceUrl: pdfUrl,
           });
-          usage["pdf_document"] = r.usage;
           if (isUseful(r.extraction.rules.length, r.extraction.confidence)) {
+            usage["pdf_document"] = pdfUsages;
             return {
               strategy: "pdf_document",
               extraction: r.extraction,
@@ -474,6 +486,7 @@ export async function runCascade(
           });
         }
       }
+      if (pdfUsages.length > 0) usage["pdf_document"] = pdfUsages;
     }
   } else {
     attempts.push({
