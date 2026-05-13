@@ -5,6 +5,7 @@ import { buildDataSource } from "@/lib/inngest/functions/build-data-source";
 import { scrapeOneShul } from "@/lib/inngest/functions/scrape-one-shul";
 import { weeklyRescrape } from "@/lib/inngest/functions/weekly-rescrape";
 import { processEmail } from "@/lib/inngest/functions/process-email";
+import { nightlyVersionBump } from "@/lib/inngest/functions/nightly-version-bump";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -14,5 +15,6 @@ export const { GET, POST, PUT } = serve({
     scrapeOneShul,
     weeklyRescrape,
     processEmail,
+    nightlyVersionBump,
   ],
 });
