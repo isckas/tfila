@@ -361,6 +361,113 @@ Concrete win: `jewishwindsorterrace.org/templates/articlecco_cdo/aid/2710598/jew
 
 ---
 
+## Admin notes per shul
+
+Added: 2026-05-14 · **Status: designed. Not yet built.**
+
+**The rule.** Every shul row in the admin gets a free-text notes field, editable from `/admin/shul/[slug]`. Stores institutional knowledge that doesn't fit any structured column: "moved domains in March," "gabbai responds via email only," "PDF tier needed because their HTML schedule is a screenshot," "approved against Yossi's recommendation, watch for stale times."
+
+### Why
+
+Triaging shuls today loses context. Why did admin approve a candidate without a perfect type-tag? Why was a data_source manually re-extracted last month? Why does this shul's name in the DB differ from what its website says? Without a notes field, that reasoning lives in commit messages, Inngest event payloads, or nowhere — and surfaces too late for the next admin pass.
+
+A notes field is the cheapest possible "scratchpad for institutional memory" — one column, one textarea, no schema gymnastics.
+
+### Shape (decided)
+
+- **Per shul**, attached to the `shul` row directly. Not per data_source, not per candidate. (Rationale: most context generalizes across the shul's data sources; per-data_source notes would scatter the same observation across multiple rows on rescrape/re-extract.)
+- **Single editable field**, replaced on save. Not an append-only log. Last-edited-by (admin email) + last-edited-at timestamp persist alongside the value.
+- **Admin-only**. Never rendered on the public `/shul/[slug]` page. Plain text — no Markdown rendering required initially (admins can write Markdown if they want; the field just stores characters).
+
+### Implementation sketch
+
+1. **Schema** (one migration):
+   ```sql
+   ALTER TABLE shul ADD COLUMN admin_notes text;
+   ALTER TABLE shul ADD COLUMN admin_notes_updated_by text;
+   ALTER TABLE shul ADD COLUMN admin_notes_updated_at timestamptz;
+   ```
+   Nullable. No index — notes are admin-page-only, never queried in the davener path.
+
+2. **Drizzle schema** — add the three columns to `shul` in `db/schema.ts`.
+
+3. **API route** — `POST /api/admin/shul/[id]/notes` (admin auth required). Body: `{ notes: string }`. On save: writes the value, sets `admin_notes_updated_by = session.email`, `admin_notes_updated_at = NOW()`.
+
+4. **UI** — on `/admin/shul/[slug]`, add a "Notes" card. Textarea (rows ~6, autosize-ish), Save button, and a small "Last edited by isaac.kass@gmail.com · 2 days ago" line below. Empty state: placeholder "Anything an admin should know about this shul…"
+
+5. **Listing surface (optional, v1.1)** — a tiny note icon (📝 or similar) next to shuls with non-empty notes in `/admin/shuls`, so admins can spot which rows already have context without clicking in.
+
+### Edge cases
+
+- **Concurrent edits.** Two admin tabs open on the same shul, both save. Last-write-wins (no optimistic locking). For a one-admin-mostly project this is fine; revisit if the team grows.
+- **Length cap.** No DB cap. UI soft-warns if > ~5 KB (notes are not blog posts).
+- **Deletion.** Clearing the textarea + save = `admin_notes = NULL`, fields wiped. No history retained.
+- **Markdown rendering.** v1 plain-text only. If admins start writing checklists, revisit (probably just `react-markdown` with the strict subset).
+
+### Cost
+
+~30 minutes: 1 migration, 3 schema lines, 1 API route, 1 textarea + Save button, 1 conditional badge in the listing.
+
+### Decision
+
+**Designed 2026-05-14.** Per-shul, single editable field, admin-only. Implementation deferred to a follow-up session — not blocking any other in-flight work.
+
+Related: [[admin-ux-simplification]] (when written) — notes is one of the small surfaces that the unified pipeline view should expose inline.
+
+---
+
+## Home-page address search: 25-mile radius, nearest first
+
+Added: 2026-05-14 · **Principle locked. Implementation TBD.**
+
+**The rule.** When a user enters an address on the home page (the `FindCard` widget), the feed shows every minyan within a **25-mile radius** of that address, **ranked nearest first** (shul → user distance ascending). The radius and ranking are independent of the time-window logic.
+
+### Why 25 miles, why nearest-first
+
+- **25 miles.** The current default (`DEFAULT_RADIUS_MILES = 2` in [`app/page.tsx:20`](./app/page.tsx)) is tuned for dense urban submitters who walk to shul. An address search is a different intent — usually a traveler, a someone-new-in-town, or a davener checking what's reachable by car. 25 mi covers a normal driving range and pulls in suburbs / nearby towns that 2 mi misses.
+- **Nearest-first.** Today the feed sorts by `startIso` (next-time-first — see [`app/page.tsx:159`](./app/page.tsx)). That's right for the "I'm here now, what's next" walking case. For an address search across a 25-mile spread, a minyan 24 miles away starting in 5 minutes is irrelevant to someone searching from their home address; a minyan 1.5 miles away starting in 40 minutes is what they want to see. Distance becomes the dominant signal once the radius opens up.
+
+### Current behavior (2026-05-14)
+
+- `FindCard` geocodes the typed address → redirects to `/?lat=…&lng=…` (no `radius` param).
+- [`app/page.tsx:41`](./app/page.tsx) falls back to `DEFAULT_RADIUS_MILES = 2`.
+- [`app/page.tsx:159`](./app/page.tsx) sorts by `a.startIso.localeCompare(b.startIso)`, then slices to `MAX_ITEMS = 25`.
+- `getNearbyShulsWithRules` already returns `distanceMeters` per rule, so the data needed for nearest-first ranking is there — we just don't use it for ordering.
+
+### What "address search" means (open)
+
+The home page has three entry points to a located feed. We need to decide which of them trigger this 25-mi nearest-first behavior:
+
+- **A.** `FindCard` "Use my location" (geolocation API) → keep current 2 mi + time-first. Walking-default unchanged.
+- **B.** `FindCard` "Search by address" (typed address → geocode) → **new** 25 mi + nearest-first.
+- **C.** Any URL with `?lat=&lng=` not explicitly carrying a radius → ambiguous. Should default to which?
+
+Probably: A keeps the 2-mile walking default; B uses 25-mile nearest-first; C is the legacy/shared-link case and should preserve whatever was on the originating URL (so already-shared links don't silently change behavior).
+
+### Implementation sketch (when ready to build)
+
+1. **Distinguish the two entry points.** `FindCard` currently emits the same `/?lat=…&lng=…` URL for both geolocation and typed address. Add a marker — either `?via=address` or `?radius=25&sort=distance` — so the page handler knows which mode to render.
+2. **Server-side defaults.** In [`app/page.tsx`](./app/page.tsx), branch on the marker: `via=address` → `radiusMiles = 25`, `sortMode = 'distance'`. Geolocation path keeps `DEFAULT_RADIUS_MILES = 2` and `startIso` sort.
+3. **Bump the radius clamp.** `Math.min(50_000, ...)` (≈31 mi) already accommodates 25 mi. No DB change needed.
+4. **Sort by distance, not time.** Replace `resolved.sort((a, b) => a.startIso.localeCompare(b.startIso))` with `resolved.sort((a, b) => a.distanceMeters - b.distanceMeters)` when `sortMode === 'distance'`. Time-window filter (`earliest` / `latest`) still applies — we're only changing the order within the eligible set.
+5. **Header copy.** `FeedHeader` should reflect the mode — "Minyanim near \<address\>, sorted by distance" vs. the current "near you" framing. The `within 25 mi` line in [`app/page.tsx:185`](./app/page.tsx) just falls through with the new `radiusMiles` value.
+6. **MAX_ITEMS revisited.** A 25-mile feed could easily return hundreds of rules across dozens of shuls. `MAX_ITEMS = 25` may now feel cramped. Either bump it to ~50, paginate, or group by shul and show the closest 1-2 minyanim per shul as a first-class card.
+
+### Open sub-questions
+
+- **Per-shul vs per-minyan rows.** At 25 mi, one shul with 8 daily minyanim shouldn't fill the entire screen. Group by shul, show the next 1-2 upcoming minyanim per shul card? Or keep the flat list and let MAX_ITEMS trim?
+- **Time window.** Current `PAST_WINDOW_MIN = 30`, `FUTURE_WINDOW_MIN = 24*60` covers "the rest of today." Is that still right for an address search? Someone planning a Shabbos trip three weeks out wants a different window. Probably out of scope for v1 — keep today's window, separate "trip planner" feature later.
+- **Driving-time vs straight-line distance.** Haversine distance is what we have. 25 mi as the crow flies could be 45 minutes on Long Island. v1 ships haversine; later we could add a Google Distance Matrix call for the top N results.
+- **Empty / sparse results.** If a 25-mile search returns 0 minyanim (rural address), what do we show? "No minyanim within 25 mi of \<address\>" + a CTA to submit a local shul? Or quietly extend the radius to 50?
+
+### Decision
+
+**Principle locked 2026-05-14.** Address-search entry point → 25-mile radius, nearest-first ranking. Implementation deferred to a separate session; pick up by deciding (a) which entry-point marker to use, (b) per-shul grouping vs flat list, then ship the page-handler branch.
+
+Related: [[home-page-find-card-ux]] (when written), the [[no-stale-data]] freshness rule still gates which shuls qualify to appear.
+
+---
+
 ## No stale data: only list shuls with fresh verified tfila times
 
 Added: 2026-05-14 · **Principle locked. Backend implementation TBD.**
