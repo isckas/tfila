@@ -21,12 +21,12 @@ export function AddCard() {
         <h2 className="text-lg font-semibold text-neutral-900">Add a shul</h2>
       </div>
       <p className="mb-3 text-sm text-neutral-600">
-        Zero effort for gabbais — pick whichever is easier.
+        Zero effort &mdash; pick whichever is easier.
       </p>
 
       {/* URL submission — straight to /api/submit */}
       <label className="text-xs font-medium text-neutral-700">
-        Schedule page URL
+        Shul&apos;s Tfila Schedule page URL
       </label>
       <form method="post" action="/api/submit" className="mt-1 flex gap-1.5">
         <input
@@ -44,14 +44,13 @@ export function AddCard() {
         </button>
       </form>
       <p className="mt-1.5 text-xs text-neutral-500">
-        The page where the calendar / minyan times live — not the
-        homepage. We&apos;ll find it if you paste the homepage, but
-        the schedule-page URL works better.
+        The page where the calendar / minyan times live &mdash; not the
+        homepage.
       </p>
 
       <div className="my-3 flex items-center gap-2 text-[10px] uppercase tracking-wide text-neutral-400">
         <span className="h-px flex-1 bg-neutral-200" />
-        or get the weekly email
+        weekly email
         <span className="h-px flex-1 bg-neutral-200" />
       </div>
 
@@ -65,8 +64,8 @@ export function AddCard() {
       </div>
 
       <p className="mt-3 text-xs text-neutral-500">
-        One-time setup. Every weekly bulletin reaches us automatically;
-        we update the times and skip duplicates.
+        One-time setup. We read the weekly bulletin we update the tfila
+        times.
       </p>
     </div>
   );
