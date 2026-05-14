@@ -289,6 +289,55 @@ export async function findShulPlace(
   return best;
 }
 
+/**
+ * Sibling of `backfillShulLocation` for the case it doesn't handle:
+ * shul already has an address string (e.g. LLM-extracted from an email
+ * bulletin) but no geocoded `location` point. Without a point, the
+ * shul is invisible to ST_DWithin distance queries — won't show up in
+ * the home feed even when geographically close to the user.
+ *
+ * Calls Google Geocoding on the existing address; writes the result to
+ * shul.location. Idempotent — UPDATE is gated on `location IS NULL`.
+ *
+ * Cheap (~$0.005/call). Safe to call after every extraction.
+ */
+export async function geocodeAddressIfMissingLocation(args: {
+  shulId: number;
+}): Promise<{ applied: boolean; reason?: string }> {
+  const rows = await db.execute<{
+    address: string | null;
+    has_location: boolean;
+  }>(sql`
+    SELECT address, (location IS NOT NULL) AS has_location
+      FROM shul
+     WHERE id = ${args.shulId}
+  `);
+  const s = rows.rows[0];
+  if (!s) return { applied: false, reason: "shul not found" };
+  if (!s.address) return { applied: false, reason: "no address to geocode" };
+  if (s.has_location) return { applied: false, reason: "location already set" };
+
+  let result;
+  try {
+    result = await geocode(s.address);
+  } catch (e) {
+    return {
+      applied: false,
+      reason: `geocode error: ${(e as Error).message}`,
+    };
+  }
+  if (!result) return { applied: false, reason: "geocode returned no result" };
+
+  await db.execute(sql`
+    UPDATE shul
+       SET location = ST_SetSRID(ST_MakePoint(${result.lng}, ${result.lat}), 4326)::geography,
+           updated_at = NOW()
+     WHERE id = ${args.shulId}
+       AND location IS NULL
+  `);
+  return { applied: true };
+}
+
 export interface BackfillResult {
   applied: boolean;
   confidence?: number;

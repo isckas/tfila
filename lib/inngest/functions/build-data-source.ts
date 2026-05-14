@@ -3,7 +3,10 @@ import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { shul } from "../../../db/schema";
 import { runCascade, type CascadeResult } from "../../llm/cascade";
-import { backfillShulLocation } from "../../geocoding";
+import {
+  backfillShulLocation,
+  geocodeAddressIfMissingLocation,
+} from "../../geocoding";
 import {
   persistDataSourceWithRules,
   applyShulNameAndAddressFromExtraction,
@@ -75,6 +78,15 @@ export const buildDataSource = inngest.createFunction(
       return backfillShulLocation({ shulId, name: shulName, urlHint: url });
     });
 
+    // After backfill: geocode the address into a location point if one
+    // didn't get set. Catches the case where extraction.shulAddress
+    // populated shul.address but Places didn't fire (or was skipped
+    // because address was already set). Without a location point the
+    // shul is invisible to home-feed distance queries.
+    const locationGeocode = await step.run("geocode-location-fallback", async () =>
+      geocodeAddressIfMissingLocation({ shulId }),
+    );
+
     return {
       dataSourceId: persisted.dataSourceId,
       strategy: result.strategy,
@@ -84,6 +96,7 @@ export const buildDataSource = inngest.createFunction(
       reasoning: result.extraction?.reasoning ?? null,
       winningUrl: result.winningUrl,
       addressBackfill,
+      locationGeocode,
     };
   },
 );

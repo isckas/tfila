@@ -22,7 +22,10 @@ import {
 import { extractFromEmail } from "../../llm/extract-email";
 import { slugify, nameFromTitle, allocateUniqueSlug } from "../../slug";
 import { matchDomainOf } from "../../dedup";
-import { backfillShulLocation } from "../../geocoding";
+import {
+  backfillShulLocation,
+  geocodeAddressIfMissingLocation,
+} from "../../geocoding";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import {
   insertRuleFromExtraction,
@@ -146,7 +149,14 @@ export const processEmail = inngest.createFunction(
       }),
     );
 
-    return { ...result, addressBackfill };
+    // Email path almost always lands an address from extraction (which
+    // skips the Places backfill above). Without this step, location
+    // stays null and the shul is invisible to ST_DWithin queries.
+    const locationGeocode = await step.run("geocode-location-fallback", async () =>
+      geocodeAddressIfMissingLocation({ shulId: result.shulId }),
+    );
+
+    return { ...result, addressBackfill, locationGeocode };
   },
 );
 

@@ -4,7 +4,10 @@ import { db } from "@/db/client";
 import { shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { runCascade } from "@/lib/llm/cascade";
-import { backfillShulLocation } from "@/lib/geocoding";
+import {
+  backfillShulLocation,
+  geocodeAddressIfMissingLocation,
+} from "@/lib/geocoding";
 import {
   persistDataSourceWithRules,
   applyShulNameAndAddressFromExtraction,
@@ -193,6 +196,15 @@ export async function POST(
     }
   } catch {
     // Non-fatal — address backfill failure shouldn't block extraction success.
+  }
+
+  // ─── Location fallback: geocode the address string into a point if one
+  // didn't get set (most email-derived shuls land here). Without it, the
+  // shul is invisible to home-feed distance queries.
+  try {
+    await geocodeAddressIfMissingLocation({ shulId: s.id });
+  } catch {
+    // Non-fatal — same rationale as above.
   }
 
   const qs = new URLSearchParams({ extracted: "1", strategy });
