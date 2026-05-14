@@ -98,9 +98,10 @@
 
 ### Launch geographic scope
 **Whatever we can scrape + manual adds.** Bootstrap seed strategy:
-- (a) Manually add 50-100 well-known shuls before public launch (NYC, Lakewood, LA, Miami, Chicago, Toronto)
-- (b) Scrape GoDaven / ChabadOne directories to bootstrap names + addresses, then run each through our own submission pipeline
-- Current state: 30 ShulCloud shuls, 503 minyanim from sprint 1
+- (a) **Discovery system** (built 2026-05-14): Google Places-seeded candidate queue with admin triage. 88 davener-weighted geographies in `data/discovery-targets.json` covering ~85% of NA daveners, ~80% of Europe, plus 35 travel destinations. Admin clicks "Run discovery" per target → ~2-3 Places API calls → candidates appear in `/admin/candidates` for one-click approval into the extraction pipeline.
+- (b) Manual seed lists per city for known shuls Places misses (Chassidish enclaves often have no Places listing).
+- (c) Directory crawl scrapers as a complement — Chabad.org/centers, OU shulfinder, local Vaad sites (not yet built).
+- Current state (2026-05-14): ~65 shuls, ~600 rules. Crown Heights seeded via discovery; Lakewood / Boro Park / Flatbush queued for next session.
 
 ---
 
@@ -146,6 +147,17 @@
 **`scrape_run`** (audit log)
 - `id`, `shul_id`, `data_source_id`, `started_at`, `finished_at`, `status`, `rules_added`, `rules_removed`, `rules_changed`, `error`
 
+**`shul_candidate`** (added 2026-05-14 — discovery queue)
+- `id`, `place_id` (Google Place ID, UNIQUE — natural dedup across discovery re-runs), `name`, `formatted_address`, `lat`, `lng`, `website_uri`, `types[]`
+- `source` (`google_places` | `directory_crawl` | `manual`), `source_detail`, `discovery_target_name`
+- `raw_response_jsonb` — full Places place object preserved for re-derivation
+- `review_status` (`pending` | `approved` | `rejected` | `duplicate` | `deferred`), `review_reason`, `linked_shul_id`, `reviewed_at`, `reviewed_by`
+- No DELETEs — rejected rows function as a denylist so future discovery runs don't re-show the same junk.
+
+**`discovery_run`** (added 2026-05-14 — audit log per Places API call)
+- `id`, `target_name`, `query_text`, `center_lat`, `center_lng`, `radius_m`
+- `started_at`, `finished_at`, `result_count`, `candidates_new`, `candidates_dup`, `error`
+
 ### Rule resolution
 
 For date D, location L: fetch all rules from all active sources for each shul in radius. Apply source priority → rule priority → return winners. Resolve zmanim-relative times at query time via `kosher-zmanim` using shul lat/lng + date D. Never store as fixed clock time.
@@ -183,21 +195,26 @@ When email-derived and website-derived rules disagree on a time, **email wins**.
                                           │
                 ┌─────────────────────────┼──────────────────────┐
                 ▼                         ▼                      ▼
-   ┌──────────────────────┐  ┌─────────────────┐  ┌──────────────────────┐
-   │ Extraction cascade   │  │ R2 / S3         │  │ Postmark Inbound     │
-   │  (added 2026-05-13)  │  │  raw HTML       │  │  (Phase 2)           │
-   │  HTML → JS-rendered  │  │  archive        │  │  webhook → Inngest   │
-   │  → Vision → PDF →    │  │  LLM I/O audit  │  └──────────────────────┘
-   │  failed              │  │  raw .eml       │
-   │                      │  │  (Phase 2)      │
-   │  ├─ Anthropic API    │  └─────────────────┘
-   │  │   Haiku 4.5 →     │
-   │  │   Sonnet 4.6      │
+   ┌──────────────────────┐  ┌─────────────────┐  ┌──────────────────────────┐
+   │ Extraction cascade   │  │ R2 / S3         │  │ Cloudflare Worker        │
+   │  (added 2026-05-13)  │  │  raw HTML       │  │  - email() handler:      │
+   │  HTML → JS-rendered  │  │  archive        │  │    inbound at            │
+   │  → Vision → PDF →    │  │  LLM I/O audit  │  │    submit@tfila.co       │
+   │  failed              │  │  raw .eml       │  │  - fetch() handler:      │
+   │                      │  │  (Phase 2)      │  │    /fetch proxy for      │
+   │  ├─ Anthropic API    │  └─────────────────┘  │    anti-bot bypass       │
+   │  │   Haiku 4.5 →     │                       │    (added 2026-05-14)    │
+   │  │   Sonnet 4.6      │                       └──────────────────────────┘
    │  │   + prompt cache  │
-   │  │   + Zod validate  │
-   │  │   + tolerant JSON │
-   │  ├─ Browserless      │
-   │  │   (JS render)     │
+   │  │   + Zod validate  │  ┌──────────────────────────────────────────────┐
+   │  │   + tolerant JSON │  │ Discovery system (added 2026-05-14)          │
+   │  ├─ Schedule resolver│  │  - data/discovery-targets.json (88 targets)  │
+   │  │   (pre-cascade)   │  │  - POST /api/admin/discovery/run             │
+   │  ├─ Browserless      │  │    → Google Places Text Search v1            │
+   │  │   (JS render)     │  │  - shul_candidate table (admin triage)       │
+   │  ├─ fetchHtml 3-tier │  │  - approve → resolveScheduleUrl              │
+   │  │   UA fallback +   │  │           → data-source.requested            │
+   │  │   CF Worker proxy │  └──────────────────────────────────────────────┘
    │  ├─ Claude PDF       │
    │  │   document blocks │
    │  └─ Claude vision    │
@@ -205,8 +222,9 @@ When email-derived and website-derived rules disagree on a time, **email wins**.
    └──────────────────────┘
 
 Cross-cutting: Sentry · Axiom logs · Better Stack uptime · kosher-zmanim (in-process)
-External: Google Geocoding (one-time per shul + reverse-geocode for feed place name)
+External: Google Geocoding + Places Text Search v1 (discovery + address backfill, single key)
 External (cascade tier 2): Browserless (~$0.001/render, free tier 1k/mo)
+External (anti-bot fallback): Cloudflare Worker proxy (free tier sufficient at any volume)
 ```
 
 ### Locked stack choices

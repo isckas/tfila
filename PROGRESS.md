@@ -13,25 +13,101 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: end of 2026-05-13.** Cascade is healthy in production and verified end-to-end on multiple shul types. v1 baseline locked in CHANGELOG.md.
+**Last working session: 2026-05-14 (deep dive on shul discovery + Cloudflare proxy).**
+
+### Active concern — admin flow review
+
+User flagged the admin pipeline as **convoluted** end of session: the candidate → shul → data_source → review → activate lifecycle now spans `/admin/candidates`, `/admin/queue`, `/admin/shuls`, `/admin/shul/[slug]`, and `/admin/data-source/[id]`. Each was built independently; together they don't read as one coherent workflow. Worth a session of UX simplification — likely a unified pipeline view that shows each shul's stage and the single next action.
 
 ### Decided + designed, ready to build
 
-- **Deduplication (FEATURES.md Option A)** — registrable-domain dedup across URL and email submissions via `tldts`. 6-step plan in [FEATURES.md](./FEATURES.md). Real bug waiting to happen at scale: same shul submitted twice (URL + URL with www, URL + email) currently creates duplicate rows.
+- **Unified post-ingestion pipeline parity (steps 2-7)** — Step 1 shipped (shared `backfillShulLocation` helper called from both URL + email paths). Steps 2-7 (factor slug allocation, guardrails, persist body, configJson normalization, name-preference logic, etc.) still pending. See [FEATURES.md](./FEATURES.md) "Unified post-ingestion pipeline".
+- **Admin extract route DRY pass** — `app/api/admin/shul/[id]/extract/route.ts:215-241` still has an inline copy of the Places address-backfill logic. Same 5-line swap to call `backfillShulLocation()` we did in the URL + email paths.
 
 ### Deferred refactor (med priority)
 
-- **Same-origin URL fallback only runs in HTML tier.** JS-rendered, PDF, and Vision tiers don't try `/worship/shabbat`, `/services`, etc. The HTML tier's `extractFromUrlWithFallback` is doing real work that the other tiers would benefit from. Hoisting the fallback to cascade level is a meaningful refactor (~1 hour); the current behavior covers our test cases so this isn't urgent.
+- **Same-origin URL fallback only runs in HTML tier.** JS-rendered, PDF, and Vision tiers don't try `/worship/shabbat`, `/services`, etc. **Note:** less urgent now that the schedule-page resolver (FEATURES.md "Discovery: schedule-page resolver") routes URLs to the right page before the cascade even runs.
+- **Vision-extractor calibration** — need ~5 more real vision extractions to assess prompt quality on stylized typography.
+
+### Outstanding security cleanup (still owed)
+
+- Revoke Neon API key (`napi_0iis7jtr...`)
+- Rotate Neon DB password — paste new value into Vercel `DATABASE_URL`
+- Revoke Vercel API token (`vcp_5HB4LJ...`) — 24h scoped, will auto-expire
+- Revoke + rotate Inngest signing key (`signkey-prod-0cd76db3...`)
+- Revoke Cloudflare API token (`cfut_CS851YDvXHU8LjNC2oG...`)
+- Revoke Google API key (you didn't share it; remains untouched)
 
 ### Still pending user-side setup (not new)
 
-- **Cloudflare Email Worker deploy** — code shipped in `cloudflare-worker/`. See [`cloudflare-worker/README.md`](./cloudflare-worker/README.md) for the 8-step walkthrough (~15 min): Cloudflare Email Routing on tfila.co → wrangler login → secrets → deploy → dashboard rule wiring.
 - **Anthropic Auto-Reload + monthly cap** — recommended after the cascade work bumped per-extraction cost ~10×
-- **Inngest dashboard sync** — `nightly-version-bump` cron needs to be synced on the Inngest app so it actually fires at midnight ET
 
 ---
 
 ## Done
+
+### 2026-05-14 — Cloudflare Worker fetch proxy (anti-bot bypass) (commit `eec5202`) ✅
+
+Chabad of Windsor Terrace (`jewishwindsorterrace.org`) returned 403 from Vercel's outbound IPs even with a real Chrome UA — Chabad.org-hosted sites flag the us-east-1 AWS range. Same URLs work fine from residential IPs or Cloudflare's edge.
+
+- The existing Cloudflare Worker (already deployed for inbound email at `submit@tfila.co`) gained a sibling `fetch()` handler at `/fetch?url=<encoded>`. Bearer-auth via `FETCH_PROXY_TOKEN`. Forwards a GET with a real Chrome UA + Accept headers. Returns body verbatim with upstream status in `X-Original-Status` header.
+- `lib/scrapers/fetch.ts` extended with a third tier: branded UA → browser UA → if STILL 403/406, retry via the Cloudflare Worker. `FetchResult.fellBackToCfProxy` flag in the audit trail.
+- Worker deployed at `https://tfila-inbound-email.tfila.workers.dev` (claimed workers.dev subdomain `tfila`). `FETCH_PROXY_URL` + `FETCH_PROXY_TOKEN` in Vercel production env.
+- **Validated end-to-end**: same Windsor Terrace URL that came back as 0 rules / 403-stub previously now resolves to full 63KB schedule with extractable times.
+
+### 2026-05-14 — Shul discovery system: Places-seeded candidate queue + schedule-page resolver (commits `52158b5`, `cd1c829`, `6f75605`, `7db9325`, `6635159`) ✅
+
+End-to-end pipeline for proactively discovering shuls (vs waiting for URL/email submissions).
+
+- **Ranked target list** — `docs/discovery-targets.md` + `data/discovery-targets.json` with 88 davener-weighted geographies covering ~85% of NA daveners, ~80% of European daveners, plus 35 travel destinations (Israel, Florida, Catskills, ski, Caribbean, European heritage, Asia business hubs). Each row has center lat/lng, radius, recommended Places query variants.
+- **Migration 0005** — new tables: `shul_candidate` (place_id UNIQUE for natural dedup, raw_response_jsonb preserved, review_status enum: pending/approved/rejected/duplicate/deferred, no DELETEs — junk rows act as denylist on re-runs) and `discovery_run` (audit log per Places API call).
+- **`scripts/run-discovery.mjs`** — CLI batch runner. Idempotent on place_id.
+- **`POST /api/admin/discovery/run`** — admin-triggered Places batch query from `/admin/candidates`. Reads `GOOGLE_GEOCODING_API_KEY` server-side so no key exposure.
+- **`/admin/candidates`** — listing with status filter pills (pending/approved/rejected/duplicate/deferred), target dropdown filter, URL-presence filter (has URL / no URL / any), "Recently approved · last 24h" section showing each row's current pipeline state, Run discovery picker grouped by region+tier.
+- **`POST /api/admin/candidate/[id]/approve`** — creates shul + queues extraction. URL is **required** (Places-returned OR admin-pasted via `urlOverride` field). Dedup-merge into existing shul when domain matches. Address/location backfilled onto existing shul if it was missing. Redirects to `/admin/shul/[slug]` so admin watches extraction land.
+- **`POST /api/admin/candidate/[id]/reject`** — required reason, row preserved as denylist signal.
+- **Migration 0006/0007** — `no_url` shul status enum value added then dropped within the same session. Product decision: tfila.co only publishes shuls with live minyan times, so a row without times shouldn't exist; approve requires a URL. The one existing `no_url` row (Congregation Chevra Shas Bais Mordechai, id=61) was downgraded to `archived` during the swap.
+- **`lib/discovery/find-schedule-page.ts`** — `resolveScheduleUrl(rootUrl)` hybrid resolver: tries ~15 common schedule paths first (`/schedule`, `/times`, `/minyan`, `/davening`, `/worship/shabbat`, etc., requires keyword + time-like content match), scans root page links via cheerio for schedule keywords, falls back to Claude Haiku LLM scout that picks the best link from the homepage nav. Returns the resolved URL (or root URL with low confidence as fallback). Wired into both `/api/admin/candidate/[id]/approve` and `/api/submit` so the resolved URL replaces the root in `shul.submittedUrl` + `match_domain` + extraction event payload.
+- **Concrete win**: ShulCloud sites like `jewishwindsorterrace.org/templates/articlecco_cdo/aid/2710598/jewish/Times-and-Schedule.htm` whose schedule lives at an opaque numeric-AID URL — LLM scout picks it from the homepage nav and the cascade extracts from the right page first try.
+
+### 2026-05-14 — Pipeline parity step 1: shared address backfill (commit `6afdcbb`) ✅
+
+First slice of the FEATURES.md "Unified post-ingestion pipeline" entry. Email-derived shuls were second-class — extracted rules without `shul.address`/`shul.location` because the email path didn't call Google Places like the URL path did.
+
+- Extracted `findShulPlace()` inline usage from `build-data-source.ts` into a reusable helper `backfillShulLocation()` in `lib/geocoding.ts` (reads shul, calls Places, writes address + location if confidence ≥ 0.7).
+- `process-email.ts` now calls the same helper in a new `address-fallback` Inngest step. Uses `extraction.shulName` + the normalized `websiteUrl` (already extracted for dedup) as inputs.
+- Email-derived shuls now show up in geo queries / map view alongside URL-derived ones.
+
+### 2026-05-14 — Email-extract prompt tightening (commit `4b1fc95`) ✅
+
+Edmond J. Safra Synagogue forwarded email landed with all 12 rules marked `ad_hoc` + `validFrom=validTo=2025-05-08/09` (also wrong year — LLM defaulted to past). Two prompt corrections:
+
+1. Default to **regular weekly** rules. Only date-bound when TIMES themselves are unusual/labeled one-off (Tisha B'Av, Yom Kippur, fast days). Parsha + dates in the header are decoration, not a one-off signal.
+2. **Date handling** — for partial dates ("May 8-9" with no year), never default to a year in the past. Use upcoming occurrence or email's own date as the floor.
+
+Direct SQL fix on Safra's existing 12 rules: reshape to regular weekly with `daysOfWeek=[5]` (Friday) and `[6]` (Shabbos), `validFrom/To=NULL`.
+
+### 2026-05-14 — Logo wired (commits `f3ca054`, `f3539b8`) ✅
+
+User generated `tfila-b.png` via Gemini (drop-pin + open siddur, amber-800 on white, monotone wordmark). Built `scripts/build-logo-assets.mjs` that runs `sharp` to produce:
+- `app/icon.png` (512×512, icon-only)
+- `app/apple-icon.png` (180×180)
+- `app/opengraph-image.png` (1200×630, full logo + "Find the next minyan near you" tagline)
+- `public/favicon.ico` (32×32 PNG-as-ICO for legacy /favicon.ico clients)
+
+Next 16 auto-wires the `app/`-rooted ones via convention. `public/favicon.ico` is a static fallback. Header text wordmark (`tfila` + amber-700 `.` + `co`) deliberately kept — scales pixel-perfect at any size, zero payload cost.
+
+### 2026-05-14 — Inngest registration recovered + Vercel-Inngest integration installed ✅
+
+Email forwards were landing in Inngest but never dispatching to `processEmail` — discovered Inngest's function registry was empty. Account was under `yossikassrr@gmail.com` (primary changed to `isaac.kass@gmail.com` mid-session). After installing the Vercel-Inngest marketplace integration, manually syncing the app via dashboard (`https://tfila.co/api/inngest`), and patching `INNGEST_SIGNING_KEY` in Vercel production to match the workspace, function registration stuck and the next Safra forward dispatched + persisted (shul id=59 with 12 rules, ~$0.0125 LLM cost). Vercel auto-syncs preview deploys via the integration going forward; production may need a manual click-sync after function changes.
+
+### 2026-05-14 — Migration 0004 applied (match_domain on shul) ✅
+
+PROGRESS.md from 2026-05-13 had migration 0004 written but never applied to production Neon. Discovered when `/admin/shul/edmond-j-safra-synagogue` 500'd because Drizzle's `SELECT *` referenced a column that didn't exist in the DB. Applied via direct `pg` connection to the production Neon branch (`phase-1-migration` — the actually-default branch; the branch literally named "production" is empty in Neon's UI). `match_domain` column + index landed; all subsequent /admin/shul pages render cleanly.
+
+### 2026-05-14 — Shared-MTA dedup fix (commits `7bfa7bd`, `49e8f36`) ✅
+
+Forwarded shul emails relayed through `info@myshul.com` (a shared mailing-list service that serves many shuls) ended up with `match_domain = "myshul.com"` — the next MyShul-hosted forward would silently auto-merge into the first row regardless of which shul it was actually for. Fix keys dedup off the shul's OWN domain (LLM extracts `shulWebsite`, regex fallback over body URLs), not the sender's MTA. Post-review hardening added `normalizeWebsiteUrl()` at the boundary so LLM-hallucinated shared-MTA strings or malformed URLs can't sneak through. Full design in FEATURES.md "Deduplication" amendment section.
 
 ### 2026-05-13 — Cascade verified end-to-end on real shuls ✅
 

@@ -6,6 +6,41 @@ Day-versioned log of features, functions, and stack/code notes. Rendered in the 
 
 ---
 
+## v3 — 2026-05-14
+
+### Features
+
+- **Shul discovery system** — proactively find shuls via Google Places, triage in admin, queue extraction.
+  - **`shul_candidate` + `discovery_run` tables** (migration 0005). Place_id UNIQUE for natural dedup across re-runs; raw response preserved as JSONB; no DELETEs (rejected rows act as a denylist).
+  - **`docs/discovery-targets.md` + `data/discovery-targets.json`** — 88 davener-weighted geographies covering ~85% of NA daveners, ~80% of Europe, plus 35 travel destinations.
+  - **`/admin/candidates`** — listing with status filter pills, target dropdown, URL-presence filter (has URL / no URL / any), Run-discovery picker (~$0.10 per target, ~3 Places API calls), Recently-approved-last-24h section.
+  - **Approve flow** requires a URL — Places-returned or admin-pasted via `urlOverride` form field. tfila.co only publishes shuls with live times, so a no-URL row isn't created at all. Approve redirects to `/admin/shul/[slug]` to watch extraction.
+  - **Dedup-merge address backfill** — when a candidate's domain matches an existing shul, the existing shul's address + location get filled in from the Places data if they were null.
+- **Schedule-page resolver** (`lib/discovery/find-schedule-page.ts`) — hybrid pattern-then-LLM-scout. Given a root URL, returns the URL of the actual schedule page (e.g. resolves `jewishwindsorterrace.org` to `/templates/articlecco_cdo/aid/2710598/jewish/Times-and-Schedule.htm`). Wired into both `/api/admin/candidate/[id]/approve` and `/api/submit` so the resolved URL replaces the root in `shul.submittedUrl`.
+- **Cloudflare Worker fetch proxy** — bot-block fallback. When a site returns 403/406 to both UA attempts from Vercel, `lib/scrapers/fetch.ts` retries via the Cloudflare Worker (the same one that handles inbound email). Cloudflare edge IPs aren't typically caught by the same anti-bot rules that flag Vercel/AWS outbound. Concretely fixed Chabad.org-hosted shuls.
+- **Pipeline parity step 1**: shared `backfillShulLocation()` helper called from both URL and email submission paths. Email-derived shuls now get Google Places address backfill so they're not second-class on the geo feed.
+
+### Stack & infra
+
+- **Cloudflare Worker** now handles two responsibilities: `email()` for inbound mail at `submit@tfila.co` + `fetch()` proxy at `/fetch` (bearer-auth via `FETCH_PROXY_TOKEN`). Deployed at `https://tfila-inbound-email.tfila.workers.dev`.
+- **Inngest** now properly registered to production env. Vercel-Inngest marketplace integration installed for preview-deploy auto-sync. Production sync via the Inngest dashboard's "Sync new app" once per function-list change.
+- **Migration 0006** added `shul_status='no_url'`. **Migration 0007** dropped it in the same session (product call: shuls without times shouldn't exist as rows; approve requires a URL).
+- **Logo + brand assets shipped** — `tfila-b.png` as source, `scripts/build-logo-assets.mjs` runs sharp to produce favicon / apple-icon / og-image / legacy `favicon.ico` variants. Auto-wired via Next 16's `app/icon.png` / `app/apple-icon.png` / `app/opengraph-image.png` conventions.
+- **New env vars**: `FETCH_PROXY_URL`, `FETCH_PROXY_TOKEN`.
+
+### Fixes
+
+- **Email-extract prompt tightening** — default to *regular weekly* rules; only date-bound when times themselves are special (Tisha B'Av, fast days). Don't infer years in the past for partial dates ("May 8-9" → upcoming, not previous year).
+- **Migration 0004 applied to production Neon** — was written but never applied; `/admin/shul/*` pages were 500'ing on `SELECT *` referencing the missing `match_domain` column. Applied via direct `pg` connection to the actually-default Neon branch (`phase-1-migration`; the branch literally named "production" is empty).
+- **`normalizeWebsiteUrl()`** boundary normalization in `lib/inbound/extract-website.ts` — guards against LLM-hallucinated shared-MTA strings and malformed URLs that would have crashed `new URL()` inside the email persist transaction.
+
+### Known limitations
+
+- **Admin flow** spans multiple pages (`/admin/candidates`, `/admin/queue`, `/admin/shuls`, `/admin/shul/[slug]`, `/admin/data-source/[id]`) that were built independently. Each works in isolation; together they don't read as one coherent workflow. UX simplification deferred to next session.
+- **Pipeline parity steps 2-7** — only step 1 (address backfill) shipped. Slug allocation, broken-config guardrails, persist body, configJson normalization still duplicated across `build-data-source.ts` and `process-email.ts`.
+
+---
+
 ## v2 — 2026-05-13
 
 ### Fixes

@@ -11,27 +11,29 @@ Parking lot for ideas that are out of MVP scope but worth not losing. Anything i
 
 ## Triage (new, undecided)
 
+### Admin flow simplification (2026-05-14)
+
+Admin pipeline now spans `/admin/candidates`, `/admin/queue`, `/admin/shuls`, `/admin/shul/[slug]`, and `/admin/data-source/[id]`. Each page works in isolation but together they don't read as one coherent workflow — the candidate → shul → extraction → review → activate lifecycle isn't visible from any single page. Options: (a) unified pipeline view (one page, one row per shul, current stage + next action), (b) merge candidates into queue with stage-aware filtering, (c) keep separate but add cross-links and a top-of-page "shul in stage X — do Y next" banner. Worth ~half day of UX work; user explicitly flagged.
+
+### Auto-approve heuristic for high-confidence candidates (2026-05-14)
+
+Discovery returns 20-30 candidates per Crown-Heights-density target. Admin clicks through one by one. Many are obvious-approve: name contains "Synagogue" or known shul keyword, types include `synagogue`, has a website. Heuristic: if (types contains `synagogue`) AND (name passes a regex like `/synagogue|shul|chabad|congregation|bais|beth/i`) AND (`website_uri` present and on a non-shared domain) → auto-approve, skip admin queue. Risk: false positives on non-Orthodox shuls we don't want. Mitigate by requiring an explicit admin opt-in per target (toggle on the discovery picker).
+
+### Sub-region tiling for dense Orthodox enclaves (2026-05-14)
+
+Places Text Search v1 caps at 20 results per call. Lakewood / Boro Park / Flatbush each have hundreds of shuls. A single 2.5km query returns 20 — we're missing 80%+. Solution: sub-tile dense targets into 4 or 9 smaller bounding boxes, run each separately. Cost: 4-9× Places calls per dense target = ~$0.30-0.70 vs $0.10 currently. Worth it for the bulk of NA daveners.
+
+### Directory crawl scrapers (approach B from the discovery discussion)
+
+Once the Places-seeded pipeline (approach A) is humming, add per-source crawlers for Chabad.org/centers, OU shulfinder, Star-K kosher establishment list (kosher proxy → likely shul nearby), local Vaad sites. Each scraper drops into the same `shul_candidate` table with `source` ≠ `'google_places'`. Useful for Chassidish / non-mainstream enclaves Places misses.
+
 ### Vision-extractor confidence calibration on real shul images (2026-05-13)
 
 Vision tier (`lib/llm/extract-vision.ts`) defaults to Sonnet 4.6. **Now has one real data point**: theshul.org's `Times-Bamidbar5786.png` was extracted successfully (rules + reasonable confidence). Still pending: anash.ca/daven test + ~3-5 more vision extractions before we can assess prompt quality. Worth checking: does Sonnet over-extract from stylized typography? Does it correctly skip non-schedule images (donation flyers, banners)? Revisit prompt once we have ~5 vision extractions.
 
-### Email-inbound vendor pick (2026-05-12, **decided 2026-05-13: Option C — Cloudflare Email Routing + Workers**)
+### Cloudflare proxy may need to evolve (2026-05-14)
 
-**Decision**: Option C (free at any volume — cost-conscious bootstrap call). Code shipped in `cloudflare-worker/` directory; see [`cloudflare-worker/README.md`](./cloudflare-worker/README.md) for the end-to-end setup walkthrough.
-
-Worker has a Postmark-compatible adapter — POSTs Postmark-shaped JSON to the main app's existing `/api/inbound/email` endpoint with HTTP Basic Auth. No tfila.co code changes needed; the webhook receiver doesn't know it's talking to Cloudflare instead of Postmark.
-
-**Pending user-side setup** (~15 min one-time, see Worker README):
-1. Cloudflare Email Routing on `tfila.co` (or `inbound.tfila.co`)
-2. `npx wrangler login` + `npx wrangler secret put` for `WEBHOOK_URL` / `WEBHOOK_USER` / `WEBHOOK_PASS`
-3. Mirror `WEBHOOK_USER` / `WEBHOOK_PASS` to Vercel as `POSTMARK_INBOUND_USERNAME` / `POSTMARK_INBOUND_PASSWORD`
-4. `npx wrangler deploy`
-5. Wire the Email Routing rule `submit@tfila.co → tfila-inbound-email` in the Cloudflare dashboard
-
-**Why C over B (Postmark on tfila.co subdomain):**
-- Free at any volume (Cloudflare) vs ~$15/mo (Postmark)
-- Same end-user address (`submit@tfila.co`)
-- Cost-conscious bootstrap stage; vendor change is reversible (just turn off the Worker and configure Postmark)
+Today the proxy fires only on 403/406. Some anti-bot systems serve a 200 with a Cloudflare interstitial / JS challenge HTML body (not a 403). Our pattern matches schedule keywords + time-like content, so interstitial pages get caught by the cascade's "0 rules / low confidence" → extract_failed path — but they don't trigger the proxy retry. Future fix: heuristic to detect interstitial HTML (length < 5KB, contains "checking your browser" / "DDoS protection" / `cf-mitigated` header) and trigger proxy retry on those too.
 
 ---
 
@@ -73,3 +75,10 @@ Worker has a Postmark-compatible adapter — POSTs Postmark-shaped JSON to the m
 - Conservative/Reform-specific feature work — we accept their data via the generic pipeline but won't build for their patterns.
 - Halacha lookups + kaddish lists — out of scope (note: parsha/daf-yomi sidebar was *promoted into scope* 2026-05-11, but full Halacha browsing remains out).
 - Trademark / USPTO search — skipped per scoping.
+- `no_url` shul status — briefly added 2026-05-14 to track candidates approved without a URL, removed same session (migration 0007). Product call: tfila.co only publishes shuls with live times, so a tracking row without times shouldn't exist; approve flow requires a URL.
+
+## Built (promoted out of triage)
+
+- **Email-inbound vendor pick** (decided 2026-05-13: Cloudflare Email Routing + Workers). Worker deployed 2026-05-14 at `https://tfila-inbound-email.tfila.workers.dev`. Free at any volume. Inbound flow verified end-to-end on real shul forwards.
+- **Discovery system** (approach A from "design a scraper to find shuls" discussion). Built 2026-05-14 — see FEATURES.md "Discovery: Places-seeded candidate queue" + "Discovery: schedule-page resolver".
+- **Anti-bot fetch fallback** (Cloudflare Worker proxy). Built 2026-05-14 — see FEATURES.md "Fetch fallback via Cloudflare Worker proxy". Validated against Chabad.org-hosted sites that 403 Vercel outbound.

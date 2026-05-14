@@ -246,7 +246,115 @@ Estimated effort: 1-2 days of focused work for the full refactor (steps 1-7). St
 **Principle locked 2026-05-13:** every new feature added to either path must either (a) live in the shared pipeline, or (b) be explicitly justified as a channel-specific concern. No more silent drift.
 
 **Build order:**
-- **Now (~30 min):** Step 1 only — factor `backfillShulLocation` out and call from email path. Unblocks the Safra-style "no address" symptom.
-- **Soon (1-2 days):** Steps 2-7, the full unification.
+- ~~**Now (~30 min):** Step 1 only — factor `backfillShulLocation` out and call from email path.~~ **Shipped 2026-05-14 (commit `6afdcbb`).** Email-derived shuls now get Places address backfill alongside URL-derived ones.
+- **Soon (1-2 days):** Steps 2-7, the full unification — still pending.
 
-Until full unification ships, admin can hand-fill `shul.address` in `/admin/shul/[slug]` for email-derived shuls that need to show up in the map view.
+Two follow-ups in scope of the unification:
+- `app/api/admin/shul/[id]/extract/route.ts:215-241` still has a third inline copy of the Places-backfill logic. Same 5-line swap to call the new helper.
+- Slug allocation is duplicated in `app/api/submit/route.ts`, `process-email.ts`, and `app/api/admin/candidate/[id]/approve/route.ts`. Step 2 of the staged refactor.
+
+---
+
+## Discovery: Places-seeded candidate queue
+
+Added: 2026-05-14 · **Built 2026-05-14.**
+
+**Question:** Most shul submissions today come from a davener pasting a URL. Coverage of any given neighborhood is partial — we have whoever happened to submit. How do we proactively find shuls in dense davener-population areas?
+
+### Built solution
+
+Approach **A** of the discussion (Places-seeded discovery + admin triage) — implemented end-to-end this session.
+
+**Data sources:**
+- `docs/discovery-targets.md` — human-readable ranked list (88 geographies) with davener counts, center coordinates, radius, query variants.
+- `data/discovery-targets.json` — machine-readable mirror; runtime source of truth for the discovery script. Tier 1 / Tier 2 / Europe / Travel destinations.
+
+**Schema:** (migration 0005)
+- `shul_candidate` — messy bucket. `place_id` UNIQUE for natural dedup across re-runs. `raw_response_jsonb` preserves Google's full response. `review_status` enum: `pending` | `approved` | `rejected` | `duplicate` | `deferred`. No DELETEs — rejected rows function as a denylist on subsequent discovery runs.
+- `discovery_run` — audit log per Places API call (target, query, result count, candidates new/dup, error).
+
+**Discovery trigger:**
+- `POST /api/admin/discovery/run` — admin-clicked from a picker on `/admin/candidates`. Reads `GOOGLE_GEOCODING_API_KEY` server-side (key never leaves Vercel env). Runs ~2-3 Places Text Search queries per target (~$0.10/run).
+- `scripts/run-discovery.mjs` — CLI alternative for batch runs against a region or tier.
+
+**Admin triage flow** (`/admin/candidates`):
+- Status filter pills + target dropdown + URL-presence filter.
+- "Recently approved · last 24h" section shows each shul's current extraction state without page-hopping.
+- **Approve** requires a URL — Places-returned OR admin-pasted via the popover form's `urlOverride` field. No "approve without URL" path; tfila.co only lists shuls with live times. Approve creates the shul row + queues extraction. Redirects to `/admin/shul/[slug]` to watch extraction land.
+- **Reject** with required reason — row preserved.
+- **Dedup-merge** when candidate's domain matches an existing shul: candidate marked `duplicate`, existing shul's null `address` + `location` get backfilled from the Places candidate.
+
+### Validation
+
+First production run (Crown Heights, Brooklyn): ~30 candidates returned, ~15 approved into the extraction pipeline, ~10 rejected (chabad-house ≠ shul, Reform temple, etc.). Cost: ~$0.20.
+
+### Next iterations
+
+- Auto-approve heuristic for high-confidence candidates (`types` contains `synagogue` + Places name fuzzy-matches an Orthodox keyword) to reduce per-candidate clicking.
+- Sub-region tiling — for very dense areas (Boro Park, Lakewood), single 2.5km radius hits the Places 20-result cap. Split into 2x2 or 3x3 sub-bounding-boxes.
+- Directory crawl scrapers (approach B from the original discussion) as a complement — Chabad.org's centers directory, OU shulfinder, local Vaad lists. Drop into same `shul_candidate` table with `source` ≠ `'google_places'`.
+
+---
+
+## Discovery: schedule-page resolver
+
+Added: 2026-05-14 · **Built 2026-05-14.**
+
+**Question:** Google Places returns a shul's root URL (e.g. `jewishwindsorterrace.org`), but the actual minyan schedule lives on a sub-page — often opaque (`/templates/articlecco_cdo/aid/2710598/jewish/Times-and-Schedule.htm` on ShulCloud-hosted sites). Submitting the root URL to the extraction cascade misses the schedule entirely.
+
+### Built solution
+
+`lib/discovery/find-schedule-page.ts` → `resolveScheduleUrl(rootUrl)`. **Hybrid strategy** with three fallback tiers; returns a resolved URL + confidence + via-tier audit. Called from both `/api/admin/candidate/[id]/approve` and `/api/submit` so all URL-entry-points resolve once before persisting.
+
+1. **Pattern try** — fetch ~15 common schedule paths (`/schedule`, `/times`, `/minyan`, `/davening`, `/worship/shabbat`, `/tefilla`, `/shabbos`, etc.) with HEAD-then-GET; require the page to contain schedule keywords **AND** time-like strings, so a generic `/services` about-page doesn't false-positive. Free.
+2. **Page link scan** — cheerio-parse the root page; scan same-origin links where text OR href matches the schedule keyword regex. Free.
+3. **LLM scout** — sample up to 80 same-origin links from the root page, hand them to Claude Haiku 4.5 with a focused prompt ("which link is most likely the minyan schedule?"). Model returns the chosen href; validated against the offered list (no hallucinated URLs accepted). ~$0.005/call. Only fires when tiers 1+2 miss.
+4. **Fallback** — return the input URL with confidence 0.4 so the cascade still runs against the root.
+
+Short-circuit: if the input URL already has a meaningful path (admin pasted a specific URL), pass through unchanged with `via='root', confidence=1`.
+
+### Outcomes
+
+- **Resolved URL replaces root** in `shul.submittedUrl` + `match_domain` + `data_source.identifier` + the Inngest extraction event. Weekly rescrape re-targets the schedule URL directly.
+- ShulCloud `aid` paths, Chabad.org templates, custom CMS URLs all handleable.
+
+### Cost note
+
+~$0.005/shul one-time during discovery/submission for the LLM-scout fallback. Most shuls hit on pattern/link-scan and never burn the LLM.
+
+---
+
+## Fetch fallback via Cloudflare Worker proxy
+
+Added: 2026-05-14 · **Built 2026-05-14.**
+
+**Question:** Some shul sites block scrapers by IP range, not User-Agent. Chabad.org-hosted shuls return 403 to Vercel's us-east-1 outbound even with a real Chrome UA. Same URLs work fine from residential IPs or Cloudflare's edge. How do we get past this without per-site hacks?
+
+### Built solution
+
+The Cloudflare Worker we already run for inbound email gained a sibling `fetch()` handler at `/fetch?url=<encoded>`. Bearer-token authenticated (`FETCH_PROXY_TOKEN`). Forwards GETs through Cloudflare's edge IPs with a real browser UA + Accept headers. Returns the body verbatim with upstream status in `X-Original-Status` response header.
+
+`lib/scrapers/fetch.ts` extends the existing UA fallback chain by one tier:
+
+```
+1. branded UA  (Tfila-Bot)              ← polite default
+2. browser UA  (Chrome)                  ← runs only on 403/406
+3. /fetch proxy via Cloudflare Worker    ← runs only when (2) is also 403/406
+                                            AND FETCH_PROXY_URL is set
+```
+
+`FetchResult.fellBackToCfProxy` flag in the audit trail surfaces when this happened.
+
+### Validation
+
+Concrete win: `jewishwindsorterrace.org/templates/articlecco_cdo/aid/2710598/jewish/Times-and-Schedule.htm` returned 403 / 5KB stub from Vercel, returns 200 / 63KB schedule via the proxy. After deploying, the cascade extracts the visible minyanim cleanly.
+
+### Cost
+
+~free — Cloudflare Workers free tier covers any volume we'll hit. The proxy only fires on 403/406, so most fetches don't add a hop.
+
+### Trade-offs
+
+- **Open-relay risk**: mitigated by bearer-token auth + optional `HOST_ALLOWLIST` in the Worker. Don't share the token.
+- **Latency**: adds one Cloudflare round-trip when proxy fires (~200ms). Acceptable because it only fires on otherwise-failed fetches.
+- **Anti-bot evolution**: if Cloudflare's IPs get blocked next, this stops working. Mitigation paths: Browserless residential proxy (paid), per-CMS scraper (e.g. Chabad API).
