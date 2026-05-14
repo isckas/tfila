@@ -2,13 +2,22 @@ import Link from "next/link";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul, shulCandidate } from "@/db/schema";
+import targetsJson from "@/data/discovery-targets.json";
 
 export const dynamic = "force-dynamic";
+
+const ALL_TARGETS = (targetsJson as { targets: Array<{ name: string; region: string; tier: number }> }).targets;
 
 interface PageProps {
   searchParams: Promise<{
     status?: string;
     target?: string;
+    // Result banner params from POST /api/admin/discovery/run
+    ran?: string;
+    new?: string;
+    dup?: string;
+    queries?: string;
+    errors?: string;
   }>;
 }
 
@@ -105,6 +114,86 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
         shul + queues extraction. Reject removes from the queue but keeps
         the row so re-runs skip it.
       </p>
+
+      {/* Banner after a discovery run */}
+      {sp.ran && (
+        <div className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
+          Number(sp.errors ?? "0") > 0
+            ? "border-amber-300 bg-amber-50 text-amber-900"
+            : "border-emerald-300 bg-emerald-50 text-emerald-900"
+        }`}>
+          ✓ Ran discovery for <strong>{sp.ran}</strong>:{" "}
+          {sp.new} new, {sp.dup} duplicate, {sp.queries} queries
+          {Number(sp.errors ?? "0") > 0 && ` · ${sp.errors} errored`}.
+          New candidates will appear below under <code>pending</code>.
+        </div>
+      )}
+
+      {/* Run discovery picker */}
+      <section className="mt-4 rounded-xl border border-neutral-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-neutral-700">
+          Run discovery
+        </h2>
+        <p className="mt-1 text-xs text-neutral-500">
+          Hits Google Places Text Search for the picked target. ~3
+          queries per target, ~$0.10 per run. Idempotent on{" "}
+          <code>place_id</code> — re-running re-finds existing candidates
+          without creating duplicates.
+        </p>
+        <form
+          method="post"
+          action="/api/admin/discovery/run"
+          className="mt-3 flex flex-wrap items-center gap-2 text-sm"
+        >
+          <select
+            name="target"
+            defaultValue=""
+            required
+            className="min-w-[260px] rounded border border-neutral-300 px-2 py-1.5 text-sm"
+          >
+            <option value="" disabled>
+              — pick a target —
+            </option>
+            <optgroup label="North America (Tier 1)">
+              {ALL_TARGETS.filter((t) => t.region === "north_america" && t.tier === 1).map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="North America (Tier 2)">
+              {ALL_TARGETS.filter((t) => t.region === "north_america" && t.tier === 2).map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Europe">
+              {ALL_TARGETS.filter((t) => t.region === "europe").map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Travel destinations">
+              {ALL_TARGETS.filter((t) => t.region === "travel").map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+          <button
+            type="submit"
+            className="rounded bg-amber-800 px-4 py-1.5 text-sm font-medium text-white hover:bg-amber-900"
+          >
+            Run
+          </button>
+          <span className="text-xs text-neutral-500">
+            Takes ~10-20 seconds.
+          </span>
+        </form>
+      </section>
 
       {/* Status filter pills */}
       <div className="mt-5 flex flex-wrap gap-2 text-sm">
