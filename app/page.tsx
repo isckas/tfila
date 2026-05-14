@@ -2,7 +2,6 @@ import Link from "next/link";
 import Image from "next/image";
 import {
   getNearbyShulsWithRules,
-  countByShulStatus,
   listShulsForLookup,
 } from "@/lib/queries";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
@@ -47,30 +46,30 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   // ─── No location yet: three-card landing ─────────────────────
   if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
-    const [counts, lookupShuls] = await Promise.all([
-      countByShulStatus(),
-      listShulsForLookup(),
-    ]);
-    const total = counts.reduce((s, c) => s + Number(c.n), 0);
+    const lookupShuls = await listShulsForLookup();
 
     return (
       <main className="mx-auto max-w-5xl px-4 py-8 sm:py-12">
         <header className="mb-4 sm:mb-6">
           <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm sm:p-8">
             <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6">
+              {/* Full logo (pin + "tfila.co" wordmark). Sized so the
+                  tagline next to it stays the visual anchor. Aspect
+                  ratio is ~512x721 (taller than wide because of the
+                  wordmark) — set width and let height auto-scale. */}
               <Image
-                src="/tfila-icon.png"
+                src="/tfila-full.png"
                 alt="tfila.co"
                 width={512}
-                height={512}
+                height={721}
                 priority
-                className="h-20 w-20 shrink-0 sm:h-28 sm:w-28"
+                className="h-auto w-24 shrink-0 sm:w-32"
               />
               <div className="text-left">
-                <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 sm:text-3xl">
+                <h1 className="text-2xl font-bold tracking-tight text-neutral-900 sm:text-3xl">
                   Minyan times that don&apos;t go stale.
                 </h1>
-                <p className="mt-2 text-sm text-neutral-700 sm:text-base">
+                <p className="mt-2 text-sm text-neutral-600">
                   Every Jewish shul directory has the same problem &mdash;
                   times posted years ago, never updated. tfila.co reads
                   each shul&apos;s own website and weekly email bulletin,
@@ -106,10 +105,7 @@ export default async function HomePage({ searchParams }: PageProps) {
           <AddCard />
         </section>
 
-        <footer className="mt-10 flex flex-wrap items-baseline justify-between gap-3 text-xs text-neutral-500">
-          <span>
-            {total} shul{total === 1 ? "" : "s"} indexed
-          </span>
+        <footer className="mt-10 flex flex-wrap items-baseline justify-end gap-3 text-xs text-neutral-500">
           <Link href="/bot" className="underline-offset-2 hover:underline">
             About
           </Link>

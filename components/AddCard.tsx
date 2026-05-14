@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 const INBOUND_ADDRESS = "submit@tfila.co";
 
 /**
@@ -70,13 +68,6 @@ export function AddCard() {
         One-time setup. Every weekly bulletin reaches us automatically;
         we update the times and skip duplicates.
       </p>
-
-      <Link
-        href="/submit"
-        className="mt-auto pt-3 text-xs text-amber-800 underline-offset-2 hover:underline"
-      >
-        How to subscribe submit@tfila.co →
-      </Link>
     </div>
   );
 }

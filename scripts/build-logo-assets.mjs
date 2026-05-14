@@ -127,6 +127,16 @@ async function main() {
   // rel="icon">), so it can't be referenced as /icon.png directly —
   // we need this static copy under /public for the page to import.
   await buildIconOnly(512, "public/tfila-icon.png");
+  // public/tfila-full.png is the full logo (pin + "tfila.co" wordmark
+  // underneath) — used by the home-page hero card so the wordmark is
+  // visible without needing live text. Trim whitespace, resize to 512
+  // on the longest side keeping aspect ratio.
+  await sharp(SOURCE)
+    .trim({ background: "#ffffff", threshold: 10 })
+    .resize({ width: 512, fit: "inside", withoutEnlargement: false })
+    .png({ compressionLevel: 9 })
+    .toFile("public/tfila-full.png");
+  console.log(`✓ public/tfila-full.png (full logo with wordmark)`);
   await buildOgImage("app/opengraph-image.png");
   await buildLegacyFavicon("public/favicon.ico");
 
