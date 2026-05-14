@@ -39,11 +39,19 @@ export async function GET(req: Request): Promise<NextResponse> {
   }
 
   // ─── 2. Location geocode fallback ───────────────────────────
+  // ?via=address marks this as a typed-address search (vs the
+  // browser-geolocation path that hits /?lat=&lng= directly). The
+  // home page widens the default radius to 25 mi and sorts by
+  // distance instead of time. See FEATURES.md "Home-page address
+  // search" for the design.
   try {
     const r = await geocode(q);
     if (r) {
       return NextResponse.redirect(
-        new URL(`/?lat=${r.lat}&lng=${r.lng}`, req.url),
+        new URL(
+          `/?lat=${r.lat}&lng=${r.lng}&via=address&q=${encodeURIComponent(q)}`,
+          req.url,
+        ),
         303,
       );
     }

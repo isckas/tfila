@@ -13,14 +13,24 @@ import { AddCard } from "@/components/AddCard";
 import { ResumeBanner } from "@/components/ResumeBanner";
 import { FeedHeader } from "@/components/FeedHeader";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
+import {
+  MinyanListByShul,
+  type ShulGroup,
+} from "@/components/MinyanListByShul";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
 
 export const dynamic = "force-dynamic";
 
+// Walking-default radius for the "Use my location" path.
 const DEFAULT_RADIUS_MILES = 2;
+// Address-search radius. Typed-address intent is usually a traveler /
+// new-in-town / planning-by-car — see FEATURES.md "Home-page address
+// search". Triggered by ?via=address marker emitted by /api/search.
+const ADDRESS_SEARCH_RADIUS_MILES = 25;
 const PAST_WINDOW_MIN = 30;
 const FUTURE_WINDOW_MIN = 24 * 60;
 const MAX_ITEMS = 25;
+const MAX_MINYANIM_PER_SHUL = 2;
 const MILES_TO_METERS = 1609.344;
 
 interface PageProps {
@@ -31,6 +41,7 @@ interface PageProps {
     radius?: string;
     err?: string;
     q?: string;
+    via?: string;
   }>;
 }
 
@@ -38,7 +49,11 @@ export default async function HomePage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const lat = sp.lat ? Number(sp.lat) : null;
   const lng = sp.lng ? Number(sp.lng) : null;
-  const radiusMiles = sp.radius ? Number(sp.radius) : DEFAULT_RADIUS_MILES;
+  const isAddressSearch = sp.via === "address";
+  const defaultRadius = isAddressSearch
+    ? ADDRESS_SEARCH_RADIUS_MILES
+    : DEFAULT_RADIUS_MILES;
+  const radiusMiles = sp.radius ? Number(sp.radius) : defaultRadius;
   const radiusMeters = Math.max(
     50,
     Math.min(50_000, radiusMiles * MILES_TO_METERS),
@@ -156,13 +171,44 @@ export default async function HomePage({ searchParams }: PageProps) {
       notes: r.notes,
     });
   }
+  // Sort by start time first — for address-search, this also gives each
+  // shul's earliest-upcoming minyanim when we take the top N per shul below.
   resolved.sort((a, b) => a.startIso.localeCompare(b.startIso));
+
+  // Address-search branch: per-shul grouping + distance-sort. The
+  // walking-default flat list still gets the time-sort + slice below.
+  let shulGroups: ShulGroup[] | null = null;
+  if (isAddressSearch) {
+    const byShul = new Map<number, ShulGroup>();
+    for (const r of resolved) {
+      let g = byShul.get(r.shulId);
+      if (!g) {
+        g = {
+          shulId: r.shulId,
+          shulSlug: r.shulSlug,
+          shulName: r.shulName,
+          address: r.address,
+          distanceMeters: r.distanceMeters,
+          minyanim: [],
+        };
+        byShul.set(r.shulId, g);
+      }
+      if (g.minyanim.length < MAX_MINYANIM_PER_SHUL) {
+        g.minyanim.push(r);
+      }
+    }
+    shulGroups = Array.from(byShul.values())
+      .sort((a, b) => a.distanceMeters - b.distanceMeters)
+      .slice(0, MAX_ITEMS);
+  }
+
   const trimmed = resolved.slice(0, MAX_ITEMS);
 
   const userTz =
     Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
   const stripSnapshot = computeZmanimStrip({ lat, lng, timezone: userTz }, now);
   const placeName = await reverseGeocode(lat, lng).catch(() => null);
+  const addressLabel = sp.q?.trim() || placeName;
 
   return (
     <main className="mx-auto max-w-2xl px-4 pb-8">
@@ -178,14 +224,35 @@ export default async function HomePage({ searchParams }: PageProps) {
 
       {/* Minyanim feed */}
       <section className="mt-5">
-        <h2 className="mb-2 text-sm font-medium text-neutral-700">
-          Next minyanim ({trimmed.length}
-          {resolved.length > trimmed.length && ` of ${resolved.length}`})
-          <span className="ml-1 text-xs font-normal text-neutral-400">
-            within {radiusMiles} mi
-          </span>
-        </h2>
-        <MinyanList items={trimmed} serverNowMs={now.getTime()} />
+        {shulGroups ? (
+          shulGroups.length > 0 ? (
+            <>
+              <h2 className="mb-2 text-sm font-medium text-neutral-700">
+                Shuls near you ({shulGroups.length}
+                {byShulCount(resolved) > shulGroups.length &&
+                  ` of ${byShulCount(resolved)}`}
+                )
+                <span className="ml-1 text-xs font-normal text-neutral-400">
+                  within {radiusMiles} mi · nearest first
+                </span>
+              </h2>
+              <MinyanListByShul groups={shulGroups} />
+            </>
+          ) : (
+            <EmptyAddressSearch addressLabel={addressLabel} radiusMiles={radiusMiles} />
+          )
+        ) : (
+          <>
+            <h2 className="mb-2 text-sm font-medium text-neutral-700">
+              Next minyanim ({trimmed.length}
+              {resolved.length > trimmed.length && ` of ${resolved.length}`})
+              <span className="ml-1 text-xs font-normal text-neutral-400">
+                within {radiusMiles} mi
+              </span>
+            </h2>
+            <MinyanList items={trimmed} serverNowMs={now.getTime()} />
+          </>
+        )}
       </section>
 
       <footer className="mt-10 text-center text-xs text-neutral-500">
@@ -194,5 +261,38 @@ export default async function HomePage({ searchParams }: PageProps) {
         </Link>
       </footer>
     </main>
+  );
+}
+
+function byShulCount(rules: ResolvedMinyan[]): number {
+  const seen = new Set<number>();
+  for (const r of rules) seen.add(r.shulId);
+  return seen.size;
+}
+
+function EmptyAddressSearch({
+  addressLabel,
+  radiusMiles,
+}: {
+  addressLabel: string | null;
+  radiusMiles: number;
+}) {
+  const where = addressLabel ? ` of ${addressLabel}` : "";
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-6 text-sm text-neutral-700">
+      <div className="font-medium text-neutral-900">
+        No minyanim within {radiusMiles} mi{where}.
+      </div>
+      <p className="mt-2 text-neutral-600">
+        Know a shul in this area? Help us list it — we&apos;ll keep its tfila
+        times fresh from its own website or weekly bulletin.
+      </p>
+      <Link
+        href="/submit"
+        className="mt-3 inline-block rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+      >
+        Add a shul
+      </Link>
+    </div>
   );
 }
