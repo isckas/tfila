@@ -14,6 +14,7 @@ interface PageProps {
     resource?: string;
     address?: string;
     split?: string;
+    notes?: string;
   }>;
 }
 
@@ -141,6 +142,54 @@ export default async function AdminShulDetailPage({
           {decodeURIComponent(sp.err)}
         </div>
       )}
+      {sp.notes === "saved" && (
+        <div className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          ✓ Notes saved.
+        </div>
+      )}
+
+      {/* ─── Admin notes (free-text scratchpad) ──────────────── */}
+      <section className="mt-6">
+        <h2 className="mb-2 text-sm font-medium text-neutral-700">Notes</h2>
+        <form
+          method="post"
+          action={`/api/admin/shul/${s.id}/notes`}
+          className="rounded-xl border border-neutral-200 bg-white p-4"
+        >
+          <textarea
+            name="notes"
+            rows={5}
+            defaultValue={s.adminNotes ?? ""}
+            placeholder="Anything an admin should know about this shul (history, contact quirks, why approved despite X, etc.). Never shown publicly."
+            className="block w-full resize-y rounded border border-neutral-300 px-2.5 py-1.5 text-sm leading-relaxed focus:border-neutral-500 focus:outline-none"
+          />
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+            <span className="text-neutral-500">
+              {s.adminNotesUpdatedAt ? (
+                <>
+                  Last edited by{" "}
+                  <span className="font-medium text-neutral-700">
+                    {s.adminNotesUpdatedBy ?? "unknown"}
+                  </span>{" "}
+                  ·{" "}
+                  {new Date(s.adminNotesUpdatedAt).toLocaleString([], {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </>
+              ) : (
+                <span className="italic">No notes yet.</span>
+              )}
+            </span>
+            <button
+              type="submit"
+              className="rounded bg-neutral-900 px-3 py-1.5 font-medium text-white hover:bg-neutral-800"
+            >
+              Save notes
+            </button>
+          </div>
+        </form>
+      </section>
 
       {/* Verbose cascade-attempt breakdown when the latest extraction failed */}
       {(() => {

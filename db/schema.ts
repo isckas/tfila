@@ -114,6 +114,13 @@ export const shul = pgTable(
     // shared-hosting false positive).
     matchDomain: varchar("match_domain", { length: 253 }),
     status: shulStatusEnum("status").default("pending_review").notNull(),
+    // Admin scratchpad — free text. Never rendered publicly. See
+    // FEATURES.md "Admin notes per shul" + migration 0008.
+    adminNotes: text("admin_notes"),
+    adminNotesUpdatedBy: text("admin_notes_updated_by"),
+    adminNotesUpdatedAt: timestamp("admin_notes_updated_at", {
+      withTimezone: true,
+    }),
     submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
