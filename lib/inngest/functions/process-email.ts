@@ -23,6 +23,8 @@ import { extractFromEmail } from "../../llm/extract-email";
 import { slugify, nameFromTitle, allocateUniqueSlug } from "../../slug";
 import { matchDomainOf } from "../../dedup";
 import { backfillShulLocation } from "../../geocoding";
+import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
+import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
 import {
   extractCanonicalWebsiteFromEmail,
   isSharedMtaDomain,
@@ -305,6 +307,70 @@ async function persistFromEmail(args: PersistArgs) {
       (r) => r.specialScheduleKind && r.specialScheduleKind !== "regular",
     );
 
+    // Guardrails — only on the same-identifier refresh path. A bad-week
+    // email (low confidence or a sharp regular-rule drop) holds the
+    // previous rules and flips the data_source to pending review, instead
+    // of silently wiping them. URL rescrapes have done this since day one
+    // (scrape-one-shul.ts); email path was missing it before this PR.
+    if (existing[0]) {
+      const prevRegularCount = await tx
+        .select({ n: sql<number>`COUNT(*)::int` })
+        .from(minyanRule)
+        .where(
+          and(
+            eq(minyanRule.dataSourceId, dataSourceId),
+            eq(minyanRule.specialScheduleKind, "regular"),
+            isNull(minyanRule.deletedAt),
+          ),
+        )
+        .then((rows) => rows[0]?.n ?? 0);
+
+      const verdict = evaluateExtractionGuardrails({
+        prevRuleCount: prevRegularCount,
+        newRuleCount: regularRules.length,
+        newConfidence: args.extracted.extraction.confidence,
+      });
+
+      if (verdict.shouldFlagBroken) {
+        const prevConfig = (existing[0].configJson as object | null) ?? {};
+        await tx
+          .update(dataSource)
+          .set({
+            lastRunAt: now,
+            lastReceivedAt: now,
+            lastRunStatus: "broken",
+            reviewStatus: "pending",
+            confidenceScore: args.extracted.extraction.confidence,
+            updatedAt: now,
+            configJson: {
+              ...prevConfig,
+              last_rejected_extraction: {
+                at: now.toISOString(),
+                model: args.extracted.model,
+                confidence: args.extracted.extraction.confidence,
+                reasoning: args.extracted.extraction.reasoning,
+                regular_rules_count: regularRules.length,
+                previous_regular_rules_count: prevRegularCount,
+                reason: verdict.reason,
+              },
+            },
+          })
+          .where(eq(dataSource.id, dataSourceId));
+
+        return {
+          isNewShul,
+          shulId,
+          dataSourceId,
+          regularRulesAdded: 0,
+          specialRulesAdded: 0,
+          confidence: args.extracted.extraction.confidence,
+          model: args.extracted.model,
+          broken: true,
+          brokenReason: verdict.reason,
+        };
+      }
+    }
+
     if (regularRules.length > 0) {
       await tx
         .update(minyanRule)
@@ -319,24 +385,12 @@ async function persistFromEmail(args: PersistArgs) {
     }
 
     for (const r of [...regularRules, ...specialRules]) {
-      const time: MinyanTime =
-        r.time.kind === "fixed"
-          ? { kind: "fixed", clock: r.time.clock }
-          : { kind: "zmanim", anchor: r.time.anchor, offsetMin: r.time.offsetMin };
-      await tx.insert(minyanRule).values({
+      await insertRuleFromExtraction(tx, {
         shulId,
         dataSourceId,
-        tefillah: r.tefillah,
-        tefillahLabel: r.tefillahLabel ?? null,
-        daysOfWeek: r.daysOfWeek ?? null,
-        time: serializeMinyanTime(time),
-        validFrom: r.validFrom ?? null,
-        validTo: r.validTo ?? null,
-        specialScheduleKind: r.specialScheduleKind ?? "regular",
-        priority: r.specialScheduleKind && r.specialScheduleKind !== "regular" ? 10 : 0,
-        nusach: r.nusach ?? null,
-        notes: r.notes ?? null,
-        lastSeenInScrapeAt: now,
+        rule: r,
+        lastSeenAt: now,
+        bumpSpecialPriority: true,
       });
     }
 

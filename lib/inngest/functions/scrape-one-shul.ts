@@ -12,25 +12,12 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
-import {
-  dataSource,
-  minyanRule,
-  scrapeRun,
-  shul,
-  serializeMinyanTime,
-  type MinyanTime,
-} from "../../../db/schema";
+import { dataSource, minyanRule, scrapeRun, shul } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
 import { extractFromHtml } from "../../llm/extract";
 import { runCascade } from "../../llm/cascade";
-
-// If the new extraction produces fewer than this fraction of the
-// previous rule count (and we had at least 3 rules before), treat it
-// as a broken extraction rather than silently replacing rules.
-const BROKEN_DROP_THRESHOLD = 0.5;
-
-// Confidence below this → don't auto-apply changes either.
-const MIN_AUTO_APPLY_CONFIDENCE = 0.6;
+import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
+import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
 
 export const scrapeOneShul = inngest.createFunction(
   {
@@ -182,12 +169,13 @@ export const scrapeOneShul = inngest.createFunction(
     });
 
     const newCount = extracted.extraction.rules.length;
-    const confidenceTooLow =
-      extracted.extraction.confidence < MIN_AUTO_APPLY_CONFIDENCE;
-    const ruleDropSuspicious =
-      prevCount >= 3 && newCount < prevCount * BROKEN_DROP_THRESHOLD;
+    const verdict = evaluateExtractionGuardrails({
+      prevRuleCount: prevCount,
+      newRuleCount: newCount,
+      newConfidence: extracted.extraction.confidence,
+    });
 
-    if (confidenceTooLow || ruleDropSuspicious || newCount === 0) {
+    if (verdict.shouldFlagBroken) {
       // Don't auto-apply. Mark broken, flag for review, keep old rules
       // in place so daveners see the previous schedule until reviewed.
       await step.run("mark-broken", async () => {
@@ -200,7 +188,7 @@ export const scrapeOneShul = inngest.createFunction(
           rulesAdded: 0,
           rulesRemoved: 0,
           rulesChanged: 0,
-          error: brokenReason(confidenceTooLow, ruleDropSuspicious, newCount, prevCount, extracted.extraction.confidence),
+          error: verdict.reason ?? "broken",
         });
         await db
           .update(dataSource)
@@ -251,29 +239,11 @@ export const scrapeOneShul = inngest.createFunction(
       // Insert the new rules
       let inserted = 0;
       for (const r of extracted.extraction.rules) {
-        const time: MinyanTime =
-          r.time.kind === "fixed"
-            ? { kind: "fixed", clock: r.time.clock }
-            : {
-                kind: "zmanim",
-                anchor: r.time.anchor,
-                offsetMin: r.time.offsetMin,
-              };
-
-        await db.insert(minyanRule).values({
+        await insertRuleFromExtraction(db, {
           shulId,
           dataSourceId,
-          tefillah: r.tefillah,
-          tefillahLabel: r.tefillahLabel ?? null,
-          daysOfWeek: r.daysOfWeek ?? null,
-          time: serializeMinyanTime(time),
-          validFrom: r.validFrom ?? null,
-          validTo: r.validTo ?? null,
-          specialScheduleKind: r.specialScheduleKind,
-          priority: 0,
-          nusach: r.nusach ?? null,
-          notes: r.notes ?? null,
-          lastSeenInScrapeAt: now,
+          rule: r,
+          lastSeenAt: now,
         });
         inserted++;
       }
@@ -330,25 +300,6 @@ export const scrapeOneShul = inngest.createFunction(
     };
   },
 );
-
-function brokenReason(
-  lowConfidence: boolean,
-  drop: boolean,
-  newCount: number,
-  prevCount: number,
-  confidence: number,
-): string {
-  const parts: string[] = [];
-  if (lowConfidence)
-    parts.push(`confidence ${confidence.toFixed(2)} < ${MIN_AUTO_APPLY_CONFIDENCE}`);
-  if (drop)
-    parts.push(
-      `rule count dropped from ${prevCount} → ${newCount} (>${(1 - BROKEN_DROP_THRESHOLD) * 100}% drop)`,
-    );
-  if (newCount === 0 && prevCount > 0)
-    parts.push(`new extraction produced 0 rules (previous: ${prevCount})`);
-  return parts.join("; ") || "broken (unknown reason)";
-}
 
 /**
  * Re-scrape path for non-HTML strategies (js_rendered, pdf_document,
@@ -411,12 +362,13 @@ async function rescrapeNonHtml(args: {
     .then((rows) => rows[0]?.n ?? 0);
 
   const newCount = cascade.extraction.rules.length;
-  const confidenceTooLow =
-    cascade.extraction.confidence < MIN_AUTO_APPLY_CONFIDENCE;
-  const ruleDropSuspicious =
-    prevCount >= 3 && newCount < prevCount * BROKEN_DROP_THRESHOLD;
+  const verdict = evaluateExtractionGuardrails({
+    prevRuleCount: prevCount,
+    newRuleCount: newCount,
+    newConfidence: cascade.extraction.confidence,
+  });
 
-  if (confidenceTooLow || ruleDropSuspicious || newCount === 0) {
+  if (verdict.shouldFlagBroken) {
     await db.insert(scrapeRun).values({
       shulId: args.shulId,
       dataSourceId: args.dataSourceId,
@@ -426,13 +378,7 @@ async function rescrapeNonHtml(args: {
       rulesAdded: 0,
       rulesRemoved: 0,
       rulesChanged: 0,
-      error: brokenReason(
-        confidenceTooLow,
-        ruleDropSuspicious,
-        newCount,
-        prevCount,
-        cascade.extraction.confidence,
-      ),
+      error: verdict.reason ?? "broken",
     });
     await db
       .update(dataSource)
@@ -467,24 +413,11 @@ async function rescrapeNonHtml(args: {
 
   let inserted = 0;
   for (const r of cascade.extraction.rules) {
-    const time: MinyanTime =
-      r.time.kind === "fixed"
-        ? { kind: "fixed", clock: r.time.clock }
-        : { kind: "zmanim", anchor: r.time.anchor, offsetMin: r.time.offsetMin };
-    await db.insert(minyanRule).values({
+    await insertRuleFromExtraction(db, {
       shulId: args.shulId,
       dataSourceId: args.dataSourceId,
-      tefillah: r.tefillah,
-      tefillahLabel: r.tefillahLabel ?? null,
-      daysOfWeek: r.daysOfWeek ?? null,
-      time: serializeMinyanTime(time),
-      validFrom: r.validFrom ?? null,
-      validTo: r.validTo ?? null,
-      specialScheduleKind: r.specialScheduleKind,
-      priority: 0,
-      nusach: r.nusach ?? null,
-      notes: r.notes ?? null,
-      lastSeenInScrapeAt: now,
+      rule: r,
+      lastSeenAt: now,
     });
     inserted++;
   }

@@ -1,16 +1,11 @@
 import { NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import {
-  dataSource,
-  minyanRule,
-  shul,
-  serializeMinyanTime,
-  type MinyanTime,
-} from "@/db/schema";
+import { dataSource, shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { runCascade } from "@/lib/llm/cascade";
 import { backfillShulLocation } from "@/lib/geocoding";
+import { insertRuleFromExtraction } from "@/lib/pipeline/persist-submission";
 
 /**
  * Trigger an immediate (inline, synchronous) extraction cascade for
@@ -169,25 +164,13 @@ export async function POST(
       })
       .returning({ id: dataSource.id });
 
+    const lastSeenAt = new Date();
     for (const r of extraction.rules) {
-      const time: MinyanTime =
-        r.time.kind === "fixed"
-          ? { kind: "fixed", clock: r.time.clock }
-          : { kind: "zmanim", anchor: r.time.anchor, offsetMin: r.time.offsetMin };
-      await tx.insert(minyanRule).values({
+      await insertRuleFromExtraction(tx, {
         shulId: s.id,
         dataSourceId: ds.id,
-        tefillah: r.tefillah,
-        tefillahLabel: r.tefillahLabel ?? null,
-        daysOfWeek: r.daysOfWeek ?? null,
-        time: serializeMinyanTime(time),
-        validFrom: r.validFrom ?? null,
-        validTo: r.validTo ?? null,
-        specialScheduleKind: r.specialScheduleKind,
-        priority: 0,
-        nusach: r.nusach ?? null,
-        notes: r.notes ?? null,
-        lastSeenInScrapeAt: new Date(),
+        rule: r,
+        lastSeenAt,
       });
     }
 

@@ -1,15 +1,10 @@
 import { eq, sql } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
-import {
-  dataSource,
-  minyanRule,
-  shul,
-  serializeMinyanTime,
-  type MinyanTime,
-} from "../../../db/schema";
+import { dataSource, shul } from "../../../db/schema";
 import { runCascade, type CascadeResult } from "../../llm/cascade";
 import { backfillShulLocation } from "../../geocoding";
+import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
 
 function hostOfUrl(url: string): string {
   try {
@@ -191,25 +186,13 @@ async function persistCascade(args: PersistArgs): Promise<{
     const dataSourceId = inserted.id;
 
     let rulesInserted = 0;
+    const lastSeenAt = new Date();
     for (const r of extraction.rules) {
-      const time: MinyanTime =
-        r.time.kind === "fixed"
-          ? { kind: "fixed", clock: r.time.clock }
-          : { kind: "zmanim", anchor: r.time.anchor, offsetMin: r.time.offsetMin };
-      await tx.insert(minyanRule).values({
+      await insertRuleFromExtraction(tx, {
         shulId: args.shulId,
         dataSourceId,
-        tefillah: r.tefillah,
-        tefillahLabel: r.tefillahLabel ?? null,
-        daysOfWeek: r.daysOfWeek ?? null,
-        time: serializeMinyanTime(time),
-        validFrom: r.validFrom ?? null,
-        validTo: r.validTo ?? null,
-        specialScheduleKind: r.specialScheduleKind,
-        priority: 0,
-        nusach: r.nusach ?? null,
-        notes: r.notes ?? null,
-        lastSeenInScrapeAt: new Date(),
+        rule: r,
+        lastSeenAt,
       });
       rulesInserted++;
     }
