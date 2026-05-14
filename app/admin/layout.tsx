@@ -25,6 +25,9 @@ export default async function AdminLayout({
             <Link href="/admin/shuls" className="text-neutral-600 hover:text-neutral-900">
               All shuls
             </Link>
+            <Link href="/admin/candidates" className="text-neutral-600 hover:text-neutral-900">
+              Candidates
+            </Link>
             <Link href="/admin/changelog" className="text-neutral-600 hover:text-neutral-900">
               Changelog
             </Link>

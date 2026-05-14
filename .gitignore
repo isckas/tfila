@@ -45,6 +45,8 @@ next-env.d.ts
 # scraper data
 /data/*.json
 !/data/.gitkeep
+# Configuration files that live under /data/ but ARE source-of-truth:
+!/data/discovery-targets.json
 
 # Claude Code per-session permission cache (personal to each developer)
 .claude/settings.local.json

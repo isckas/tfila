@@ -7,6 +7,7 @@ import {
   integer,
   smallint,
   real,
+  doublePrecision,
   timestamp,
   date,
   jsonb,
@@ -280,3 +281,56 @@ export function serializeMinyanTime(t: MinyanTime): object {
 
 // Reference the existing `sql` import for raw SQL needs.
 export { sql };
+
+// ─── shul_candidate ──────────────────────────────────────────────────────
+// Messy bucket of Google-Places-returned candidates pending admin triage.
+// Once approved, an entry creates a real shul row + queues extraction via
+// the existing data-source.requested pipeline. Junk stays here forever
+// with review_status='rejected' so re-runs filter it out automatically.
+export const shulCandidate = pgTable(
+  "shul_candidate",
+  {
+    id: serial("id").primaryKey(),
+    placeId: varchar("place_id", { length: 128 }).notNull().unique(),
+    name: text("name").notNull(),
+    formattedAddress: text("formatted_address"),
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    websiteUri: text("website_uri"),
+    // Postgres text[] — Drizzle treats as array of strings.
+    types: text("types").array(),
+    source: text("source").notNull(),
+    sourceDetail: text("source_detail"),
+    discoveryTargetName: text("discovery_target_name"),
+    rawResponseJsonb: jsonb("raw_response_jsonb").notNull(),
+    reviewStatus: text("review_status").notNull().default("pending"),
+    reviewReason: text("review_reason"),
+    linkedShulId: integer("linked_shul_id"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedBy: text("reviewed_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("shul_candidate_review_idx").on(t.reviewStatus),
+    index("shul_candidate_target_idx").on(t.discoveryTargetName),
+  ],
+);
+
+// ─── discovery_run ───────────────────────────────────────────────────────
+// Audit log: one row per Places API call. Lets us attribute candidates
+// back to a specific query and monitor cost over time.
+export const discoveryRun = pgTable("discovery_run", {
+  id: serial("id").primaryKey(),
+  targetName: text("target_name").notNull(),
+  queryText: text("query_text").notNull(),
+  centerLat: doublePrecision("center_lat").notNull(),
+  centerLng: doublePrecision("center_lng").notNull(),
+  radiusM: integer("radius_m").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  resultCount: integer("result_count"),
+  candidatesNew: integer("candidates_new"),
+  candidatesDup: integer("candidates_dup"),
+  error: text("error"),
+});
