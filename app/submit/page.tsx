@@ -4,7 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Submit your shul",
   description:
-    "Add your shul to tfila.co. Submit a URL once, or just forward your shul's weekly email — we'll do the rest.",
+    "Add your shul to tfila.co. Paste the URL of your schedule page, or subscribe submit@tfila.co to your shul's mailing list.",
 };
 
 interface PageProps {
@@ -71,17 +71,21 @@ export default async function SubmitPage({ searchParams }: PageProps) {
       {/* ─── Option 1: URL submission ──────────────────────────────── */}
       <section className="mt-8 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-neutral-900">
-          1. Submit a URL
+          1. Submit your schedule-page URL
         </h2>
         <p className="mt-1 text-sm text-neutral-600">
-          Drop in the URL of your shul&apos;s website (or schedule page).
-          We&apos;ll fetch it and extract the minyan times.
+          The page where the calendar / minyan times actually live —{" "}
+          <strong>not the homepage</strong>. For example,{" "}
+          <code>your-shul.org/schedule</code> or{" "}
+          <code>your-shul.org/davening-times</code>. We&apos;ll find it
+          if you paste a homepage, but submitting the direct URL works
+          more reliably.
         </p>
 
         <form method="post" action="/api/submit" className="mt-5 space-y-4">
           <label className="block">
             <span className="text-sm font-medium text-neutral-800">
-              Shul website URL
+              Schedule page URL
             </span>
             <input
               type="url"
@@ -115,21 +119,21 @@ export default async function SubmitPage({ searchParams }: PageProps) {
         </form>
       </section>
 
-      {/* ─── Option 2: Forward an email ───────────────────────────── */}
+      {/* ─── Option 2: Subscribe to the mailing list ──────────────── */}
       <section className="mt-6 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-neutral-900">
-          2. Or, forward your shul&apos;s weekly email
+          2. Or, subscribe us to your shul&apos;s mailing list
         </h2>
         <p className="mt-1 text-sm text-neutral-600">
-          You already get the weekly bulletin in your inbox.{" "}
-          <strong>Forward it once</strong>, and we&apos;ll learn your shul plus
-          extract the schedule. Forward again next week and we&apos;ll just
-          update — same shul, no duplicate.
+          One-time setup. Add the address below as a subscriber on
+          your shul&apos;s weekly-newsletter list. Every bulletin
+          reaches us automatically; we update the times and skip
+          duplicates. Nothing else for you to do.
         </p>
 
         <div className="mt-5 rounded-lg bg-amber-50 px-4 py-3 ring-1 ring-amber-200">
           <div className="text-xs uppercase tracking-wide text-amber-900">
-            Forward to
+            Add this address to the mailing list
           </div>
           <div className="mt-1 font-mono text-base font-semibold text-amber-950 select-all">
             {INBOUND_ADDRESS}
@@ -138,43 +142,42 @@ export default async function SubmitPage({ searchParams }: PageProps) {
 
         <details className="mt-5 text-sm">
           <summary className="cursor-pointer font-medium text-neutral-800">
-            Hate forwarding every week? Set up an auto-forward (one-time, 2 min)
+            Don&apos;t know how to subscribe? Quick guide
           </summary>
-          <div className="mt-3 space-y-3 text-neutral-700">
-            <div>
-              <p className="font-medium text-neutral-900">Gmail</p>
-              <ol className="ml-5 mt-1 list-decimal space-y-0.5 text-xs text-neutral-700">
-                <li>Settings (gear) → See all settings</li>
-                <li>Filters and Blocked Addresses → Create a new filter</li>
-                <li>
-                  In <strong>From</strong>: enter your shul&apos;s sender (e.g.{" "}
-                  <code>@yourshul.org</code>) → Create filter
-                </li>
-                <li>
-                  Check <strong>Forward it to</strong>:
-                  <code className="ml-1">{INBOUND_ADDRESS}</code>
-                </li>
-              </ol>
-            </div>
-            <div>
-              <p className="font-medium text-neutral-900">Outlook / Hotmail</p>
-              <ol className="ml-5 mt-1 list-decimal space-y-0.5 text-xs text-neutral-700">
-                <li>Settings → Mail → Rules → Add new rule</li>
-                <li>
-                  Condition: From contains <code>@yourshul.org</code>
-                </li>
-                <li>
-                  Action: Forward to <code>{INBOUND_ADDRESS}</code>
-                </li>
-              </ol>
-            </div>
+          <div className="mt-3 space-y-3 text-sm text-neutral-700">
+            <p>
+              Most shul mailing lists have a public signup form on the
+              shul&apos;s website &mdash; usually a &ldquo;Subscribe&rdquo; or
+              &ldquo;Newsletter&rdquo; link in the footer.
+            </p>
+            <ol className="ml-5 list-decimal space-y-1 text-sm">
+              <li>
+                Find your shul&apos;s newsletter signup. Common spots:
+                footer link, sidebar widget, or a separate /subscribe page.
+              </li>
+              <li>
+                Enter <code className="font-mono">{INBOUND_ADDRESS}</code>{" "}
+                as the email address. Name can be{" "}
+                <em>&ldquo;tfila.co indexer&rdquo;</em> or anything;
+                doesn&apos;t matter.
+              </li>
+              <li>
+                Confirm any double-opt-in email if the list sends one
+                &mdash; we&apos;ll see it and auto-confirm.
+              </li>
+            </ol>
+            <p className="text-xs text-neutral-500">
+              No public signup form? Ask your gabbai to add us, or
+              forward us a single bulletin via the URL option above
+              while you sort the subscription out.
+            </p>
           </div>
         </details>
 
         <p className="mt-5 text-xs text-neutral-500">
-          We extract the original sender from your forwarded email&apos;s
-          headers. Future emails forwarded from the same original sender go to
-          the same shul — even if a different person does the forwarding.
+          The shul&apos;s mailing-list address becomes our source of
+          record. Future bulletins from the same sender keep updating
+          the same shul &mdash; no duplicate entries.
         </p>
       </section>
 

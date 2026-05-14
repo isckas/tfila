@@ -3,11 +3,13 @@ import Link from "next/link";
 const INBOUND_ADDRESS = "submit@tfila.co";
 
 /**
- * "Add a shul" card on the home landing. Embeds both submission
- * paths — a URL input + Submit button (POSTs straight to /api/submit
- * via a plain HTML form, no client JS), and the email-forward
- * address shown inline. /submit is reserved for the optional
- * auto-forward setup walkthrough.
+ * "Add a shul" card on the home landing. Two paths:
+ *   1. URL submission — paste the URL of the shul's schedule page.
+ *      POSTs straight to /api/submit; no client JS.
+ *   2. Mailing-list subscription — add submit@tfila.co to the shul's
+ *      weekly newsletter list. One-time setup; bulletins flow in
+ *      automatically. Replaces the older "forward your weekly email"
+ *      framing (asking daveners to forward every week was too much).
  *
  * Server component — there's no interactive state.
  */
@@ -25,12 +27,15 @@ export function AddCard() {
       </p>
 
       {/* URL submission — straight to /api/submit */}
-      <form method="post" action="/api/submit" className="flex gap-1.5">
+      <label className="text-xs font-medium text-neutral-700">
+        Schedule page URL
+      </label>
+      <form method="post" action="/api/submit" className="mt-1 flex gap-1.5">
         <input
           type="url"
           name="url"
           required
-          placeholder="https://your-shul.org"
+          placeholder="https://your-shul.org/schedule"
           className="w-full rounded border border-neutral-300 px-2.5 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
         />
         <button
@@ -40,16 +45,21 @@ export function AddCard() {
           Submit
         </button>
       </form>
+      <p className="mt-1.5 text-xs text-neutral-500">
+        The page where the calendar / minyan times live — not the
+        homepage. We&apos;ll find it if you paste the homepage, but
+        the schedule-page URL works better.
+      </p>
 
       <div className="my-3 flex items-center gap-2 text-[10px] uppercase tracking-wide text-neutral-400">
         <span className="h-px flex-1 bg-neutral-200" />
-        or forward an email
+        or get the weekly email
         <span className="h-px flex-1 bg-neutral-200" />
       </div>
 
       <div className="rounded-lg bg-amber-50 px-3 py-2 ring-1 ring-amber-200">
         <div className="text-[10px] uppercase tracking-wide text-amber-900">
-          Forward your shul&apos;s weekly bulletin to
+          Add this address to your shul&apos;s mailing list
         </div>
         <div className="mt-0.5 select-all font-mono text-sm font-semibold text-amber-950">
           {INBOUND_ADDRESS}
@@ -57,15 +67,15 @@ export function AddCard() {
       </div>
 
       <p className="mt-3 text-xs text-neutral-500">
-        Forward once and we&apos;ll learn your shul. Forward again next week
-        and we&apos;ll update — no duplicates.
+        One-time setup. Every weekly bulletin reaches us automatically;
+        we update the times and skip duplicates.
       </p>
 
       <Link
         href="/submit"
         className="mt-auto pt-3 text-xs text-amber-800 underline-offset-2 hover:underline"
       >
-        Set up auto-forward (one-time, 2 min) →
+        How to subscribe submit@tfila.co →
       </Link>
     </div>
   );

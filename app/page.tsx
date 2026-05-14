@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import {
   getNearbyShulsWithRules,
   countByShulStatus,
@@ -54,10 +55,24 @@ export default async function HomePage({ searchParams }: PageProps) {
 
     return (
       <main className="mx-auto max-w-5xl px-4 py-8 sm:py-12">
-        <header className="mb-8 sm:mb-10">
-          <h1 className="text-4xl font-semibold tracking-tight text-neutral-900 sm:text-5xl">
-            tfila<span className="text-amber-700">.</span>co
+        <header className="mb-8 flex flex-col items-center text-center sm:mb-10">
+          <Image
+            src="/tfila-icon.png"
+            alt="tfila.co"
+            width={512}
+            height={512}
+            priority
+            className="h-24 w-24 sm:h-28 sm:w-28"
+          />
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-neutral-900 sm:text-4xl">
+            Minyan times that don&apos;t go stale.
           </h1>
+          <p className="mx-auto mt-3 max-w-2xl text-sm text-neutral-700 sm:text-base">
+            Every Jewish shul directory has the same problem &mdash; times
+            posted years ago, never updated. tfila.co reads each shul&apos;s
+            own website and weekly email bulletin, refreshes every Saturday
+            night, and shows you what the shul actually has now.
+          </p>
         </header>
 
         <ResumeBanner />

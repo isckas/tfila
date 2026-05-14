@@ -122,6 +122,11 @@ async function main() {
 
   await buildIconOnly(512, "app/icon.png");
   await buildIconOnly(180, "app/apple-icon.png");
+  // public/tfila-icon.png is the in-page <Image> source for the home
+  // hero. app/icon.png is special (Next 16 transforms it into <link
+  // rel="icon">), so it can't be referenced as /icon.png directly —
+  // we need this static copy under /public for the page to import.
+  await buildIconOnly(512, "public/tfila-icon.png");
   await buildOgImage("app/opengraph-image.png");
   await buildLegacyFavicon("public/favicon.ico");
 
