@@ -63,7 +63,7 @@ export default async function HomePage({ searchParams }: PageProps) {
                 width={512}
                 height={721}
                 priority
-                className="h-auto w-24 shrink-0 sm:w-32"
+                className="h-auto w-12 shrink-0 sm:w-16"
               />
               <div className="text-left">
                 <h1 className="text-2xl font-bold tracking-tight text-neutral-900 sm:text-3xl">
