@@ -1,17 +1,23 @@
-// tfila-inbound-email — Cloudflare Email Worker
+// tfila-inbound-email — Cloudflare Worker
 //
-// Receives mail at submit@tfila.co (wired via the Cloudflare
-// Email Routing dashboard, NOT in this code). Parses the raw RFC 822
-// message with postal-mime, then POSTs a Postmark-compatible JSON
-// payload to tfila.co's existing /api/inbound/email endpoint.
+// Two responsibilities:
 //
-// Why Postmark-shaped? The webhook receiver on tfila.co was originally
-// designed against Postmark's inbound payload format. Keeping the
-// Worker speak that shape means the tfila.co side has zero Cloudflare-
-// specific code; we could swap back to Postmark later by just turning
-// off the Worker.
+// 1. Inbound email (email() handler): receives mail at submit@tfila.co
+//    via Cloudflare Email Routing, parses with postal-mime, POSTs a
+//    Postmark-shaped payload to tfila.co's /api/inbound/email.
 //
-// Setup: see README.md (DNS / Email Routing / wrangler secrets / rules).
+// 2. Fetch proxy (fetch() handler): GET /fetch?url=<encoded> proxies
+//    an HTTP fetch through Cloudflare's edge IPs. Used as a fallback
+//    by tfila.co's extraction scrapers when the origin site blocks
+//    Vercel's outbound IP range (anti-bot on Chabad.org-hosted sites
+//    is the concrete trigger). Authenticated with FETCH_PROXY_TOKEN
+//    so the proxy isn't an open relay for arbitrary outbound.
+//
+// Why Postmark-shaped (for email)? See history — the tfila.co side
+// was originally built against Postmark; the Worker speaks that
+// shape so swapping vendors is a config change, not code.
+//
+// Setup: see README.md.
 
 import PostalMime from "postal-mime";
 
@@ -22,7 +28,22 @@ export interface Env {
    *  POSTMARK_INBOUND_USERNAME / POSTMARK_INBOUND_PASSWORD. */
   WEBHOOK_USER: string;
   WEBHOOK_PASS: string;
+  /** Bearer token for the /fetch proxy endpoint, mirrored to Vercel
+   *  as FETCH_PROXY_TOKEN. Without this, /fetch returns 401. */
+  FETCH_PROXY_TOKEN: string;
 }
+
+// Hosts we'll proxy. Empty array = no allowlist (proxy any host) —
+// fine as long as FETCH_PROXY_TOKEN stays secret. Populate this with
+// specific suffixes if you ever want a hard guardrail against the
+// proxy being repurposed for non-tfila scraping.
+const HOST_ALLOWLIST: string[] = [];
+
+// Realistic browser UA. Some anti-bot systems still block well-known
+// crawler UAs even on residential ASNs; using a desktop Chrome string
+// matches the path most likely to succeed.
+const BROWSER_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 interface PostmarkShapedPayload {
   From: string;
@@ -86,5 +107,116 @@ export default {
         `Webhook returned HTTP ${res.status}: ${errBody.slice(0, 200)}`,
       );
     }
+  },
+
+  /**
+   * HTTP fetch proxy. Used by tfila.co scrapers when the origin site
+   * blocks Vercel's outbound IPs (e.g. Chabad.org anti-bot).
+   *
+   *   GET /fetch?url=<urlencoded URL>
+   *   Authorization: Bearer <FETCH_PROXY_TOKEN>
+   *
+   * Returns the upstream body verbatim, with these response headers:
+   *   - X-Original-Status: upstream HTTP status code (numeric)
+   *   - X-Original-Url: final URL after redirects
+   *   - Content-Type: copied from upstream when present
+   *
+   * Errors return JSON `{ error: string }` with appropriate status.
+   * No CORS — this is meant for server-to-server use only.
+   */
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Health check / open at root so wrangler tail / curl can sanity-check.
+    if (url.pathname === "/") {
+      return new Response("tfila worker — POST email handler + GET /fetch proxy");
+    }
+
+    if (url.pathname !== "/fetch") {
+      return new Response("not found", { status: 404 });
+    }
+
+    if (request.method !== "GET") {
+      return new Response("method not allowed", {
+        status: 405,
+        headers: { Allow: "GET" },
+      });
+    }
+
+    // Auth
+    const auth = request.headers.get("Authorization") ?? "";
+    const expected = `Bearer ${env.FETCH_PROXY_TOKEN}`;
+    if (!env.FETCH_PROXY_TOKEN || auth !== expected) {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+
+    // Target URL
+    const targetRaw = url.searchParams.get("url");
+    if (!targetRaw) {
+      return Response.json({ error: "missing url query param" }, { status: 400 });
+    }
+    let target: URL;
+    try {
+      target = new URL(targetRaw);
+    } catch {
+      return Response.json({ error: "invalid url" }, { status: 400 });
+    }
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      return Response.json({ error: "only http(s) urls" }, { status: 400 });
+    }
+    if (HOST_ALLOWLIST.length > 0) {
+      const ok = HOST_ALLOWLIST.some((suffix) =>
+        target.hostname === suffix || target.hostname.endsWith("." + suffix),
+      );
+      if (!ok) {
+        return Response.json({ error: "host not allowlisted" }, { status: 403 });
+      }
+    }
+
+    // Forward. 12s ceiling — Cloudflare's default is generous but we
+    // want a tight cap so a hung upstream doesn't tie up a Worker
+    // invocation indefinitely.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12_000);
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(target.toString(), {
+        method: "GET",
+        headers: {
+          "User-Agent": BROWSER_UA,
+          // Mirror what a real browser sends; some anti-bot systems
+          // 403 requests missing Accept/Accept-Language entirely.
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const msg = e instanceof Error ? e.message : String(e);
+      return Response.json(
+        { error: "upstream fetch failed", detail: msg.slice(0, 300) },
+        { status: 502 },
+      );
+    }
+    clearTimeout(timeoutId);
+
+    const body = await upstream.arrayBuffer();
+    const headers = new Headers();
+    headers.set("X-Original-Status", String(upstream.status));
+    headers.set("X-Original-Url", upstream.url);
+    const ct = upstream.headers.get("Content-Type");
+    if (ct) headers.set("Content-Type", ct);
+
+    return new Response(body, {
+      // Always return 200 to the caller — actual upstream status is in
+      // X-Original-Status. This makes the caller's error handling simpler
+      // (a 5xx from us means the proxy itself broke, not the target).
+      status: 200,
+      headers,
+    });
   },
 };

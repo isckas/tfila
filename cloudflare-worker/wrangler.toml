@@ -4,22 +4,31 @@ compatibility_date = "2025-09-15"
 # `nodejs_compat` lets us use Buffer/etc. if needed by postal-mime.
 compatibility_flags = ["nodejs_compat"]
 
-# This Worker is invoked ONLY via Cloudflare Email Routing — it has no
-# HTTP routes. Suppress wrangler's default workers.dev subdomain step.
-workers_dev = false
+# This Worker now handles TWO things:
+# 1. Inbound email at submit@tfila.co (via Cloudflare Email Routing —
+#    wired in the CF dashboard, not here)
+# 2. HTTP fetch proxy at /fetch (called by tfila.co scrapers as a
+#    bot-block fallback)
+#
+# Setting workers_dev=true exposes the Worker at:
+#   tfila-inbound-email.<your-cf-subdomain>.workers.dev
+# That's the URL Vercel uses to call /fetch. Set FETCH_PROXY_URL in
+# Vercel env to the workers.dev URL + /fetch.
+workers_dev = true
 
 # Account ID is set by the user via `wrangler login` or env var
 # CLOUDFLARE_ACCOUNT_ID. We deliberately do NOT hardcode it.
 
 # Email Routing wiring happens in the Cloudflare dashboard, not here.
-# This Worker just exposes an `email()` handler; the dashboard rule
-# `submit@tfila.co → send to a Worker → tfila-inbound-email`
-# is what actually routes mail to it. See README.md.
+# This Worker exposes both an `email()` handler (for routing) and a
+# `fetch()` handler (for the proxy). See README.md.
 
 # Vars + secrets (set via `wrangler secret put <name>`):
 # - WEBHOOK_URL: e.g. "https://tfila.co/api/inbound/email"
 # - WEBHOOK_USER, WEBHOOK_PASS: HTTP Basic Auth credentials shared
 #   with Vercel's POSTMARK_INBOUND_USERNAME / POSTMARK_INBOUND_PASSWORD.
+# - FETCH_PROXY_TOKEN: bearer token for the /fetch endpoint, mirrored
+#   to Vercel as FETCH_PROXY_TOKEN. Generate any random string ≥32 chars.
 
 [observability]
 enabled = true

@@ -1,8 +1,11 @@
-# tfila inbound-email Cloudflare Worker
+# tfila Cloudflare Worker
 
-Receives mail sent to `submit@tfila.co`, parses it, and forwards a Postmark-shaped JSON payload to the main app at `https://tfila.co/api/inbound/email`. Free at any volume — replaces the originally-planned Postmark setup.
+A Cloudflare Worker that handles two tfila.co concerns from Cloudflare's edge:
 
-This Worker is **standalone**: it has its own `package.json`, its own `wrangler.toml`, and deploys independently. The main app (in the parent directory) does not depend on it and is not affected when the Worker is updated.
+1. **Inbound email** (`email()` handler): receives mail at `submit@tfila.co` via Cloudflare Email Routing, parses with postal-mime, forwards a Postmark-shaped JSON payload to `/api/inbound/email`. Free at any volume.
+2. **Fetch proxy** (`fetch()` handler at `/fetch`): server-to-server HTTP proxy that the main app's scrapers call as a fallback when an origin site blocks Vercel's outbound IPs (e.g. Chabad.org-hosted sites that anti-bot us-east-1 AWS ranges). Cloudflare's edge IPs aren't typically caught by the same blocks. Authenticated via bearer token.
+
+This Worker is **standalone**: it has its own `package.json`, its own `wrangler.toml`, and deploys independently. The main app (in the parent directory) calls into it but isn't tightly coupled — turning the Worker off degrades gracefully (fetches just stop at the browser-UA attempt instead of getting a proxy retry).
 
 ---
 
@@ -152,3 +155,79 @@ Compare to Postmark: ~$15/month at any volume that includes inbound parsing.
 
 - **Reject obvious spam / non-bulletins** in the Worker before paying for an LLM call. Right now we forward everything. A 3-line check (subject keywords, sender domain blocklist) could save ~10% of LLM costs.
 - **Forward parsing errors to an admin address** via Cloudflare's "send to a destination" action as a fallback, so bounces don't silently disappear.
+
+---
+
+## Fetch proxy — setup + usage
+
+The `fetch()` handler at `/fetch` lets the main app's scrapers bypass anti-bot blocks that target Vercel's outbound IPs (Chabad.org's CMS is the concrete case — returns 403 to AWS us-east-1 IPs even with a real browser UA, but answers fine from Cloudflare edge).
+
+### 1. Generate a bearer token
+
+```bash
+FETCH_PROXY_TOKEN="$(openssl rand -hex 32)"
+echo "FETCH_PROXY_TOKEN=$FETCH_PROXY_TOKEN"
+```
+
+Same value goes into the Worker (as a wrangler secret) AND into Vercel (so the main app knows what to send).
+
+### 2. Add the secret to the Worker + redeploy
+
+```bash
+cd cloudflare-worker
+echo "$FETCH_PROXY_TOKEN" | npx wrangler secret put FETCH_PROXY_TOKEN
+npx wrangler deploy
+```
+
+After deploy, the Worker is reachable at:
+
+```
+https://tfila-inbound-email.<your-cf-subdomain>.workers.dev
+```
+
+The `<your-cf-subdomain>` is shown in wrangler's deploy output and in the Cloudflare dashboard → Workers & Pages → tfila-inbound-email. Note it.
+
+### 3. Mirror env to Vercel
+
+```bash
+vercel env add FETCH_PROXY_URL production
+# paste: https://tfila-inbound-email.<your-cf-subdomain>.workers.dev/fetch
+
+vercel env add FETCH_PROXY_TOKEN production
+# paste: the same value you used in step 1
+```
+
+Or via Vercel dashboard → Settings → Environment Variables → Production. Then redeploy.
+
+### 4. Verify
+
+After the Vercel redeploy promotes:
+
+```bash
+# Quick sanity check — should return 200 with the Worker's hello message
+curl -sS "https://tfila-inbound-email.<your-cf-subdomain>.workers.dev/"
+
+# Auth check — should return 401 without a token
+curl -sS "https://tfila-inbound-email.<your-cf-subdomain>.workers.dev/fetch?url=https://example.com"
+```
+
+The first scraper invocation that hits a 403/406 will automatically retry via the proxy. The `data_source.configJson.cascade_attempts[].fellBackToCfProxy` flag records when this happens (visible on the admin shul page).
+
+### How it works at runtime
+
+`lib/scrapers/fetch.ts` extends the existing UA-fallback chain by one step:
+
+```
+1. branded UA  (Tfila-Bot)              ← polite default
+2. browser UA  (Chrome)                  ← runs only on 403/406
+3. /fetch proxy via Cloudflare Worker    ← runs only when (2) is also 403/406 AND
+                                            FETCH_PROXY_URL is set
+```
+
+When step 3 fires, the Worker forwards the request from Cloudflare's edge with a real browser UA + Accept headers. The response body comes back to Vercel; status is in the `X-Original-Status` response header. The main app treats the result identically to a direct fetch.
+
+### Security
+
+- The proxy is **bearer-token authenticated**. Don't share the token. Rotate via `wrangler secret put FETCH_PROXY_TOKEN` if it leaks.
+- The Worker forwards GET only; no POST, no header pass-through. The caller can't send cookies, auth tokens, or POST bodies through the proxy.
+- `HOST_ALLOWLIST` in `src/index.ts` is empty by default (proxy any host). Populate with specific suffixes (`["chabad.org", "shulcloud.com"]`) for a hard guardrail.
