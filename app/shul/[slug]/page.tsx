@@ -399,11 +399,11 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </section>
       )}
 
-      {/* ─── Verify Schedule source ─────────────────────────── */}
+      {/* ─── Verify Schedule Source ─────────────────────────── */}
       {shul.submittedUrl && (
         <section className="mt-8">
           <h2 className="mb-1 text-sm font-medium text-neutral-700">
-            Verify Schedule source
+            Verify Schedule Source
           </h2>
           <p className="text-xs text-neutral-600">
             Times above are extracted from the shul&apos;s own schedule page,
