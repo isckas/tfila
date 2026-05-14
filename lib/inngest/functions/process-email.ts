@@ -20,7 +20,7 @@ import {
   type MinyanTime,
 } from "../../../db/schema";
 import { extractFromEmail } from "../../llm/extract-email";
-import { slugify, nameFromTitle } from "../../slug";
+import { slugify, nameFromTitle, allocateUniqueSlug } from "../../slug";
 import { matchDomainOf } from "../../dedup";
 import { backfillShulLocation } from "../../geocoding";
 import {
@@ -249,16 +249,7 @@ async function persistFromEmail(args: PersistArgs) {
           originalSenderEmail;
 
         const baseSlug = slugify(detectedName) || slugify(originalSenderEmail);
-        let candidateSlug = baseSlug;
-        for (let n = 2; n < 100; n++) {
-          const collision = await tx
-            .select({ id: shul.id })
-            .from(shul)
-            .where(eq(shul.slug, candidateSlug))
-            .limit(1);
-          if (!collision[0]) break;
-          candidateSlug = `${baseSlug}-${n}`;
-        }
+        const candidateSlug = await allocateUniqueSlug(tx, baseSlug);
 
         const [insertedShul] = await tx
           .insert(shul)

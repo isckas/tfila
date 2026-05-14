@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul, dataSource } from "@/db/schema";
-import { slugify, nameFromTitle } from "@/lib/slug";
+import { slugify, nameFromTitle, allocateUniqueSlug } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
 import { notifyAdmin } from "@/lib/email";
 import { matchDomainOf } from "@/lib/dedup";
@@ -113,16 +113,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       parsed.hostname.replace(/^www\./, "");
     const baseSlug =
       slugify(placeholderName) || slugify(parsed.hostname) || "shul";
-    let candidateSlug = baseSlug;
-    for (let n = 2; n < 100; n++) {
-      const collision = await db
-        .select({ id: shul.id })
-        .from(shul)
-        .where(eq(shul.slug, candidateSlug))
-        .limit(1);
-      if (!collision[0]) break;
-      candidateSlug = `${baseSlug}-${n}`;
-    }
+    const candidateSlug = await allocateUniqueSlug(db, baseSlug);
 
     const [newShul] = await db
       .insert(shul)

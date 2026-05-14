@@ -19,7 +19,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul, shulCandidate } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
-import { slugify } from "@/lib/slug";
+import { slugify, allocateUniqueSlug } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
 import { matchDomainOf } from "@/lib/dedup";
 import { resolveScheduleUrl } from "@/lib/discovery/find-schedule-page";
@@ -175,16 +175,7 @@ export async function POST(
       slugify(c.name) ||
       (effectiveUrl ? slugify(new URL(effectiveUrl).hostname) : null) ||
       `candidate-${candidateId}`;
-    let candidateSlug = baseSlug;
-    for (let n = 2; n < 100; n++) {
-      const collision = await tx
-        .select({ id: shul.id })
-        .from(shul)
-        .where(eq(shul.slug, candidateSlug))
-        .limit(1);
-      if (!collision[0]) break;
-      candidateSlug = `${baseSlug}-${n}`;
-    }
+    const candidateSlug = await allocateUniqueSlug(tx, baseSlug);
 
     // ─── Create the shul row. URL is guaranteed present (early return
     // above if not), so status = pending_review and extraction will
