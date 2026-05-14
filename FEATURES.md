@@ -358,3 +358,68 @@ Concrete win: `jewishwindsorterrace.org/templates/articlecco_cdo/aid/2710598/jew
 - **Open-relay risk**: mitigated by bearer-token auth + optional `HOST_ALLOWLIST` in the Worker. Don't share the token.
 - **Latency**: adds one Cloudflare round-trip when proxy fires (~200ms). Acceptable because it only fires on otherwise-failed fetches.
 - **Anti-bot evolution**: if Cloudflare's IPs get blocked next, this stops working. Mitigation paths: Browserless residential proxy (paid), per-CMS scraper (e.g. Chabad API).
+
+---
+
+## No stale data: only list shuls with fresh verified tfila times
+
+Added: 2026-05-14 · **Principle locked. Backend implementation TBD.**
+
+**The rule.** A shul is only visible to public daveners (home-page feed, fuzzy search, `/shul/[slug]` page, `/find` results) when we have **active, verified tfila times** for it. No active times → not listed. Period.
+
+This is the product's central promise. The whole reason tfila.co exists is that every existing Jewish-shul directory rots: times posted years ago, never updated, davener shows up late. We are the one that doesn't. Listing a shul without fresh times — even a shul we know is real, even a shul we have an address for — quietly betrays that promise. A user who hits one stale entry on tfila.co loses trust in everything else they see here.
+
+### What "active, verified" should mean (open)
+
+The principle is locked. The exact backend predicate isn't yet. Candidate definitions:
+
+- **Minimal:** shul has `status='active'` AND at least one `data_source` with `review_status='approved'` AND at least one `minyan_rule` where `deleted_at IS NULL`.
+- **Stricter:** the above, AND the data source's `last_run_status='ok'`, AND `last_received_at` (or `last_run_at` for URL-derived) is within the last ~14 days. Anything older flips the shul out of the public list.
+- **Strictest:** the above, AND no admin flag indicating the rules are under review.
+
+The right answer depends on how aggressive we want the "freshness" gate to be. A shul whose website briefly broke last week shouldn't disappear from search — we should still serve our last-known-good rules for a grace period. But a shul whose website has been broken for two months shouldn't keep listing 2-month-old times as if they were authoritative.
+
+### What "not listed" means (open)
+
+Three possible scopes, increasingly strict:
+
+- **A.** Hidden from the home-page feed and fuzzy search only. Direct `/shul/[slug]` URLs still resolve (with a "data not currently available" banner).
+- **B.** All public surfaces (feed, search, slug page) return as if the shul doesn't exist publicly. Slug-page URL 404s or redirects.
+- **C.** Same as B, with an explicit "this shul exists but tfila.co doesn't have current times — if you have its weekly bulletin, please forward it to submit@tfila.co" page at the slug, so the URL is still indexable and serves a useful action.
+
+C is probably the right call — preserves SEO value of the slug, gives daveners a way to help us restore the listing, doesn't pretend the shul doesn't exist.
+
+### Already-partial behavior
+
+Some pieces of this are already in place; the principle just makes the rule explicit and forces us to extend it everywhere.
+
+- **`/api/submit`** never publishes a freshly-submitted shul publicly. New shuls land as `status='pending_review'`, hidden from the feed until extraction succeeds AND an admin approves the rules.
+- **`status='broken' / 'archived' / 'unsupported'`** shuls are already excluded from the public feed via the `status='active'` filter that every public query applies.
+- **`status='no_url'` was added and removed** in the same session (migrations 0006 → 0007). Product call codified there: a shul without an extractable URL doesn't get a row at all. That's a stricter version of this same principle, applied at row-creation time.
+- **Weekly rescrape guardrails** already prevent silently wiping a shul's rules when a re-scrape returns suspiciously bad data (rule-count drops > 50%, or new confidence < 0.6) — those cases hold the previous-known-good rules and flag the data_source for admin review instead.
+
+What's missing is the **time-since-last-verified gate**. Today an `active` shul stays `active` even if our last successful scrape was 6 months ago. The cron is supposed to keep this fresh, but a paused cron, a long-running broken site, or an Inngest outage could let staleness creep in undetected.
+
+### Open implementation questions
+
+1. **Where does the gate live?** Two reasonable architectures:
+   - **At query time** — every public query joins / filters on a "last verified within N days" predicate. Most flexible (we can tune N without a migration), but adds a CPU/index cost on every page load.
+   - **In a stored status** — a background job re-evaluates each shul's freshness on a schedule and flips `status` to `stale` (new enum value) when it crosses the threshold. Cheap reads, slightly more complex write/migration story.
+
+2. **What's the threshold?** 7 days? 14? Variable per source type (emails refresh weekly, websites can hold over a missed cycle)?
+
+3. **How do shuls recover from stale?** Admin click → manual extract → if successful, flips back to active automatically. This already works via the existing "Extract now" action; the new status just needs to participate cleanly.
+
+4. **What about shuls we know about but never had times for?** This is the `shul_candidate` queue's domain — those rows aren't yet shuls. Once approved into a shul with status=`pending_review`, the same rules apply: not published until verified.
+
+5. **Discovery-found shuls without contactable websites.** Already handled by removing the `no_url` approve path — those candidates can only be approved with a URL, so they enter the pipeline already on a verifiable path. No new case to handle.
+
+6. **Public-facing copy when a shul slug exists but has no current times.** Per option C above, a short page explaining the situation + a CTA to forward/subscribe their bulletin to `submit@tfila.co`. Copy TBD.
+
+### Why this is on the books explicitly
+
+Because the rule is the product. Discovery, extraction, cascade, anti-bot proxy — every other system we've built exists to make this rule keepable. Without writing it down it stays implicit in scattered status filters and could slowly drift as new code paths get added.
+
+### Decision
+
+**Principle locked 2026-05-14.** Backend implementation deferred to a separate work session. When picked up: pick a threshold (start with 14 days), pick an architecture (start with query-time filtering — easier to undo), implement the public-facing "we don't have current times" page (option C), and add a freshness pill to the admin shul list so we can see at a glance which shuls are at risk of going stale.
