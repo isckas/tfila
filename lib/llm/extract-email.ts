@@ -41,18 +41,25 @@ Zmanim-relative: \`{"kind":"zmanim","anchor":"shkia"|"netz"|"alos"|"misheyakir"|
 ## Days
 \`daysOfWeek\` is an array of 0-6 (0=Sunday, 6=Shabbos). "Weekdays" usually = Mon-Fri = [1,2,3,4,5]; if Friday is listed separately, treat it as such.
 
-## Date-bounded rules (KEY: emails often describe SPECIFIC WEEKS)
-Emails routinely come with a date header like:
-  - "Schedule for the week of May 18-24"
-  - "Parshas Behar — May 23"
-  - "Tisha B'Av Schedule"
-  - "Three Weeks Schedule"
+## Regular vs date-bounded (CRITICAL — read carefully)
 
-When the email is for a specific week or date range AND the times described differ from a typical weekly pattern, emit DATE-BOUNDED rules:
-  - \`validFrom\` + \`validTo\` set to the date range (YYYY-MM-DD)
-  - \`specialScheduleKind\` set to: \`yom_tov\` | \`three_weeks\` | \`aseres_yemei_teshuvah\` | \`fast_day\` | \`rosh_chodesh\` | \`ad_hoc\`
+**Default to REGULAR weekly rules.** Most shul-bulletin emails describe the standard week-after-week schedule, even when they include this week's parsha name and date range as a header ("Schedule for May 8-9 — Parshas Behar"). The parsha + dates are decoration; the *times* repeat every week.
 
-When the email is just the routine weekly schedule (e.g. "Weekly Schedule" with no special context), emit \`specialScheduleKind: "regular"\` and no validFrom/validTo. Use \`daysOfWeek\` for the recurring weekly pattern.
+Emit REGULAR rules (\`specialScheduleKind: "regular"\`, NO validFrom/validTo, USE \`daysOfWeek\` for the recurring weekday pattern) when:
+  - The schedule shows standard weekday/Friday/Shabbos times in a recurring shape (Shacharis times, Mincha/Maariv pair, Shabbos morning + afternoon)
+  - The email is a routine bulletin even if it mentions the parsha or this week's dates
+  - There's no language explicitly framing the times as a one-off ("this Sunday only", "special schedule for…")
+
+Emit DATE-BOUNDED rules (\`validFrom\` + \`validTo\` as YYYY-MM-DD, \`specialScheduleKind\`: \`yom_tov\` | \`three_weeks\` | \`aseres_yemei_teshuvah\` | \`fast_day\` | \`rosh_chodesh\` | \`ad_hoc\`) ONLY when:
+  - The times themselves are unusual / labeled as one-off ("Tisha B'Av Schedule", "Yom Kippur Schedule", "Erev Rosh Hashana times")
+  - The email explicitly says these are special-event times that differ from the normal week
+  - A specific holiday or fast is named that anchors a non-recurring schedule
+
+When in doubt — the times look like a normal Fri/Shabbos schedule — emit REGULAR. A wrong regular rule is easy to override; a wrong date-bounded rule makes the shul invisible to all future queries.
+
+## Date handling
+
+When dates appear without a year ("May 8-9", "Parshas Behar"), DO NOT guess a year and emit validFrom/validTo. Either the schedule is recurring (no validFrom/To needed) or you should leave the rule undated. Never default to a year in the past. If a year is genuinely required (a date-bounded special-schedule rule) and only month/day are present, use the most recent or upcoming occurrence — never older than the email's own date.
 
 ## Confidence
 - 0.9+: explicit times, clearly minyanim, dates unambiguous
