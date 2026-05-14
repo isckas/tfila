@@ -24,7 +24,10 @@ import { slugify, nameFromTitle, allocateUniqueSlug } from "../../slug";
 import { matchDomainOf } from "../../dedup";
 import { backfillShulLocation } from "../../geocoding";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
-import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
+import {
+  insertRuleFromExtraction,
+  persistDataSourceWithRules,
+} from "../../pipeline/persist-submission";
 import {
   extractCanonicalWebsiteFromEmail,
   isSharedMtaDomain,
@@ -212,33 +215,28 @@ async function persistFromEmail(args: PersistArgs) {
         // Attach as new email_newsletter data_source under existing shul.
         shulId = mergedShul.id;
 
-        const [insertedSource] = await tx
-          .insert(dataSource)
-          .values({
-            shulId,
-            kind: "email_newsletter",
-            identifier,
-            configJson: {
-              version: 1,
-              prompt_version: "tfila-email-v1",
-              first_received_at: now.toISOString(),
-              last_subject: subject,
-              forwarder: args.forwarderEmail,
-              sender_email: originalSenderEmail,
-              shul_website: websiteUrl,
-              auto_merged_by_domain: shulMatchDomain,
-            },
-            confidenceScore: args.extracted.extraction.confidence,
-            priority: 60,
-            builtAt: now,
-            builtBy: "llm",
-            lastRunAt: now,
-            lastReceivedAt: now,
-            lastRunStatus: "ok",
-            reviewStatus: "pending",
-          })
-          .returning({ id: dataSource.id });
-        dataSourceId = insertedSource.id;
+        const persisted = await persistDataSourceWithRules(tx, {
+          shulId,
+          kind: "email_newsletter",
+          identifier,
+          configJson: {
+            version: 1,
+            prompt_version: "tfila-email-v1",
+            first_received_at: now.toISOString(),
+            last_subject: subject,
+            forwarder: args.forwarderEmail,
+            sender_email: originalSenderEmail,
+            shul_website: websiteUrl,
+            auto_merged_by_domain: shulMatchDomain,
+          },
+          confidenceScore: args.extracted.extraction.confidence,
+          priority: 60,
+          lastRunAt: now,
+          lastReceivedAt: now,
+          lastRunStatus: "ok",
+          rules: [], // rules inserted below in regular/special split
+        });
+        dataSourceId = persisted.dataSourceId;
       } else {
         // First-ever email for this shul AND no domain match → create a
         // new shul + data_source. Shul name preference: LLM-extracted
@@ -268,32 +266,27 @@ async function persistFromEmail(args: PersistArgs) {
         shulId = insertedShul.id;
         isNewShul = true;
 
-        const [insertedSource] = await tx
-          .insert(dataSource)
-          .values({
-            shulId,
-            kind: "email_newsletter",
-            identifier,
-            configJson: {
-              version: 1,
-              prompt_version: "tfila-email-v1",
-              first_received_at: now.toISOString(),
-              last_subject: subject,
-              forwarder: args.forwarderEmail,
-              sender_email: originalSenderEmail,
-              shul_website: websiteUrl,
-            },
-            confidenceScore: args.extracted.extraction.confidence,
-            priority: 60, // email > website (SCOPE.md §6 lock)
-            builtAt: now,
-            builtBy: "llm",
-            lastRunAt: now,
-            lastReceivedAt: now,
-            lastRunStatus: "ok",
-            reviewStatus: "pending",
-          })
-          .returning({ id: dataSource.id });
-        dataSourceId = insertedSource.id;
+        const persisted = await persistDataSourceWithRules(tx, {
+          shulId,
+          kind: "email_newsletter",
+          identifier,
+          configJson: {
+            version: 1,
+            prompt_version: "tfila-email-v1",
+            first_received_at: now.toISOString(),
+            last_subject: subject,
+            forwarder: args.forwarderEmail,
+            sender_email: originalSenderEmail,
+            shul_website: websiteUrl,
+          },
+          confidenceScore: args.extracted.extraction.confidence,
+          priority: 60, // email > website (SCOPE.md §6 lock)
+          lastRunAt: now,
+          lastReceivedAt: now,
+          lastRunStatus: "ok",
+          rules: [], // rules inserted below in regular/special split
+        });
+        dataSourceId = persisted.dataSourceId;
       }
     }
 

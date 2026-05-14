@@ -1,10 +1,13 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
-import { dataSource, shul } from "../../../db/schema";
+import { shul } from "../../../db/schema";
 import { runCascade, type CascadeResult } from "../../llm/cascade";
 import { backfillShulLocation } from "../../geocoding";
-import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
+import {
+  persistDataSourceWithRules,
+  applyShulNameAndAddressFromExtraction,
+} from "../../pipeline/persist-submission";
 
 function hostOfUrl(url: string): string {
   try {
@@ -101,36 +104,31 @@ async function persistCascade(args: PersistArgs): Promise<{
   // ─── Failed: mark the shul unsupported, record a failed data_source ─
   if (result.strategy === "failed" || !result.extraction) {
     return db.transaction(async (tx) => {
-      const configJson = {
-        version: 2,
-        submitted_url: args.submittedUrl,
-        cascade_attempts: result.attempts,
-        usage: result.usage,
-        extracted_at: new Date().toISOString(),
-      };
-      const [inserted] = await tx
-        .insert(dataSource)
-        .values({
-          shulId: args.shulId,
-          kind: args.sourceKind,
-          identifier: args.submittedUrl,
-          configJson,
-          extractionStrategy: "failed",
-          confidenceScore: null,
-          builtBy: "llm",
-          builtAt: new Date(),
-          lastRunAt: new Date(),
-          lastRunStatus: "broken",
-          reviewStatus: "pending",
-          priority: args.sourceKind === "shulcloud_website" ? 30 : 40,
-        })
-        .returning({ id: dataSource.id });
+      const now = new Date();
+      const persisted = await persistDataSourceWithRules(tx, {
+        shulId: args.shulId,
+        kind: args.sourceKind,
+        identifier: args.submittedUrl,
+        configJson: {
+          version: 2,
+          submitted_url: args.submittedUrl,
+          cascade_attempts: result.attempts,
+          usage: result.usage,
+          extracted_at: now.toISOString(),
+        },
+        confidenceScore: null,
+        extractionStrategy: "failed",
+        priority: args.sourceKind === "shulcloud_website" ? 30 : 40,
+        lastRunAt: now,
+        lastRunStatus: "broken",
+        rules: [],
+      });
       // Mark the shul unsupported so weekly cron skips it.
       await tx
         .update(shul)
-        .set({ status: "unsupported", updatedAt: new Date() })
+        .set({ status: "unsupported", updatedAt: now })
         .where(eq(shul.id, args.shulId));
-      return { dataSourceId: inserted.id, rulesInserted: 0 };
+      return persisted;
     });
   }
 
@@ -166,63 +164,24 @@ async function persistCascade(args: PersistArgs): Promise<{
   };
 
   return db.transaction(async (tx) => {
-    const [inserted] = await tx
-      .insert(dataSource)
-      .values({
-        shulId: args.shulId,
-        kind: args.sourceKind,
-        identifier,
-        configJson,
-        confidenceScore: extraction.confidence,
-        extractionStrategy: result.strategy,
-        builtBy: "llm",
-        builtAt: new Date(),
-        lastRunAt: new Date(),
-        lastRunStatus: "ok",
-        reviewStatus: "pending",
-        priority: args.sourceKind === "shulcloud_website" ? 30 : 40,
-      })
-      .returning({ id: dataSource.id });
-    const dataSourceId = inserted.id;
-
-    let rulesInserted = 0;
-    const lastSeenAt = new Date();
-    for (const r of extraction.rules) {
-      await insertRuleFromExtraction(tx, {
-        shulId: args.shulId,
-        dataSourceId,
-        rule: r,
-        lastSeenAt,
-      });
-      rulesInserted++;
-    }
-
-    if (extraction.shulAddress) {
-      await tx.execute(sql`
-        UPDATE shul
-           SET address = COALESCE(address, ${extraction.shulAddress}),
-               updated_at = NOW()
-         WHERE id = ${args.shulId}
-      `);
-    }
-    if (extraction.shulName) {
-      const hostname = (() => {
-        try {
-          return new URL(args.submittedUrl).hostname.replace(/^www\./, "");
-        } catch {
-          return "";
-        }
-      })();
-      await tx.execute(sql`
-        UPDATE shul
-           SET name = ${extraction.shulName},
-               updated_at = NOW()
-         WHERE id = ${args.shulId}
-           AND (name = ${hostname} OR name LIKE '%.%')
-      `);
-    }
-
-    return { dataSourceId, rulesInserted };
+    const now = new Date();
+    const persisted = await persistDataSourceWithRules(tx, {
+      shulId: args.shulId,
+      kind: args.sourceKind,
+      identifier,
+      configJson,
+      confidenceScore: extraction.confidence,
+      extractionStrategy: result.strategy,
+      priority: args.sourceKind === "shulcloud_website" ? 30 : 40,
+      lastRunAt: now,
+      lastRunStatus: "ok",
+      rules: extraction.rules,
+    });
+    await applyShulNameAndAddressFromExtraction(tx, {
+      shulId: args.shulId,
+      extraction,
+    });
+    return persisted;
   });
 }
 

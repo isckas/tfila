@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { dataSource, shul } from "@/db/schema";
+import { shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { runCascade } from "@/lib/llm/cascade";
 import { backfillShulLocation } from "@/lib/geocoding";
-import { insertRuleFromExtraction } from "@/lib/pipeline/persist-submission";
+import {
+  persistDataSourceWithRules,
+  applyShulNameAndAddressFromExtraction,
+} from "@/lib/pipeline/persist-submission";
 
 /**
  * Trigger an immediate (inline, synchronous) extraction cascade for
@@ -79,7 +82,8 @@ export async function POST(
   // ─── Failed cascade: record + mark shul unsupported ────────────────
   if (cascade.strategy === "failed" || !cascade.extraction) {
     await db.transaction(async (tx) => {
-      await tx.insert(dataSource).values({
+      const now = new Date();
+      await persistDataSourceWithRules(tx, {
         shulId: s.id,
         kind: "website_llm",
         identifier: s.submittedUrl!,
@@ -88,21 +92,19 @@ export async function POST(
           submitted_url: s.submittedUrl,
           cascade_attempts: cascade.attempts,
           usage: cascade.usage,
-          extracted_at: new Date().toISOString(),
+          extracted_at: now.toISOString(),
           trigger: "admin_manual_extract",
         },
-        extractionStrategy: "failed",
         confidenceScore: null,
+        extractionStrategy: "failed",
         priority: 40,
-        builtBy: "llm",
-        builtAt: new Date(),
-        lastRunAt: new Date(),
+        lastRunAt: now,
         lastRunStatus: "broken",
-        reviewStatus: "pending",
+        rules: [],
       });
       await tx
         .update(shul)
-        .set({ status: "unsupported", updatedAt: new Date() })
+        .set({ status: "unsupported", updatedAt: now })
         .where(eq(shul.id, s.id));
     });
     return NextResponse.redirect(
@@ -132,64 +134,41 @@ export async function POST(
   const identifier = isResourceStrategy ? s.submittedUrl! : winningUrl;
 
   await db.transaction(async (tx) => {
-    const [ds] = await tx
-      .insert(dataSource)
-      .values({
-        shulId: s.id,
-        kind: "website_llm",
-        identifier,
-        configJson: {
-          version: 2,
-          page_url: isResourceStrategy ? s.submittedUrl : winningUrl,
-          submitted_url: s.submittedUrl,
-          extraction_strategy: strategy,
-          last_extracted_resource: isResourceStrategy ? winningUrl : undefined,
-          cascade_attempts: attempts,
-          page_content_hash: cascade.pageContentHash,
-          model,
-          prompt_version: "tfila-v1",
-          extracted_at: new Date().toISOString(),
-          reasoning: extraction.reasoning,
-          usage: cascade.usage,
-          trigger: "admin_manual_extract",
-        },
-        confidenceScore: extraction.confidence,
-        extractionStrategy: strategy,
-        priority: 40,
-        builtBy: "llm",
-        builtAt: new Date(),
-        lastRunAt: new Date(),
-        lastRunStatus: "ok",
-        reviewStatus: "pending",
-      })
-      .returning({ id: dataSource.id });
-
-    const lastSeenAt = new Date();
-    for (const r of extraction.rules) {
-      await insertRuleFromExtraction(tx, {
-        shulId: s.id,
-        dataSourceId: ds.id,
-        rule: r,
-        lastSeenAt,
-      });
-    }
-
-    if (extraction.shulName) {
-      await tx.execute(sql`
-        UPDATE shul SET name = ${extraction.shulName}, updated_at = NOW()
-        WHERE id = ${s.id} AND (name LIKE '%.%' OR name = '')
-      `);
-    }
-    if (extraction.shulAddress) {
-      await tx.execute(sql`
-        UPDATE shul SET address = COALESCE(address, ${extraction.shulAddress}), updated_at = NOW()
-        WHERE id = ${s.id}
-      `);
-    }
+    const now = new Date();
+    await persistDataSourceWithRules(tx, {
+      shulId: s.id,
+      kind: "website_llm",
+      identifier,
+      configJson: {
+        version: 2,
+        page_url: isResourceStrategy ? s.submittedUrl : winningUrl,
+        submitted_url: s.submittedUrl,
+        extraction_strategy: strategy,
+        last_extracted_resource: isResourceStrategy ? winningUrl : undefined,
+        cascade_attempts: attempts,
+        page_content_hash: cascade.pageContentHash,
+        model,
+        prompt_version: "tfila-v1",
+        extracted_at: now.toISOString(),
+        reasoning: extraction.reasoning,
+        usage: cascade.usage,
+        trigger: "admin_manual_extract",
+      },
+      confidenceScore: extraction.confidence,
+      extractionStrategy: strategy,
+      priority: 40,
+      lastRunAt: now,
+      lastRunStatus: "ok",
+      rules: extraction.rules,
+    });
+    await applyShulNameAndAddressFromExtraction(tx, {
+      shulId: s.id,
+      extraction,
+    });
     // If shul was previously marked unsupported, restore to pending_review.
     await tx
       .update(shul)
-      .set({ status: "pending_review", updatedAt: new Date() })
+      .set({ status: "pending_review", updatedAt: now })
       .where(eq(shul.id, s.id))
       .execute()
       .catch(() => {});
