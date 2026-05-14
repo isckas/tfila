@@ -367,6 +367,15 @@ export interface AdminShulRow {
    * Drives the green/amber/red freshness pill (lib/freshness.ts).
    */
   lastFreshAt: Date | null;
+  /**
+   * Aggregate per-shul flags over its data_sources. Used by
+   * deriveAdminShulState() to compute the next-action label.
+   */
+  hasPendingSource: boolean;
+  hasApprovedSource: boolean;
+  hasRejectedSource: boolean;
+  hasBrokenRun: boolean;
+  pendingSourceCount: number;
 }
 
 export async function listAdminShuls(opts: {
@@ -404,6 +413,11 @@ export async function listAdminShuls(opts: {
     primary_data_source_id: number | null;
     primary_data_source_review: string | null;
     last_fresh_at: Date | null;
+    has_pending_source: boolean | null;
+    has_approved_source: boolean | null;
+    has_rejected_source: boolean | null;
+    has_broken_run: boolean | null;
+    pending_source_count: number;
   }>(sql`
     SELECT
       s.id, s.slug, s.name, s.status::text AS status, s.address, s.contact_email,
@@ -412,7 +426,12 @@ export async function listAdminShuls(opts: {
       COALESCE(rule_agg.cnt, 0)::int AS live_rule_count,
       ds_top.id AS primary_data_source_id,
       ds_top.review_status::text AS primary_data_source_review,
-      fresh_agg.last_fresh_at
+      fresh_agg.last_fresh_at,
+      ds_state.has_pending_source,
+      ds_state.has_approved_source,
+      ds_state.has_rejected_source,
+      ds_state.has_broken_run,
+      COALESCE(ds_state.pending_source_count, 0)::int AS pending_source_count
     FROM shul s
     LEFT JOIN LATERAL (
       SELECT COUNT(*) AS cnt FROM data_source WHERE shul_id = s.id
@@ -432,6 +451,15 @@ export async function listAdminShuls(opts: {
         FROM data_source
        WHERE shul_id = s.id AND last_run_status = 'ok'
     ) fresh_agg ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        bool_or(review_status = 'pending')  AS has_pending_source,
+        bool_or(review_status = 'approved') AS has_approved_source,
+        bool_or(review_status = 'rejected') AS has_rejected_source,
+        bool_or(last_run_status = 'broken') AS has_broken_run,
+        COUNT(*) FILTER (WHERE review_status = 'pending') AS pending_source_count
+      FROM data_source WHERE shul_id = s.id
+    ) ds_state ON true
     WHERE ${where}
     ORDER BY s.submitted_at DESC
     LIMIT ${limit}
@@ -451,6 +479,11 @@ export async function listAdminShuls(opts: {
     primaryDataSourceId: r.primary_data_source_id,
     primaryDataSourceReview: r.primary_data_source_review,
     lastFreshAt: r.last_fresh_at,
+    hasPendingSource: r.has_pending_source ?? false,
+    hasApprovedSource: r.has_approved_source ?? false,
+    hasRejectedSource: r.has_rejected_source ?? false,
+    hasBrokenRun: r.has_broken_run ?? false,
+    pendingSourceCount: Number(r.pending_source_count),
   }));
 }
 

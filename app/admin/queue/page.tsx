@@ -1,134 +1,42 @@
-import Link from "next/link";
-import { listPendingDataSources, countByShulStatus } from "@/lib/queries";
+import { listAdminShuls } from "@/lib/queries";
+import { deriveAdminShulState } from "@/lib/admin-state";
+import { AdminInbox } from "@/components/AdminInbox";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Filtered view of the admin inbox: only shuls whose derived state is
+ * "pending_review" — i.e. they have at least one data_source whose
+ * review_status='pending'. One row per shul (vs the old data_source-
+ * keyed listing where a shul with 2 pending sources showed up twice).
+ *
+ * Click → /admin/shul/[slug], where every data_source is shown inline
+ * and admin can approve/reject each.
+ */
 export default async function AdminQueuePage() {
-  const [pending, statusCounts] = await Promise.all([
-    listPendingDataSources(),
-    countByShulStatus(),
-  ]);
+  const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
+  const inbox = shuls
+    .filter((s) => deriveAdminShulState(s) === "pending_review")
+    .sort((a, b) => {
+      // Oldest pending first — gives the slowest-to-be-reviewed top billing
+      const at = (a.lastFreshAt ?? a.submittedAt).valueOf();
+      const bt = (b.lastFreshAt ?? b.submittedAt).valueOf();
+      return at - bt;
+    });
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <h1 className="text-2xl font-semibold mb-1">Review queue</h1>
-      <p className="text-sm text-neutral-600 mb-6">
-        Newly-built scrape configs awaiting review. Sorted by confidence
-        ascending — lowest first.
+    <div className="mx-auto max-w-4xl px-5 py-8">
+      <h1 className="text-2xl font-semibold">Pending review</h1>
+      <p className="mt-1 text-sm text-neutral-600">
+        Shuls with at least one extraction waiting for admin sign-off. Click any
+        shul to review its rules and approve or reject each data source inline.
       </p>
 
-      <section className="mb-6 flex flex-wrap gap-2 text-sm">
-        {statusCounts.map((c) => (
-          <Link
-            key={c.status}
-            href={`/admin/shuls?status=${c.status}`}
-            className="rounded border border-neutral-200 bg-neutral-50 px-3 py-1 hover:border-neutral-400 hover:bg-white"
-          >
-            <span className="font-medium">{c.n}</span>{" "}
-            <span className="text-neutral-600">{c.status.replace("_", " ")}</span>
-          </Link>
-        ))}
-      </section>
-
-      <section>
-        {pending.length === 0 ? (
-          <div className="rounded border border-neutral-200 bg-neutral-50 px-4 py-6 text-sm text-neutral-600">
-            Nothing pending review.
-          </div>
-        ) : (
-          <ul className="space-y-3">
-            {pending.map((d) => (
-              <li
-                key={d.id}
-                className="rounded-xl border border-neutral-200 bg-white p-4"
-              >
-                <div className="flex flex-wrap items-baseline justify-between gap-3">
-                  <div className="min-w-0">
-                    <Link
-                      href={`/admin/data-source/${d.id}`}
-                      className="font-medium text-neutral-900 hover:text-amber-800 hover:underline underline-offset-2"
-                    >
-                      {d.shulName}
-                    </Link>
-                    <div className="mt-0.5 text-xs text-neutral-500">
-                      <span className="font-mono">{d.kind}</span>
-                      {" · "}
-                      {d.kind === "email_newsletter" ? (
-                        <a
-                          href={`mailto:${d.identifier}`}
-                          className="underline-offset-2 hover:underline break-all"
-                        >
-                          {d.identifier}
-                        </a>
-                      ) : (
-                        <a
-                          href={d.identifier}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline-offset-2 hover:underline break-all"
-                        >
-                          {d.identifier}
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-xs uppercase tracking-wide text-neutral-500">
-                      Confidence
-                    </div>
-                    <div className="text-lg font-semibold tabular-nums">
-                      {d.confidenceScore != null
-                        ? d.confidenceScore.toFixed(2)
-                        : "—"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Link
-                    href={`/admin/data-source/${d.id}`}
-                    className="rounded bg-amber-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-900"
-                  >
-                    Review rules →
-                  </Link>
-                  <form
-                    method="post"
-                    action={`/api/admin/data-source/${d.id}/approve`}
-                    className="inline"
-                  >
-                    <button
-                      type="submit"
-                      className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
-                    >
-                      Approve
-                    </button>
-                  </form>
-                  <form
-                    method="post"
-                    action={`/api/admin/data-source/${d.id}/reject`}
-                    className="inline"
-                  >
-                    <button
-                      type="submit"
-                      className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100"
-                    >
-                      Reject
-                    </button>
-                  </form>
-                  <span className="ml-2 text-xs text-neutral-500">
-                    Built{" "}
-                    {d.builtAt
-                      ? new Date(d.builtAt).toLocaleString([], {
-                          dateStyle: "short",
-                          timeStyle: "short",
-                        })
-                      : "—"}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <section className="mt-6">
+        <AdminInbox
+          rows={inbox}
+          emptyMessage="✓ No shuls awaiting review."
+        />
       </section>
     </div>
   );

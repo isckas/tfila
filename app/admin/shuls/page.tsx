@@ -1,12 +1,28 @@
 import Link from "next/link";
 import { listAdminShuls, countByShulStatus } from "@/lib/queries";
 import { shulFreshnessTier } from "@/lib/freshness";
+import {
+  adminShulStateLabel,
+  deriveAdminShulState,
+  type AdminShulState,
+} from "@/lib/admin-state";
 
 export const dynamic = "force-dynamic";
 
 interface PageProps {
-  searchParams: Promise<{ q?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; state?: string }>;
 }
+
+const ADMIN_STATES: AdminShulState[] = [
+  "archived",
+  "unsupported",
+  "broken",
+  "pending_review",
+  "no_good_source",
+  "awaiting_extraction",
+  "stale",
+  "active",
+];
 
 const STATUS_LABELS: Record<string, string> = {
   pending_review: "Pending review",
@@ -22,11 +38,20 @@ export default async function AdminShulsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const q = sp.q?.trim() || null;
   const status = sp.status?.trim() || null;
+  const state = sp.state?.trim() as AdminShulState | undefined;
+  const stateFilter = state && ADMIN_STATES.includes(state) ? state : null;
 
-  const [shuls, statusCounts] = await Promise.all([
-    listAdminShuls({ q, status, limit: 200 }),
+  const [shulsRaw, statusCounts] = await Promise.all([
+    listAdminShuls({ q, status, limit: 500 }),
     countByShulStatus(),
   ]);
+
+  // Derived-state filter happens in JS (after the SQL aggregates land).
+  // This keeps listAdminShuls a single SQL call regardless of whether
+  // the caller filters by raw status or by derived state.
+  const shuls = stateFilter
+    ? shulsRaw.filter((s) => deriveAdminShulState(s) === stateFilter)
+    : shulsRaw;
 
   const total = statusCounts.reduce((sum, c) => sum + Number(c.n), 0);
   const countByStatus: Record<string, number> = {};
@@ -37,6 +62,22 @@ export default async function AdminShulsPage({ searchParams }: PageProps) {
       <h1 className="text-2xl font-semibold">All shuls</h1>
       <p className="mt-1 text-sm text-neutral-600">
         {total} total — searchable + filterable.
+        {stateFilter && (
+          <>
+            {" "}Filtered to{" "}
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-medium">
+              {adminShulStateLabel(stateFilter, { pendingSourceCount: 0 })}
+            </span>{" "}
+            ({shuls.length} match{shuls.length === 1 ? "" : "es"})
+            {" · "}
+            <Link
+              href="/admin/shuls"
+              className="underline-offset-2 hover:underline"
+            >
+              clear
+            </Link>
+          </>
+        )}
       </p>
 
       {/* ─── Status filter pills ─────────────────────────────── */}
@@ -81,7 +122,7 @@ export default async function AdminShulsPage({ searchParams }: PageProps) {
         >
           Search
         </button>
-        {(q || status) && (
+        {(q || status || stateFilter) && (
           <Link
             href="/admin/shuls"
             className="rounded border border-neutral-300 px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-100"

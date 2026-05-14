@@ -13,22 +13,46 @@ export default async function AdminLayout({
       <header className="border-b border-neutral-200 bg-neutral-50">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3">
           <div className="flex items-center gap-6 text-sm">
-            <Link href="/admin/queue" className="font-semibold">
-              tfila admin
+            {/* Wordmark goes to PUBLIC home — admins need a way back to
+                the davener-facing site. /admin is reachable via the
+                Admin link below. */}
+            <Link href="/" className="font-semibold tracking-tight">
+              tfila<span className="text-amber-700">.</span>co
             </Link>
-            <Link href="/admin/queue" className="text-neutral-600 hover:text-neutral-900">
+            <Link
+              href="/admin"
+              className="font-medium text-neutral-900 hover:text-amber-800"
+            >
+              Admin
+            </Link>
+            <Link
+              href="/admin/queue"
+              className="text-neutral-600 hover:text-neutral-900"
+            >
               Queue
             </Link>
-            <Link href="/admin/rejected" className="text-neutral-600 hover:text-neutral-900">
-              Rejected
+            <Link
+              href="/admin/rejected"
+              className="text-neutral-600 hover:text-neutral-900"
+            >
+              No good source
             </Link>
-            <Link href="/admin/shuls" className="text-neutral-600 hover:text-neutral-900">
+            <Link
+              href="/admin/shuls"
+              className="text-neutral-600 hover:text-neutral-900"
+            >
               All shuls
             </Link>
-            <Link href="/admin/candidates" className="text-neutral-600 hover:text-neutral-900">
+            <Link
+              href="/admin/candidates"
+              className="text-neutral-600 hover:text-neutral-900"
+            >
               Candidates
             </Link>
-            <Link href="/admin/changelog" className="text-neutral-600 hover:text-neutral-900">
+            <Link
+              href="/admin/changelog"
+              className="text-neutral-600 hover:text-neutral-900"
+            >
               Changelog
             </Link>
           </div>

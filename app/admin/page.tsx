@@ -1,149 +1,181 @@
 import Link from "next/link";
-import { countByShulStatus, listPendingDataSources } from "@/lib/queries";
+import { listAdminShuls } from "@/lib/queries";
+import {
+  adminShulStateSortKey,
+  deriveAdminShulState,
+  isInboxState,
+  type AdminShulState,
+} from "@/lib/admin-state";
+import { AdminInbox } from "@/components/AdminInbox";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_LABEL: Record<string, string> = {
-  pending_review: "Pending review",
-  active: "Active",
-  broken: "Broken",
-  archived: "Archived",
-  unsupported: "Unsupported",
-};
-
+/**
+ * Admin landing — inbox-style. Counts at the top by state, then a list
+ * of every shul that needs attention (not active, not archived). Click
+ * any row → /admin/shul/[slug] for the full mission-control view.
+ *
+ * The /admin/queue and /admin/rejected pages are filtered views of the
+ * same data; /admin/shuls remains the catalog of every shul (active or
+ * not).
+ */
 export default async function AdminHomePage() {
-  const [statusCounts, pending] = await Promise.all([
-    countByShulStatus(),
-    listPendingDataSources(),
-  ]);
-  const total = statusCounts.reduce((s, c) => s + Number(c.n), 0);
+  // Pull a generous slice — most projects have a few hundred shuls at most.
+  const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
+
+  // Derive state per shul + bucket counts
+  const withState = shuls.map((s) => ({
+    row: s,
+    state: deriveAdminShulState(s),
+  }));
+  const counts = bucketByState(withState.map((x) => x.state));
+
+  // Inbox = needs-attention rows, sorted urgent-first then by oldest pending
+  const inbox = withState
+    .filter((x) => isInboxState(x.state))
+    .sort((a, b) => {
+      const dk = adminShulStateSortKey(a.state) - adminShulStateSortKey(b.state);
+      if (dk !== 0) return dk;
+      // Within state: prefer oldest signal (lowest lastFreshAt or oldest submittedAt)
+      const at = (a.row.lastFreshAt ?? a.row.submittedAt).valueOf();
+      const bt = (b.row.lastFreshAt ?? b.row.submittedAt).valueOf();
+      return at - bt;
+    })
+    .map((x) => x.row);
+
+  const totalActive = counts.active;
+  const totalArchived = counts.archived;
+  const inboxTotal = inbox.length;
 
   return (
-    <div className="mx-auto max-w-3xl px-5 py-8">
+    <div className="mx-auto max-w-4xl px-5 py-8">
       <h1 className="text-2xl font-semibold">Admin</h1>
       <p className="mt-1 text-sm text-neutral-600">
-        Manage shuls, review submissions, and run the pipeline.
+        {inboxTotal} shul{inboxTotal === 1 ? "" : "s"} need attention ·{" "}
+        {totalActive} active · {totalArchived} archived
       </p>
 
-      {/* Quick counts */}
-      <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Tile label="Total shuls" value={total} href="/admin/shuls" />
+      {/* ─── Tile counts by state (clickable filters) ────────── */}
+      <section className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Tile
+          label="Broken"
+          n={counts.broken}
+          href="/admin/shuls?state=broken"
+          tone="rose"
+        />
+        <Tile
+          label="No good source"
+          n={counts.no_good_source}
+          href="/admin/rejected"
+          tone="rose"
+        />
         <Tile
           label="Pending review"
-          value={pending.length}
+          n={counts.pending_review}
           href="/admin/queue"
-          highlight={pending.length > 0}
+          tone="amber"
         />
-        {statusCounts.map((c) => (
-          <Tile
-            key={c.status}
-            label={STATUS_LABEL[c.status] ?? c.status}
-            value={Number(c.n)}
-            href={`/admin/shuls?status=${c.status}`}
-          />
-        ))}
-      </section>
-
-      {/* Big buttons */}
-      <section className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <BigLink
-          href="/admin/queue"
-          title="Review queue"
-          desc="Approve or reject newly-extracted data sources."
-          badge={pending.length > 0 ? `${pending.length} pending` : null}
+        <Tile
+          label="Stale"
+          n={counts.stale}
+          href="/admin/shuls?state=stale"
+          tone="rose"
         />
-        <BigLink
+        <Tile
+          label="Awaiting extraction"
+          n={counts.awaiting_extraction}
+          href="/admin/shuls?state=awaiting_extraction"
+          tone="amber"
+        />
+        <Tile
+          label="Unsupported"
+          n={counts.unsupported}
+          href="/admin/shuls?status=unsupported"
+          tone="neutral"
+        />
+        <Tile
+          label="Active (fresh)"
+          n={counts.active}
+          href="/admin/shuls?status=active"
+          tone="emerald"
+        />
+        <Tile
+          label="All shuls"
+          n={shuls.length}
           href="/admin/shuls"
-          title="All shuls"
-          desc="Search, filter, drill into any shul."
+          tone="neutral"
         />
       </section>
 
-      {/* Other shortcuts */}
-      <section className="mt-6 text-sm">
-        <h2 className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
-          Other
+      {/* ─── Inbox ───────────────────────────────────────────── */}
+      <section className="mt-8">
+        <h2 className="mb-3 text-sm font-semibold text-neutral-700">
+          Inbox — shuls needing attention
         </h2>
-        <ul className="space-y-1 text-neutral-700">
-          <li>
-            <Link
-              href="/admin/shuls?status=broken"
-              className="underline-offset-2 hover:underline"
-            >
-              Broken shuls →
-            </Link>
-          </li>
-          <li>
-            <Link href="/bot" className="underline-offset-2 hover:underline">
-              Public /bot page →
-            </Link>
-          </li>
-          <li>
-            <Link href="/" className="underline-offset-2 hover:underline">
-              Public feed (as a davener sees it) →
-            </Link>
-          </li>
-        </ul>
+        <AdminInbox
+          rows={inbox}
+          emptyMessage="✓ All clear. No shuls currently need attention."
+        />
+      </section>
+
+      {/* ─── Other shortcuts ─────────────────────────────────── */}
+      <section className="mt-8 text-xs text-neutral-500">
+        <Link href="/admin/candidates" className="underline-offset-2 hover:underline">
+          Discovery candidates →
+        </Link>
+        {" · "}
+        <Link href="/admin/changelog" className="underline-offset-2 hover:underline">
+          Changelog →
+        </Link>
+        {" · "}
+        <Link href="/" className="underline-offset-2 hover:underline">
+          Public feed →
+        </Link>
       </section>
     </div>
   );
 }
 
-function Tile({
-  label,
-  value,
-  href,
-  highlight,
-}: {
-  label: string;
-  value: number;
-  href: string;
-  highlight?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`block rounded-xl border px-4 py-3 hover:bg-neutral-50 ${
-        highlight
-          ? "border-amber-300 bg-amber-50"
-          : "border-neutral-200 bg-white"
-      }`}
-    >
-      <div className="text-xs uppercase tracking-wide text-neutral-500">
-        {label}
-      </div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums text-neutral-900">
-        {value}
-      </div>
-    </Link>
-  );
+function bucketByState(states: AdminShulState[]): Record<AdminShulState, number> {
+  const init: Record<AdminShulState, number> = {
+    archived: 0,
+    unsupported: 0,
+    broken: 0,
+    pending_review: 0,
+    no_good_source: 0,
+    awaiting_extraction: 0,
+    stale: 0,
+    active: 0,
+  };
+  for (const s of states) init[s]++;
+  return init;
 }
 
-function BigLink({
+function Tile({
+  label,
+  n,
   href,
-  title,
-  desc,
-  badge,
+  tone,
 }: {
+  label: string;
+  n: number;
   href: string;
-  title: string;
-  desc: string;
-  badge?: string | null;
+  tone: "rose" | "amber" | "emerald" | "neutral";
 }) {
+  const styles: Record<string, string> = {
+    rose: "border-rose-200 bg-rose-50 text-rose-900",
+    amber: "border-amber-200 bg-amber-50 text-amber-900",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    neutral: "border-neutral-200 bg-white text-neutral-900",
+  };
+  const dim = n === 0 ? "opacity-60" : "";
   return (
     <Link
       href={href}
-      className="block rounded-xl border border-neutral-200 bg-white p-5 hover:border-amber-300 hover:shadow-sm"
+      className={`block rounded-xl border px-3 py-3 hover:shadow-sm ${styles[tone]} ${dim}`}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-base font-medium text-neutral-900">{title}</span>
-        {badge && (
-          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">
-            {badge}
-          </span>
-        )}
-      </div>
-      <div className="mt-1 text-sm text-neutral-600">{desc}</div>
+      <div className="text-xs uppercase tracking-wide opacity-80">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums">{n}</div>
     </Link>
   );
 }
