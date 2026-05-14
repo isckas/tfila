@@ -67,14 +67,14 @@ export default async function HomePage({ searchParams }: PageProps) {
               />
               <div className="text-left">
                 <h1 className="text-2xl font-bold tracking-tight text-neutral-900 sm:text-3xl">
-                  Minyan times that don&apos;t go stale.
+                  Tfila times that don&apos;t go stale.
                 </h1>
                 <p className="mt-2 text-sm text-neutral-600">
-                  Every Jewish shul directory has the same problem &mdash;
-                  times posted years ago, never updated. tfila.co reads
-                  each shul&apos;s own website or weekly email bulletin,
-                  refreshes every Motzei Shabbat, for real accurate
-                  tfila times.
+                  Every tfila / Shul directory has the same problem
+                  &mdash; times posted years ago, never updated. tfila.co
+                  reads each shul&apos;s own website or weekly email
+                  bulletin, refreshes every Motzei Shabbat, for real
+                  accurate tfila times.
                 </p>
               </div>
             </div>

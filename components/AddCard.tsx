@@ -25,10 +25,7 @@ export function AddCard() {
       </p>
 
       {/* URL submission — straight to /api/submit */}
-      <label className="text-xs font-medium text-neutral-700">
-        Shul&apos;s Tfila Schedule page URL
-      </label>
-      <form method="post" action="/api/submit" className="mt-1 flex gap-1.5">
+      <form method="post" action="/api/submit" className="flex gap-1.5">
         <input
           type="url"
           name="url"
@@ -64,7 +61,7 @@ export function AddCard() {
       </div>
 
       <p className="mt-3 text-xs text-neutral-500">
-        One-time setup. We read the weekly bulletin we update the tfila
+        One-time setup. We read the weekly bulletin, we update the tfila
         times.
       </p>
     </div>
