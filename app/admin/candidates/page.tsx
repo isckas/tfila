@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { shulCandidate } from "@/db/schema";
+import { shul, shulCandidate } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,15 @@ const STATUS_BADGE: Record<string, string> = {
   rejected: "bg-rose-100 text-rose-900",
   duplicate: "bg-neutral-200 text-neutral-700",
   deferred: "bg-blue-100 text-blue-900",
+};
+
+const STATUS_BADGE_SHUL: Record<string, string> = {
+  active: "bg-emerald-100 text-emerald-900",
+  pending_review: "bg-amber-100 text-amber-900",
+  broken: "bg-rose-100 text-rose-900",
+  archived: "bg-neutral-200 text-neutral-700",
+  unsupported: "bg-rose-100 text-rose-800",
+  no_url: "bg-amber-100 text-amber-900",
 };
 
 export default async function AdminCandidatesPage({ searchParams }: PageProps) {
@@ -67,6 +76,26 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
     .where(and(...conditions))
     .orderBy(desc(shulCandidate.createdAt))
     .limit(200);
+
+  // Recently approved (last 24h) with current shul state — lets the admin
+  // track in-flight extractions without bouncing to /admin/shuls.
+  const recent = await db
+    .select({
+      candidateId: shulCandidate.id,
+      reviewedAt: shulCandidate.reviewedAt,
+      reviewStatus: shulCandidate.reviewStatus,
+      shulId: shul.id,
+      shulSlug: shul.slug,
+      shulName: shul.name,
+      shulStatus: shul.status,
+      shulHasAddress: sql<boolean>`${shul.address} IS NOT NULL`,
+      shulHasUrl: sql<boolean>`${shul.submittedUrl} IS NOT NULL`,
+    })
+    .from(shulCandidate)
+    .innerJoin(shul, eq(shulCandidate.linkedShulId, shul.id))
+    .where(sql`${shulCandidate.reviewedAt} > NOW() - INTERVAL '24 hours'`)
+    .orderBy(desc(shulCandidate.reviewedAt))
+    .limit(20);
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-8">
@@ -134,6 +163,49 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
         </form>
       )}
 
+      {/* Recently approved (last 24h) */}
+      {recent.length > 0 && (
+        <section className="mt-6 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+          <h2 className="text-sm font-semibold text-neutral-700">
+            Recently approved · last 24h ({recent.length})
+          </h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            Pipeline state for each. Click through to review extracted
+            rules. <code>no_url</code> shuls won&apos;t publish until a
+            URL is added on the shul page.
+          </p>
+          <ul className="mt-3 space-y-1.5">
+            {recent.map((r) => (
+              <li key={r.candidateId} className="flex flex-wrap items-baseline gap-2 text-xs">
+                <Link
+                  href={`/admin/shul/${r.shulSlug}`}
+                  className="font-medium text-amber-800 underline-offset-2 hover:underline"
+                >
+                  {r.shulName}
+                </Link>
+                <span className={`rounded px-1.5 py-0.5 ${STATUS_BADGE_SHUL[r.shulStatus] ?? "bg-neutral-100 text-neutral-700"}`}>
+                  {r.shulStatus.replace(/_/g, " ")}
+                </span>
+                {!r.shulHasAddress && (
+                  <span className="rounded bg-rose-100 px-1.5 py-0.5 text-rose-800">no address</span>
+                )}
+                {!r.shulHasUrl && (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">no url</span>
+                )}
+                <span className="text-neutral-500">
+                  {r.reviewedAt
+                    ? new Date(r.reviewedAt).toLocaleString([], {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })
+                    : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* Candidate list */}
       <section className="mt-6">
         {candidates.length === 0 ? (
@@ -182,7 +254,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
                         </Link>
                       )}
                     </div>
-                    {c.websiteUri && (
+                    {c.websiteUri ? (
                       <a
                         href={c.websiteUri}
                         target="_blank"
@@ -191,6 +263,15 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
                       >
                         {c.websiteUri}
                       </a>
+                    ) : (
+                      c.reviewStatus === "pending" && (
+                        <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 ring-1 ring-amber-200">
+                          ⚠ No website from Places. Paste one to extract
+                          times, or approve as <code>no_url</code> to track
+                          the address without publishing (tfila.co only
+                          lists shuls with live times).
+                        </p>
+                      )
                     )}
                     {c.reviewReason && (
                       <p className="mt-1 text-xs italic text-neutral-500">
@@ -202,14 +283,19 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
                   {/* Actions — only show on pending */}
                   {c.reviewStatus === "pending" && (
                     <div className="flex shrink-0 items-center gap-2">
-                      <form method="post" action={`/api/admin/candidate/${c.id}/approve`} className="inline">
-                        <button
-                          type="submit"
-                          className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
-                        >
-                          Approve
-                        </button>
-                      </form>
+                      {c.websiteUri ? (
+                        <form method="post" action={`/api/admin/candidate/${c.id}/approve`} className="inline">
+                          <button
+                            type="submit"
+                            className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
+                            title="Creates shul + queues extraction from the Places-returned website"
+                          >
+                            Approve (extract times)
+                          </button>
+                        </form>
+                      ) : (
+                        <ApproveNoUrlForm candidateId={c.id} />
+                      )}
                       <RejectForm candidateId={c.id} />
                     </div>
                   )}
@@ -220,6 +306,49 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
         )}
       </section>
     </div>
+  );
+}
+
+function ApproveNoUrlForm({ candidateId }: { candidateId: number }) {
+  // Two actions live in the same form. The "Approve with URL" button
+  // submits with the urlOverride field; "Approve as no_url" submits
+  // without it (server falls through to creating a no_url shul).
+  return (
+    <details className="relative">
+      <summary className="cursor-pointer list-none rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800">
+        Approve…
+      </summary>
+      <form
+        method="post"
+        action={`/api/admin/candidate/${candidateId}/approve`}
+        className="absolute right-0 z-10 mt-1 w-72 space-y-3 rounded-xl border border-neutral-300 bg-white p-3 shadow-lg"
+      >
+        <div>
+          <label className="block text-xs font-medium text-neutral-700">
+            Shul website URL (optional)
+          </label>
+          <input
+            type="text"
+            name="urlOverride"
+            placeholder="https://example-shul.org"
+            className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+          />
+          <p className="mt-1 text-[11px] text-neutral-500">
+            Paste a URL to extract times. Leave blank to track address
+            only (won&apos;t publish).
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            className="flex-1 rounded bg-emerald-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
+            title="With a URL → extracts times. Without → creates no_url shul (not published)."
+          >
+            Approve
+          </button>
+        </div>
+      </form>
+    </details>
   );
 }
 

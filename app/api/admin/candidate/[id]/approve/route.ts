@@ -1,17 +1,30 @@
 // Approve a shul_candidate: create a real shul row (with Places-derived
 // name + address + lat/lng pre-populated) and queue the extraction
-// pipeline if the candidate has a website. Idempotent: if the candidate
-// is already approved/linked, no-ops.
+// pipeline if there's a website. Idempotent — if the candidate is
+// already approved/rejected/duplicate, no-ops.
+//
+// Two paths based on URL availability:
+//   - WITH URL (Places returned websiteUri OR admin pasted one in the
+//     form's `urlOverride` field): shul.status = 'pending_review',
+//     fire data-source.requested for the extraction cascade.
+//   - WITHOUT URL: shul.status = 'no_url', no extraction fired. The
+//     row is excluded from all public queries — tfila.co only lists
+//     live non-stale times. Admin recovers by pasting a URL into the
+//     Source URL field on /admin/shul/[slug] later.
+//
+// On dedup-merge (candidate's URL domain matches existing shul), the
+// existing shul is backfilled with Places address/location if those
+// fields were null. Closes the "email/URL created first, candidate
+// found second" gap from FEATURES.md unified-pipeline parity entry.
 
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { shul, shulCandidate, dataSource } from "@/db/schema";
+import { shul, shulCandidate } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
-import { slugify, nameFromTitle } from "@/lib/slug";
+import { slugify } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
 import { matchDomainOf } from "@/lib/dedup";
-import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +43,23 @@ export async function POST(
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
 
+  // Admin-pasted URL (when Places didn't return one). Optional.
+  const form = await req.formData().catch(() => null);
+  const rawOverride = (form?.get("urlOverride") as string | null)?.trim() || "";
+  let urlOverride: string | null = null;
+  if (rawOverride) {
+    try {
+      const u = new URL(
+        /^https?:\/\//i.test(rawOverride) ? rawOverride : `https://${rawOverride}`,
+      );
+      if (u.protocol === "http:" || u.protocol === "https:") {
+        urlOverride = u.toString();
+      }
+    } catch {
+      // Invalid URL — treat as if no override was provided.
+    }
+  }
+
   const result = await db.transaction(async (tx) => {
     const rows = await tx
       .select()
@@ -39,20 +69,49 @@ export async function POST(
     const c = rows[0];
     if (!c) return { ok: false, reason: "not found" } as const;
     if (c.reviewStatus !== "pending") {
-      return { ok: false, reason: `already ${c.reviewStatus}`, shulId: c.linkedShulId } as const;
+      return {
+        ok: false,
+        reason: `already ${c.reviewStatus}`,
+        shulId: c.linkedShulId ?? undefined,
+      } as const;
     }
 
-    // ─── Domain-match dedup: if this candidate's website resolves to a
-    // domain already attached to a shul, mark as duplicate instead of
-    // creating a new shul.
-    const matchDomain = c.websiteUri ? matchDomainOf(c.websiteUri) : null;
+    // Effective URL: admin override wins, else Places-returned, else null.
+    const effectiveUrl = urlOverride ?? c.websiteUri ?? null;
+
+    // ─── Domain-match dedup: if this candidate's URL resolves to a
+    // domain already attached to a shul, mark as duplicate AND backfill
+    // address/location on the existing shul if it was missing.
+    const matchDomain = effectiveUrl ? matchDomainOf(effectiveUrl) : null;
     if (matchDomain) {
       const existing = await tx
-        .select({ id: shul.id })
+        .select({ id: shul.id, address: shul.address })
         .from(shul)
         .where(eq(shul.matchDomain, matchDomain))
         .limit(1);
       if (existing[0]) {
+        // Backfill address / location on existing shul when missing.
+        // Treat empty string as missing too (defensive).
+        const needsAddress = !existing[0].address;
+        if (needsAddress && c.formattedAddress) {
+          await tx.execute(sql`
+            UPDATE shul
+               SET address = COALESCE(address, ${c.formattedAddress}),
+                   updated_at = NOW()
+             WHERE id = ${existing[0].id}
+          `);
+        }
+        if (c.lat != null && c.lng != null) {
+          await tx.execute(sql`
+            UPDATE shul
+               SET location = COALESCE(
+                     location,
+                     ST_SetSRID(ST_MakePoint(${c.lng}, ${c.lat}), 4326)::geography
+                   ),
+                   updated_at = NOW()
+             WHERE id = ${existing[0].id}
+          `);
+        }
         await tx
           .update(shulCandidate)
           .set({
@@ -71,7 +130,7 @@ export async function POST(
     // ─── Allocate a unique slug from the candidate name
     const baseSlug =
       slugify(c.name) ||
-      (c.websiteUri ? slugify(new URL(c.websiteUri).hostname) : null) ||
+      (effectiveUrl ? slugify(new URL(effectiveUrl).hostname) : null) ||
       `candidate-${candidateId}`;
     let candidateSlug = baseSlug;
     for (let n = 2; n < 100; n++) {
@@ -84,20 +143,24 @@ export async function POST(
       candidateSlug = `${baseSlug}-${n}`;
     }
 
-    // ─── Create the shul row with everything we know already
+    // ─── Create the shul row. Status depends on URL presence:
+    //   - URL present:  pending_review (extraction will run, then admin
+    //                   approves rules to flip to active)
+    //   - URL absent:   no_url (will NOT publish; admin needs to add a
+    //                   URL on /admin/shul/[slug] to escalate)
+    const newStatus = effectiveUrl ? "pending_review" : "no_url";
     const [newShul] = await tx
       .insert(shul)
       .values({
         slug: candidateSlug,
         name: c.name,
         address: c.formattedAddress,
-        submittedUrl: c.websiteUri,
+        submittedUrl: effectiveUrl,
         matchDomain,
-        status: "pending_review",
+        status: newStatus,
       })
       .returning({ id: shul.id, slug: shul.slug });
 
-    // Project lat/lng onto PostGIS GEOGRAPHY when we have it
     if (c.lat != null && c.lng != null) {
       await tx.execute(sql`
         UPDATE shul
@@ -107,7 +170,6 @@ export async function POST(
       `);
     }
 
-    // ─── Link the candidate to the new shul, mark approved
     await tx
       .update(shulCandidate)
       .set({
@@ -124,20 +186,18 @@ export async function POST(
       dedup: false,
       shulId: newShul.id,
       slug: newShul.slug,
-      hasWebsite: !!c.websiteUri,
-      websiteUri: c.websiteUri,
+      url: effectiveUrl,
     } as const;
   });
 
-  // ─── Fire extraction event AFTER transaction commits (so the function
-  // can see the new shul row in its own connection)
-  if (result.ok && !result.dedup && result.hasWebsite && result.websiteUri) {
+  // Fire extraction AFTER transaction commits, only when we have a URL
+  if (result.ok && !result.dedup && result.url) {
     try {
       await inngest.send({
         name: "data-source.requested",
         data: {
           shulId: result.shulId!,
-          url: result.websiteUri,
+          url: result.url,
           sourceKind: "website_llm",
         },
       });
@@ -146,8 +206,16 @@ export async function POST(
     }
   }
 
-  // Redirect back to the candidates page, preserving filter context via
-  // referer when available
+  // Redirect strategy:
+  //   - approve-with-URL: send admin to the shul page to watch extraction
+  //     land (better workflow than bouncing back to candidates list).
+  //   - dedup-merge or no_url: back to candidates (referer preserves filter).
+  if (result.ok && !result.dedup && result.url && result.slug) {
+    return NextResponse.redirect(
+      new URL(`/admin/shul/${result.slug}?from=candidate`, req.url),
+      303,
+    );
+  }
   const back = req.headers.get("referer") ?? "/admin/candidates";
   return NextResponse.redirect(new URL(back, req.url), 303);
 }
