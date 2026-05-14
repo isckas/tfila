@@ -12,12 +12,16 @@ interface PageProps {
   searchParams: Promise<{
     status?: string;
     target?: string;
+    has_url?: string; // "yes" | "no" — filter by website_uri presence
     // Result banner params from POST /api/admin/discovery/run
     ran?: string;
     new?: string;
     dup?: string;
     queries?: string;
     errors?: string;
+    // Error banner param from /api/admin/candidate/[id]/approve when
+    // the request was rejected (e.g. URL required but not provided)
+    err?: string;
   }>;
 }
 
@@ -37,13 +41,14 @@ const STATUS_BADGE_SHUL: Record<string, string> = {
   broken: "bg-rose-100 text-rose-900",
   archived: "bg-neutral-200 text-neutral-700",
   unsupported: "bg-rose-100 text-rose-800",
-  no_url: "bg-amber-100 text-amber-900",
 };
 
 export default async function AdminCandidatesPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const status = sp.status?.trim() || "pending";
   const target = sp.target?.trim() || null;
+  const hasUrl =
+    sp.has_url === "yes" ? "yes" : sp.has_url === "no" ? "no" : null;
 
   // Per-status counts for the filter pills
   const countsRaw = await db.execute<{ review_status: string; n: number }>(sql`
@@ -66,6 +71,11 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
   // Build WHERE conditions
   const conditions = [eq(shulCandidate.reviewStatus, status)];
   if (target) conditions.push(eq(shulCandidate.discoveryTargetName, target));
+  if (hasUrl === "yes") {
+    conditions.push(sql`${shulCandidate.websiteUri} IS NOT NULL`);
+  } else if (hasUrl === "no") {
+    conditions.push(sql`${shulCandidate.websiteUri} IS NULL`);
+  }
 
   const candidates = await db
     .select({
@@ -114,6 +124,13 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
         shul + queues extraction. Reject removes from the queue but keeps
         the row so re-runs skip it.
       </p>
+
+      {/* Error banner from a failed approve */}
+      {sp.err && (
+        <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          ✗ {sp.err}
+        </div>
+      )}
 
       {/* Banner after a discovery run */}
       {sp.ran && (
@@ -201,6 +218,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
           const qs = new URLSearchParams();
           qs.set("status", s);
           if (target) qs.set("target", target);
+          if (hasUrl) qs.set("has_url", hasUrl);
           return (
             <Link
               key={s}
@@ -218,10 +236,39 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
         })}
       </div>
 
+      {/* URL-presence filter pills */}
+      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+        <span className="self-center text-neutral-500">URL:</span>
+        {[
+          { v: null, label: "any" },
+          { v: "yes", label: "has URL" },
+          { v: "no", label: "no URL" },
+        ].map(({ v, label }) => {
+          const qs = new URLSearchParams();
+          qs.set("status", status);
+          if (target) qs.set("target", target);
+          if (v) qs.set("has_url", v);
+          return (
+            <Link
+              key={label}
+              href={`/admin/candidates?${qs.toString()}`}
+              className={`rounded-full px-2.5 py-0.5 ${
+                hasUrl === v
+                  ? "bg-neutral-900 text-white"
+                  : "border border-neutral-300 hover:bg-neutral-100"
+              }`}
+            >
+              {label}
+            </Link>
+          );
+        })}
+      </div>
+
       {/* Target filter */}
       {targetsRaw.rows.length > 0 && (
         <form method="get" action="/admin/candidates" className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           <input type="hidden" name="status" value={status} />
+          {hasUrl && <input type="hidden" name="has_url" value={hasUrl} />}
           <label className="text-xs text-neutral-600">Target:</label>
           <select
             name="target"
@@ -355,10 +402,10 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
                     ) : (
                       c.reviewStatus === "pending" && (
                         <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 ring-1 ring-amber-200">
-                          ⚠ No website from Places. Paste one to extract
-                          times, or approve as <code>no_url</code> to track
-                          the address without publishing (tfila.co only
-                          lists shuls with live times).
+                          ⚠ No website from Places. Paste a URL to extract
+                          times, or reject — tfila.co only lists shuls
+                          with live times, so we don&apos;t create rows
+                          for shuls without a URL.
                         </p>
                       )
                     )}
@@ -399,13 +446,14 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
 }
 
 function ApproveNoUrlForm({ candidateId }: { candidateId: number }) {
-  // Two actions live in the same form. The "Approve with URL" button
-  // submits with the urlOverride field; "Approve as no_url" submits
-  // without it (server falls through to creating a no_url shul).
+  // No green Approve button — tfila.co only publishes shuls with live
+  // times, so we don't create rows for candidates without a URL.
+  // Admin must either paste a URL (then extraction runs as normal) or
+  // reject the candidate.
   return (
     <details className="relative">
-      <summary className="cursor-pointer list-none rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-800">
-        Approve…
+      <summary className="cursor-pointer list-none rounded border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100">
+        Add URL &amp; approve
       </summary>
       <form
         method="post"
@@ -414,28 +462,27 @@ function ApproveNoUrlForm({ candidateId }: { candidateId: number }) {
       >
         <div>
           <label className="block text-xs font-medium text-neutral-700">
-            Shul website URL (optional)
+            Shul website URL <span className="text-rose-700">*</span>
           </label>
           <input
-            type="text"
+            type="url"
             name="urlOverride"
             placeholder="https://example-shul.org"
+            required
             className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
           />
           <p className="mt-1 text-[11px] text-neutral-500">
-            Paste a URL to extract times. Leave blank to track address
-            only (won&apos;t publish).
+            Required. Without a URL we can&apos;t extract times, and
+            tfila.co only lists shuls with live times. Reject the
+            candidate if no website exists.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            className="flex-1 rounded bg-emerald-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
-            title="With a URL → extracts times. Without → creates no_url shul (not published)."
-          >
-            Approve
-          </button>
-        </div>
+        <button
+          type="submit"
+          className="w-full rounded bg-emerald-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-emerald-800"
+        >
+          Approve with this URL
+        </button>
       </form>
     </details>
   );

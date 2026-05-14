@@ -1,16 +1,13 @@
 // Approve a shul_candidate: create a real shul row (with Places-derived
 // name + address + lat/lng pre-populated) and queue the extraction
-// pipeline if there's a website. Idempotent — if the candidate is
-// already approved/rejected/duplicate, no-ops.
+// pipeline. Requires a URL — either Places-returned (websiteUri) or
+// admin-pasted (urlOverride form field). Without a URL, returns 400.
 //
-// Two paths based on URL availability:
-//   - WITH URL (Places returned websiteUri OR admin pasted one in the
-//     form's `urlOverride` field): shul.status = 'pending_review',
-//     fire data-source.requested for the extraction cascade.
-//   - WITHOUT URL: shul.status = 'no_url', no extraction fired. The
-//     row is excluded from all public queries — tfila.co only lists
-//     live non-stale times. Admin recovers by pasting a URL into the
-//     Source URL field on /admin/shul/[slug] later.
+// Product rule: tfila.co only publishes shuls with live extracted
+// times. Approving a no-URL candidate would create a tracking row
+// that could never publish, which is worse than no row at all.
+// Reject the candidate, or use Google to find the shul's website and
+// paste it into the urlOverride field before approving.
 //
 // On dedup-merge (candidate's URL domain matches existing shul), the
 // existing shul is backfilled with Places address/location if those
@@ -25,6 +22,7 @@ import { getAdminSession } from "@/lib/auth";
 import { slugify } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
 import { matchDomainOf } from "@/lib/dedup";
+import { resolveScheduleUrl } from "@/lib/discovery/find-schedule-page";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +58,55 @@ export async function POST(
     }
   }
 
+  // ─── Pre-fetch the candidate so we can validate + resolve the URL
+  // outside the DB transaction (schedule-page discovery does network
+  // I/O and can take several seconds — don't hold a DB lock that long).
+  const preRows = await db
+    .select({
+      websiteUri: shulCandidate.websiteUri,
+      reviewStatus: shulCandidate.reviewStatus,
+      linkedShulId: shulCandidate.linkedShulId,
+    })
+    .from(shulCandidate)
+    .where(eq(shulCandidate.id, candidateId))
+    .limit(1);
+  if (!preRows[0]) {
+    return NextResponse.redirect(
+      new URL("/admin/candidates?err=candidate+not+found", req.url),
+      303,
+    );
+  }
+  if (preRows[0].reviewStatus !== "pending") {
+    const back = req.headers.get("referer") ?? "/admin/candidates";
+    const u = new URL(back, req.url);
+    u.searchParams.set("err", `candidate already ${preRows[0].reviewStatus}`);
+    return NextResponse.redirect(u, 303);
+  }
+
+  const submittedUrl = urlOverride ?? preRows[0].websiteUri ?? null;
+  if (!submittedUrl) {
+    const back = req.headers.get("referer") ?? "/admin/candidates";
+    const u = new URL(back, req.url);
+    u.searchParams.set(
+      "err",
+      "URL required — paste one in the Add URL & approve form, or reject this candidate",
+    );
+    return NextResponse.redirect(u, 303);
+  }
+
+  // ─── Resolve to the schedule page. For root-only URLs (Places usually
+  // returns these), the hybrid resolver tries common paths, scans the
+  // root page's nav for schedule keywords, and falls back to an LLM
+  // pick. Admin-pasted URLs with a specific path short-circuit and
+  // pass through unchanged. Worst case: we get the root URL back and
+  // the extraction cascade's own same-origin fallback takes a shot.
+  const resolved = await resolveScheduleUrl(submittedUrl);
+  const effectiveUrl = resolved.url;
+
   const result = await db.transaction(async (tx) => {
+    // Re-fetch inside the tx so we lock + see the latest state. Catch
+    // the rare case of two admins approving the same candidate in
+    // parallel.
     const rows = await tx
       .select()
       .from(shulCandidate)
@@ -75,9 +121,6 @@ export async function POST(
         shulId: c.linkedShulId ?? undefined,
       } as const;
     }
-
-    // Effective URL: admin override wins, else Places-returned, else null.
-    const effectiveUrl = urlOverride ?? c.websiteUri ?? null;
 
     // ─── Domain-match dedup: if this candidate's URL resolves to a
     // domain already attached to a shul, mark as duplicate AND backfill
@@ -143,12 +186,9 @@ export async function POST(
       candidateSlug = `${baseSlug}-${n}`;
     }
 
-    // ─── Create the shul row. Status depends on URL presence:
-    //   - URL present:  pending_review (extraction will run, then admin
-    //                   approves rules to flip to active)
-    //   - URL absent:   no_url (will NOT publish; admin needs to add a
-    //                   URL on /admin/shul/[slug] to escalate)
-    const newStatus = effectiveUrl ? "pending_review" : "no_url";
+    // ─── Create the shul row. URL is guaranteed present (early return
+    // above if not), so status = pending_review and extraction will
+    // run via the data-source.requested event fired after commit.
     const [newShul] = await tx
       .insert(shul)
       .values({
@@ -157,7 +197,7 @@ export async function POST(
         address: c.formattedAddress,
         submittedUrl: effectiveUrl,
         matchDomain,
-        status: newStatus,
+        status: "pending_review",
       })
       .returning({ id: shul.id, slug: shul.slug });
 
@@ -209,7 +249,9 @@ export async function POST(
   // Redirect strategy:
   //   - approve-with-URL: send admin to the shul page to watch extraction
   //     land (better workflow than bouncing back to candidates list).
-  //   - dedup-merge or no_url: back to candidates (referer preserves filter).
+  //   - dedup-merge: back to candidates so admin can keep triaging.
+  //   - error (e.g. URL required): back to candidates with an err param
+  //     so the page can surface a banner.
   if (result.ok && !result.dedup && result.url && result.slug) {
     return NextResponse.redirect(
       new URL(`/admin/shul/${result.slug}?from=candidate`, req.url),
@@ -217,5 +259,10 @@ export async function POST(
     );
   }
   const back = req.headers.get("referer") ?? "/admin/candidates";
+  if (!result.ok && result.reason) {
+    const u = new URL(back, req.url);
+    u.searchParams.set("err", result.reason);
+    return NextResponse.redirect(u, 303);
+  }
   return NextResponse.redirect(new URL(back, req.url), 303);
 }

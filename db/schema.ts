@@ -40,14 +40,6 @@ export const shulStatusEnum = pgEnum("shul_status", [
   // PDF, vision) returns no usable rules. Weekly rescrape skips these
   // unless an admin manually re-triggers.
   "unsupported",
-  // Set by the discovery-approval flow when a candidate is approved
-  // but no URL is available (Places didn't return one, admin didn't
-  // paste one). Row exists for tracking (name + address + lat/lng)
-  // but is excluded from all public queries — tfila.co only publishes
-  // live, non-stale minyan times. Admin recovers a no_url shul by
-  // pasting a URL into Source URL on /admin/shul/[slug] and clicking
-  // Extract now.
-  "no_url",
 ]);
 
 export const dataSourceKindEnum = pgEnum("data_source_kind", [

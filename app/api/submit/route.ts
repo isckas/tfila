@@ -6,6 +6,7 @@ import { slugify, nameFromTitle } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
 import { notifyAdmin } from "@/lib/email";
 import { matchDomainOf } from "@/lib/dedup";
+import { resolveScheduleUrl } from "@/lib/discovery/find-schedule-page";
 
 // Submissions are processed ASYNC. We validate + dedupe + create a
 // placeholder shul row + fire an Inngest event in <1s, then return
@@ -42,14 +43,23 @@ export async function POST(req: Request): Promise<NextResponse> {
     return fail(req, "invalid");
   }
 
-  const matchDomain = matchDomainOf(url);
+  // ─── Resolve to schedule page when only a root URL was submitted ─
+  // If the user pasted "jewishwindsorterrace.org" we'd otherwise miss
+  // the actual /Times-and-Schedule.htm. Resolver short-circuits when
+  // the input already has a meaningful path. See lib/discovery/
+  // find-schedule-page.ts for the hybrid strategy.
+  const resolved = await resolveScheduleUrl(url);
+  const resolvedUrl = resolved.url;
+
+  const matchDomain = matchDomainOf(resolvedUrl);
 
   // ─── Exact-match dedup ──────────────────────────────────────
   // If the same submittedUrl is already on a shul, don't add it again.
+  // Check against the RESOLVED URL — that's what we'd be writing.
   const exact = await db
     .select({ id: shul.id, slug: shul.slug })
     .from(shul)
-    .where(eq(shul.submittedUrl, url))
+    .where(eq(shul.submittedUrl, resolvedUrl))
     .limit(1);
   if (exact[0]) {
     return fail(req, "duplicate");
@@ -75,7 +85,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         .where(
           and(
             eq(dataSource.shulId, sameDomain[0].id),
-            eq(dataSource.identifier, url),
+            eq(dataSource.identifier, resolvedUrl),
           ),
         )
         .limit(1);
@@ -119,7 +129,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       .values({
         slug: candidateSlug,
         name: placeholderName,
-        submittedUrl: url,
+        submittedUrl: resolvedUrl,
         contactEmail: email,
         matchDomain,
         status: "pending_review",
@@ -138,7 +148,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       name: "data-source.requested",
       data: {
         shulId: finalShulId,
-        url,
+        url: resolvedUrl,
         sourceKind: "website_llm",
       },
     });
@@ -158,7 +168,10 @@ export async function POST(req: Request): Promise<NextResponse> {
         ? `A submission was auto-merged into existing shul ${finalShulId} (${finalShulSlug}) because it shared the same registrable domain.`
         : `A new shul was just submitted to tfila.co.`,
       ``,
-      `URL: ${url}`,
+      `Submitted URL: ${url}`,
+      resolvedUrl !== url
+        ? `Resolved schedule URL: ${resolvedUrl} (via ${resolved.via}, confidence ${resolved.confidence})`
+        : `Resolved schedule URL: same as submitted`,
       `match_domain: ${matchDomain ?? "(none)"}`,
       `Contact email (from form): ${email ?? "(none)"}`,
       `Slug: ${finalShulSlug}`,
