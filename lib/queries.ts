@@ -3,6 +3,11 @@ import { db } from "../db/client";
 import { dataSource, minyanRule, scrapeRun, shul, type MinyanTime } from "../db/schema";
 
 // ─── Davener-facing reads ────────────────────────────────────────────────
+//
+// All public-facing reads gate on the FEATURES.md "no stale data" rule:
+// only shuls with at least one data_source whose last successful run is
+// within STALE_THRESHOLD_DAYS (14) appear publicly. The threshold lives
+// in lib/freshness.ts; the SQL fragment is inlined per query for clarity.
 
 export async function listActiveShuls() {
   return db
@@ -14,7 +19,18 @@ export async function listActiveShuls() {
       nusach: shul.nusach,
     })
     .from(shul)
-    .where(eq(shul.status, "active"))
+    .where(
+      and(
+        eq(shul.status, "active"),
+        sql`EXISTS (
+          SELECT 1 FROM data_source ds_fresh
+          WHERE ds_fresh.shul_id = ${shul.id}
+            AND ds_fresh.last_run_status = 'ok'
+            AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
+                NOW() - INTERVAL '14 days'
+        )`,
+      ),
+    )
     .orderBy(asc(shul.name));
 }
 
@@ -205,8 +221,8 @@ export async function getShulForAdmin(slug: string) {
 
 /**
  * All active shuls' lightweight payload, used by the home-page
- * Look-up card for client-side fuzzy matching. Small enough to
- * inline in the SSR HTML (~50 bytes per shul × ~150 shuls).
+ * Look-up card for client-side fuzzy matching. Gated on freshness so
+ * stale shuls don't appear in the typeahead.
  */
 export async function listShulsForLookup() {
   return db
@@ -216,11 +232,22 @@ export async function listShulsForLookup() {
       address: shul.address,
     })
     .from(shul)
-    .where(eq(shul.status, "active"))
+    .where(
+      and(
+        eq(shul.status, "active"),
+        sql`EXISTS (
+          SELECT 1 FROM data_source ds_fresh
+          WHERE ds_fresh.shul_id = ${shul.id}
+            AND ds_fresh.last_run_status = 'ok'
+            AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
+                NOW() - INTERVAL '14 days'
+        )`,
+      ),
+    )
     .orderBy(asc(shul.name));
 }
 
-/** Public free-text search across shul name/slug. Active shuls only. */
+/** Public free-text search across shul name/slug. Active + fresh shuls only. */
 export async function searchActiveShuls(q: string, limit = 30) {
   const pattern = `%${q.trim()}%`;
   if (!q.trim()) return [];
@@ -236,6 +263,13 @@ export async function searchActiveShuls(q: string, limit = 30) {
       and(
         eq(shul.status, "active"),
         sql`(${shul.name} ILIKE ${pattern} OR ${shul.slug} ILIKE ${pattern})`,
+        sql`EXISTS (
+          SELECT 1 FROM data_source ds_fresh
+          WHERE ds_fresh.shul_id = ${shul.id}
+            AND ds_fresh.last_run_status = 'ok'
+            AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
+                NOW() - INTERVAL '14 days'
+        )`,
       ),
     )
     .orderBy(asc(shul.name))
@@ -327,6 +361,12 @@ export interface AdminShulRow {
   liveRuleCount: number;
   primaryDataSourceId: number | null;
   primaryDataSourceReview: string | null;
+  /**
+   * Most recent successful data_source verification timestamp across
+   * all of this shul's data_sources. NULL = never had a successful run.
+   * Drives the green/amber/red freshness pill (lib/freshness.ts).
+   */
+  lastFreshAt: Date | null;
 }
 
 export async function listAdminShuls(opts: {
@@ -363,6 +403,7 @@ export async function listAdminShuls(opts: {
     live_rule_count: number;
     primary_data_source_id: number | null;
     primary_data_source_review: string | null;
+    last_fresh_at: Date | null;
   }>(sql`
     SELECT
       s.id, s.slug, s.name, s.status::text AS status, s.address, s.contact_email,
@@ -370,7 +411,8 @@ export async function listAdminShuls(opts: {
       COALESCE(ds_agg.cnt, 0)::int AS data_source_count,
       COALESCE(rule_agg.cnt, 0)::int AS live_rule_count,
       ds_top.id AS primary_data_source_id,
-      ds_top.review_status::text AS primary_data_source_review
+      ds_top.review_status::text AS primary_data_source_review,
+      fresh_agg.last_fresh_at
     FROM shul s
     LEFT JOIN LATERAL (
       SELECT COUNT(*) AS cnt FROM data_source WHERE shul_id = s.id
@@ -385,6 +427,11 @@ export async function listAdminShuls(opts: {
        ORDER BY priority DESC, built_at DESC NULLS LAST, id DESC
        LIMIT 1
     ) ds_top ON true
+    LEFT JOIN LATERAL (
+      SELECT MAX(COALESCE(last_received_at, last_run_at)) AS last_fresh_at
+        FROM data_source
+       WHERE shul_id = s.id AND last_run_status = 'ok'
+    ) fresh_agg ON true
     WHERE ${where}
     ORDER BY s.submitted_at DESC
     LIMIT ${limit}
@@ -403,6 +450,7 @@ export async function listAdminShuls(opts: {
     liveRuleCount: Number(r.live_rule_count),
     primaryDataSourceId: r.primary_data_source_id,
     primaryDataSourceReview: r.primary_data_source_review,
+    lastFreshAt: r.last_fresh_at,
   }));
 }
 
@@ -499,6 +547,13 @@ export async function getNearbyShulsWithRules(
       AND mr.deleted_at IS NULL
       AND (ds.id IS NULL OR ds.review_status <> 'rejected')
       AND ST_DWithin(s.location, ${point}, ${radiusMeters})
+      AND EXISTS (
+        SELECT 1 FROM data_source ds_fresh
+        WHERE ds_fresh.shul_id = s.id
+          AND ds_fresh.last_run_status = 'ok'
+          AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
+              NOW() - INTERVAL '14 days'
+      )
     ORDER BY distance_meters ASC, mr.priority DESC, mr.id ASC
   `);
 

@@ -5,6 +5,7 @@ import {
   getPublicRulesForShul,
   getMostRecentScrapeForShul,
 } from "@/lib/queries";
+import { hasFreshDataSourceForShul } from "@/lib/freshness";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
@@ -45,6 +46,16 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
   const sp = await searchParams;
   const shul = await getShulBySlug(slug);
   if (!shul) notFound();
+
+  // Stale gate (FEATURES.md "No stale data"). When the shul exists but
+  // no data_source has had a successful run in the last 14 days, render
+  // the "we don't have current times" variant instead of the schedule.
+  // Page resolves (preserves SEO + indexability), and the CTA gives
+  // daveners a way to help us restore the listing.
+  const fresh = await hasFreshDataSourceForShul(shul.id);
+  if (!fresh) {
+    return <StaleShulPage shul={shul} />;
+  }
 
   const tz = shul.timezone ?? "America/New_York";
   const now = new Date();
@@ -458,6 +469,85 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
           <span className="italic">never scraped yet</span>
         )}
         .
+      </p>
+    </main>
+  );
+}
+
+interface StaleShul {
+  slug: string;
+  name: string;
+  address: string | null;
+  submittedUrl: string | null;
+}
+
+/**
+ * Rendered for shuls that exist in our DB but have no data_source with
+ * a successful run in the last 14 days. Per FEATURES.md "No stale data"
+ * option C — preserve the slug URL (SEO, inbound links) but never serve
+ * stale times. The CTA gives daveners a way to restore the listing.
+ */
+function StaleShulPage({ shul }: { shul: StaleShul }) {
+  const subject = encodeURIComponent(`Bulletin for ${shul.name}`);
+  const mailto = `mailto:submit@tfila.co?subject=${subject}`;
+  return (
+    <main className="mx-auto max-w-2xl px-5 py-6">
+      <Link href="/" className="text-xs text-neutral-500 hover:underline">
+        ← back
+      </Link>
+
+      <header className="mt-3">
+        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">
+          {shul.name}
+        </h1>
+        {shul.address && (
+          <p className="mt-1 text-sm text-neutral-700">{shul.address}</p>
+        )}
+      </header>
+
+      <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-5 py-5 text-sm text-amber-950">
+        <h2 className="text-base font-semibold">
+          We don&apos;t have current tfila times for this shul.
+        </h2>
+        <p className="mt-2 text-neutral-800">
+          tfila.co only shows minyan times we&apos;ve verified in the last
+          two weeks &mdash; we&apos;d rather show nothing than something
+          that might be out of date.
+        </p>
+        <p className="mt-3 text-neutral-800">
+          Help us restore this listing: forward this shul&apos;s weekly
+          bulletin or schedule email to{" "}
+          <a
+            href={mailto}
+            className="font-medium text-amber-900 underline-offset-2 hover:underline"
+          >
+            submit@tfila.co
+          </a>
+          . We&apos;ll re-extract times automatically.
+        </p>
+        {shul.submittedUrl && (
+          <p className="mt-3 text-xs text-neutral-700">
+            Or visit the shul&apos;s site directly:{" "}
+            <a
+              href={shul.submittedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all text-amber-900 underline-offset-2 hover:underline"
+            >
+              {shul.submittedUrl}
+            </a>
+          </p>
+        )}
+      </section>
+
+      <p className="mt-6 text-xs text-neutral-500">
+        <Link href="/" className="underline-offset-2 hover:underline">
+          home feed
+        </Link>
+        {" · "}
+        <Link href="/find" className="underline-offset-2 hover:underline">
+          find another shul
+        </Link>
       </p>
     </main>
   );
