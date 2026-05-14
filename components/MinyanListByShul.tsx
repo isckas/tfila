@@ -63,7 +63,7 @@ export function MinyanListByShul({ groups }: Props) {
                   </span>
                   <span className="shrink-0 text-right">
                     <span className="font-semibold tabular-nums text-neutral-900">
-                      {formatTime(m.startIso)}
+                      {formatTime(m.startIso, m.timezone)}
                     </span>
                     <span className="ml-2 text-xs text-neutral-500">
                       <RelativeTime iso={m.startIso} />
@@ -79,8 +79,9 @@ export function MinyanListByShul({ groups }: Props) {
   );
 }
 
-function formatTime(iso: string): string {
+function formatTime(iso: string, timezone: string | null): string {
   return new Date(iso).toLocaleTimeString([], {
+    timeZone: timezone ?? "America/New_York",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,

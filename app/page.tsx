@@ -168,6 +168,7 @@ export default async function HomePage({ searchParams }: PageProps) {
       tefillah: r.tefillah,
       tefillahLabel: r.tefillahLabel,
       startIso: startDate.toISOString(),
+      timezone: r.timezone,
       notes: r.notes,
     });
   }

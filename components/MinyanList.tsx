@@ -14,6 +14,13 @@ export interface ResolvedMinyan {
   tefillahLabel: string | null;
   /** Resolved absolute time as ISO string. */
   startIso: string;
+  /**
+   * The shul's timezone. Used by formatTime to render the clock in
+   * local-to-the-shul time (the davener will physically be there).
+   * Without this, SSR falls back to the host TZ (UTC on Vercel) and
+   * a 7:49pm EDT minyan renders as "11:49 PM."
+   */
+  timezone: string | null;
   notes: string | null;
 }
 
@@ -72,7 +79,7 @@ export function MinyanList({ items, serverNowMs }: Props) {
               </div>
               <div className="text-right shrink-0">
                 <div className="font-semibold tabular-nums text-neutral-900">
-                  {formatTime(m.startIso)}
+                  {formatTime(m.startIso, m.timezone)}
                 </div>
                 <div className="text-xs">
                   <RelativeTime iso={m.startIso} />
@@ -92,8 +99,9 @@ export function MinyanList({ items, serverNowMs }: Props) {
   );
 }
 
-function formatTime(iso: string): string {
+function formatTime(iso: string, timezone: string | null): string {
   return new Date(iso).toLocaleTimeString([], {
+    timeZone: timezone ?? "America/New_York",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
