@@ -46,7 +46,7 @@ Almost every other Jewish-shul directory you've seen has the same problem: **the
 tfila.co solves this two ways:
 
 1. **We never ask shuls to maintain anything**. The shul already publishes its schedule somewhere — on its website, in its weekly email bulletin. We read from that source directly. If their schedule changes, ours does too. Automatically.
-2. **We re-check every shul once a week**, on Saturday night, so Sunday-morning daveners get fresh data. If a shul changes its Mincha time on Friday, we catch it on Saturday.
+2. **We re-check every shul once a week**, Motzei Shabbat, so Sunday-morning daveners get fresh data. If a shul changes its Mincha time on Friday, we catch it on Saturday.
 
 The cost is technical: we need to be able to read pretty much any shul's website or weekly email, in any format the shul happens to use, and pull out the minyan times reliably. Most of the technology here is in service of that.
 
@@ -205,7 +205,7 @@ The user never sees any of this. From their perspective, the shul's schedule jus
 
 Discovering and reading a shul once is easy. The hard part is keeping it accurate forever.
 
-Every Saturday night around 10pm Eastern Time (right after most Shabbosim end on the East Coast), a scheduled job runs:
+Every Motzei Shabbat around 10pm Eastern Time (right after most Shabbosim end on the East Coast), a scheduled job runs:
 
 1. For every shul we've previously verified, re-check the source.
 2. If the source's content hasn't changed since last time, do nothing (a content-hash comparison — we keep a fingerprint of the page from last week, compare, skip the AI re-read if identical).

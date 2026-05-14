@@ -52,7 +52,7 @@ export default async function HomePage({ searchParams }: PageProps) {
       <main className="mx-auto max-w-5xl px-4 py-8 sm:py-12">
         <header className="mb-4 sm:mb-6">
           <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm sm:p-8">
-            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6">
+            <div className="flex items-center gap-4 sm:gap-6">
               {/* Full logo (pin + "tfila.co" wordmark). Sized so the
                   tagline next to it stays the visual anchor. Aspect
                   ratio is ~512x721 (taller than wide because of the
@@ -73,7 +73,7 @@ export default async function HomePage({ searchParams }: PageProps) {
                   Every Jewish shul directory has the same problem &mdash;
                   times posted years ago, never updated. tfila.co reads
                   each shul&apos;s own website and weekly email bulletin,
-                  refreshes every Saturday night, and shows you what the
+                  refreshes every Motzei Shabbat, and shows you what the
                   shul actually has now.
                 </p>
               </div>
