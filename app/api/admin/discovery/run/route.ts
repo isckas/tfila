@@ -13,7 +13,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { discoveryRun } from "@/db/schema";
+import { discoveryRun, shulCandidate } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 // Import the targets JSON directly so Next.js bundles it into the
 // function output (resolveJsonModule=true in tsconfig). No runtime
@@ -113,31 +113,28 @@ async function runOneTarget(target: Target, apiKey: string) {
       let dupCount = 0;
       for (const p of places) {
         if (!p.id) continue;
-        // INSERT … ON CONFLICT DO NOTHING — Drizzle's pg.insert() doesn't
-        // expose a returning-was-it-new flag directly when paired with
-        // onConflictDoNothing, so use raw SQL to detect new rows.
-        const ins = await db.execute<{ id: number }>(sql`
-          INSERT INTO shul_candidate (
-            place_id, name, formatted_address, lat, lng, website_uri,
-            types, source, source_detail, discovery_target_name,
-            raw_response_jsonb
-          ) VALUES (
-            ${p.id},
-            ${p.displayName?.text ?? "(unknown)"},
-            ${p.formattedAddress ?? null},
-            ${p.location?.latitude ?? null},
-            ${p.location?.longitude ?? null},
-            ${p.websiteUri ?? null},
-            ${p.types ?? []},
-            ${"google_places"},
-            ${`query=${queryText}`},
-            ${target.name},
-            ${JSON.stringify(p)}::jsonb
-          )
-          ON CONFLICT (place_id) DO NOTHING
-          RETURNING id
-        `);
-        if (ins.rows.length > 0) newCount++;
+        // Use Drizzle's typed insert builder so the text[] (types)
+        // column is serialized as a proper Postgres ARRAY, not a tuple
+        // expression. Returning gives us a row when the insert happened,
+        // empty array when ON CONFLICT skipped it.
+        const ins = await db
+          .insert(shulCandidate)
+          .values({
+            placeId: p.id,
+            name: p.displayName?.text ?? "(unknown)",
+            formattedAddress: p.formattedAddress ?? null,
+            lat: p.location?.latitude ?? null,
+            lng: p.location?.longitude ?? null,
+            websiteUri: p.websiteUri ?? null,
+            types: p.types ?? [],
+            source: "google_places",
+            sourceDetail: `query=${queryText}`,
+            discoveryTargetName: target.name,
+            rawResponseJsonb: p,
+          })
+          .onConflictDoNothing({ target: shulCandidate.placeId })
+          .returning({ id: shulCandidate.id });
+        if (ins.length > 0) newCount++;
         else dupCount++;
       }
 
