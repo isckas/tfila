@@ -870,17 +870,19 @@ Related: [[feedback-security-cleanup-deferred]] — keep credential rotation and
 
 ---
 
-# 🚀 Long-term ideas (post-traction, not for initial build)
+# 🚀 Phase 2 features (post-traction; final cut TBD)
 
-The two entries below are **NOT for the initial build phase.** They're parked here as deliberate design records so the ideas don't get lost — but they should only be picked up after the site is mature, has consistent traffic, and the core product (find a current minyan near me) is rock-solid.
+The entries below are **Phase 2 candidates.** They're parked here as deliberate design records so the ideas don't get lost — but they should only be picked up after the site is mature, has consistent traffic, and the core product (find a current minyan near me) is rock-solid.
 
-The trigger to revisit: **there's a real, recurring user need for them.** Until then, building either would dilute focus from the directory-quality work that defines the product.
+The trigger to revisit: **there's a real, recurring user need + the core product is stable.** Until then, building any of them would dilute focus from the directory-quality work that defines the product.
+
+**Which of these actually ship as Phase 2 will be determined later** — based on which user needs surface as recurring, which adjacent communities ask for what, and which ones pair well with whatever marketing / growth motion is in play at that point. This is the candidate pool, not the commitment list.
 
 ---
 
-## Telegram chatbot (post-traction)
+## Telegram chatbot (Phase 2)
 
-Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+Added: 2026-05-15 · **Status: Phase 2 candidate — deferred until traction.**
 
 **The idea.** A Telegram bot at `@tfila_bot` that lets users query the directory by chat: "mincha near me" → bot asks for location → returns options. "mincha brooklyn 7pm" → returns a filtered list. Forwarding a shul flyer image to the bot triggers extraction (reusing the existing vision tier). WhatsApp Business is the obvious follow-on once Telegram proves the concept, but ship Telegram first — it's free and instant; WhatsApp is a Meta-API gauntlet.
 
@@ -924,9 +926,9 @@ Related: prior ideas-list entry for this concept (chat-first interface). [[featu
 
 ---
 
-## Layered Jewish-life map: minyanim + eruv + mikvah + kosher (post-traction)
+## Layered Jewish-life map: minyanim + eruv + mikvah + kosher (Phase 2)
 
-Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+Added: 2026-05-15 · **Status: Phase 2 candidate — deferred until traction.**
 
 **The idea.** Beyond shul pins, the map renders optional toggleable layers: eruv boundaries (where you can carry on Shabbos), nearest mikvah, kosher restaurants, kollelim/yeshivas. One canonical map for "where can I live a Jewish life here?" instead of 4 fragmented sites.
 
@@ -983,9 +985,9 @@ Related: [[feature-no-stale-data]] (the principle that has to extend to every la
 
 ---
 
-## Multi-language UI — Hebrew, Russian, French, Spanish (post-traction)
+## Multi-language UI — Hebrew, Russian, French, Spanish (Phase 2)
 
-Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+Added: 2026-05-15 · **Status: Phase 2 candidate — deferred until traction.**
 
 **The idea.** Localize the public-facing UI into the four languages most used by underserved Jewish populations: Hebrew (Israeli + Israeli-diaspora), Russian (NYC, Israel, Berlin, Toronto), French (NYC, Montreal, Israel), Spanish (Mexican, Argentinian, Sefardi). Yiddish for the chassidish slice. Auto-detect from `Accept-Language`; manual override in the header. Separate URL paths (`/he/`, `/ru/`, `/fr/`, `/es/`) so each locale gets indexed independently.
 
@@ -1034,9 +1036,9 @@ Related: [[feedback-security-cleanup-deferred]] — same wait-for-build-stabilit
 
 ---
 
-## Predictive "missing bulletin" admin alert (post-traction)
+## Predictive "missing bulletin" admin alert (Phase 2)
 
-Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+Added: 2026-05-15 · **Status: Phase 2 candidate — deferred until traction.**
 
 **The idea.** Per email-newsletter sender, learn the typical day-of-week + hour-of-day cadence (Safra usually sends Wed 11am ET; Edgware Adath sends Thu 4pm GMT; etc.). When a sender's expected bulletin hasn't arrived by ~24h past their typical send time, alert admin: "*Safra usually sends by Wed 1pm — nothing yet today. Likely outage / cadence change / sender unsubscribed?*" Admin can dismiss, mark cadence as changed, or follow up with the gabbai directly.
 
@@ -1082,3 +1084,73 @@ Added: 2026-05-15 · **Status: long-term, deferred until traction.**
 **Deferred until ≥30 active email senders + ≥8 weeks of cadence data per sender.** Note exists so the design is captured while it's fresh; the implementation is ~1 day of focused work when the trigger fires.
 
 Related: [[feature-no-stale-data]] (the principle this would extend). [[feedback-security-cleanup-deferred]] — same timing logic.
+
+---
+
+## "Make a Minyan" — ad-hoc location-based minyan formation (Phase 2)
+
+Added: 2026-05-15 · **Status: Phase 2 candidate — Isaac specifically flagged this as one he likes; details need real work.**
+
+**The idea.** A davener types a location (an airport gate, a hotel lobby, a wedding venue, an industrial park) + a time + which tefillah → opens an interest poll. Other daveners in the same area see "*Mincha at JFK Terminal 4 in 25 min — 4 of 10 interested*" and can opt in. When a threshold is met (10 men for an Orthodox minyan, fewer for non-Orthodox or kaddish-only), the meet-up location is shared with all participants and a confirmation push fires. Solves the gap between our directory (registered shuls only) and the real-life "I'm at the airport, can we make minyan?" moment that has zero consumer software today.
+
+**Source/inspiration.** Doodle (when-can-everyone-meet?). Meetup (one-off events vs recurring). Eventbrite RSVPs. Bandsintown's "interested" toggle. The shul-formation idea (real-time minyan formation for registered shuls, prior brainstorm), but extended to **ad-hoc locations** — the airport gate, the hotel, the office park, the wedding venue. The general "assurance contract" pattern from Kickstarter (commit if N others commit). Closest analog: church-meetup tools that let groups self-organize for prayer in non-traditional venues.
+
+### Why it's a Phase 2 idea
+
+This is genuinely interesting AND genuinely complex. The reasons it can't be a Phase 1 feature:
+
+- **Two-sided cold start, hard.** Campaigns at JFK Terminal 4 don't work unless multiple Jewish travelers happen to be browsing tfila.co at exactly that moment. With our current user base, the probability of a successful spontaneous airport minyan is near zero. The feature's value scales with critical mass in a way our other features don't.
+- **Best UX is chat-first, not web-first.** Someone running for a flight isn't going to open a browser and search. The right surface is push-notification-on-Telegram or a Wallet pass — both of which depend on infrastructure (Telegram bot, Wallet pass system) that's also Phase 2.
+- **Trust + safety are real.** Meeting strangers in a parking lot for Mincha sounds normal to observant Jews; from a moderation / safety / liability standpoint it's a marketplace-of-strangers feature. Need vetting, reporting, takedown flows — none of which we have today.
+- **Venue permissioning** — JFK might not love unscheduled minyanim in their terminals. Most are tolerated in practice but a public software feature that schedules them puts us on the wrong side of venue policy in some places.
+
+### Details that need real work (before we'd build)
+
+This is the "we'd really have to work out the details" list — the design questions to resolve before any code:
+
+- **Who can create a campaign?** Anonymous, or signed-in only? Bots will create fake campaigns at airports just to trigger notifications if anonymous. Signed-in adds friction; the "running for a flight" user can't create one easily.
+- **What counts as "the same location"?** A 0.5-mi geo-radius around the campaign? A specific terminal? A named landmark ("by the McDonald's at the food court")? The matching algorithm has to balance precision (no one wants to walk 1km to find the minyan) with reach (too tight = no critical mass).
+- **What's the threshold per campaign?** 10 for Orthodox traditional minyan. 6 for some non-Orthodox communities. Heter for less if someone is making yahrtzeit-kaddish only. A toggle? A free-text "I need 4 more"?
+- **No-show handling.** RSVPs aren't reliable; a campaign that hits "10 confirmed" but only 6 show up is worse than no campaign (people show, no minyan, frustrated). Need either a binding-on-N model (Kickstarter style — only fire the confirmation when N is met AND a buffer fires *another* push to lock in) OR a graceful "5 of 10 confirmed showed; we're still trying" status.
+- **Authentication / spam prevention.** Email-magic-link probably too high-friction for the 25-min "running between flights" mode. Phone number verification? Apple Sign-In? Anonymous-with-rate-limiting? Each has tradeoffs.
+- **Notification infrastructure.** Web Push works in browsers but iOS support has been historically spotty. Native push needs an app (which we don't have). Telegram bot + push works but only for users who've onboarded with the bot. Web push is the most pragmatic v1 and worst-case fallback to email.
+- **Cancellation + status updates.** "Campaign canceled — couldn't reach 10" needs to fire to all opted-in users. So does "minyan happening at gate B23 instead of B7."
+- **Campaign expiry + cleanup.** Campaigns past their start time auto-archive. UI shouldn't show a 3-hour-old "Mincha at JFK in 25 min" campaign as if it were active.
+- **Cultural framing.** Not all communities are comfortable with the assurance-contract pattern ("we'll commit if 10 of you commit") because it can feel transactional. Tone matters in the marketing/UX copy.
+- **Repeat-event mode (probably v2 of v2).** Some users want the "Mincha at this office park every Tuesday at 1pm" recurring campaign. Different shape; maybe its own product.
+
+### Pros (when revisited)
+
+- **Solves a genuinely unsolved problem.** Airport minyanim, wedding-hall Mincha during chuppah delays, industrial-park lunchtime Mincha — none has consumer software. This is *the* feature that turns tfila.co from "directory" into "Jewish life infrastructure."
+- **High-emotion shareable wins.** A successful spontaneous airport minyan is exactly the kind of story that gets WhatsApp-shared with "look at this site I used."
+- **Pairs with everything else** — the Telegram bot, the trip planner (prior brainstorm), the Wallet pass. They're the backbone for this feature's notifications and surfacing.
+- **Differentiates dramatically.** No Jewish minyan-finder anywhere does this. The whole genre is directory-only.
+
+### Cons (worth being honest about upfront)
+
+- Cold-start two-sided problem is real and won't be solved by build alone — needs marketing push.
+- Chat-first interface is the best surface; depends on the Telegram bot being live first.
+- Trust + safety load is non-trivial; need moderation tooling on day one.
+- Some venue policy / liability risk (especially airports, hospitals).
+- Risk of becoming a fragmented experience — "registered-shul minyan formation" (prior brainstorm) and "ad-hoc location minyan formation" might want unified UX or might not. Worth deciding which comes first.
+
+### When to revisit
+
+- **After the Telegram bot is live and has a user base** — the bot is the right surface for the "I'm at the airport NOW" use case.
+- **After we've built basic auth** (the auth-rework FEATURE entry above) so non-anonymous campaign creation is possible without re-architecting.
+- **When user signal makes it concrete** — if Isaac or other users keep finding themselves wishing this existed at airports/weddings/etc., that's the trigger. One specific anecdote per quarter is noise; once a month is a pattern.
+
+### What to do first (when revisited)
+
+1. **Wireframe the campaign-creation + RSVP UX** — chat-first AND web-first. Decide which is canonical.
+2. **Decide the matching radius + threshold model** — probably specific-venue-with-radius (e.g. "JFK Terminal 4 + 200m") rather than free geo.
+3. **Build a paper-prototype test** with 3-4 friends — does the "create + interest + threshold + confirmation" flow actually feel right at a 25-minute time pressure? Real-user friction will surface the unforced errors.
+4. **Decide auth model.** Probably phone-number SMS verification — friction acceptable, spam-prevention real, and the critical mass we'd want for airports already has cell signal.
+5. **Build the registered-shul version first** if not already done — same data shape, smaller feature surface, lower-risk way to validate the assurance-contract pattern in a controlled environment (the gabbai is responsible for follow-up).
+6. **Then ad-hoc venues** as the second iteration once registered-shul mode has proven the pattern.
+
+### Decision
+
+**Phase 2 candidate. Isaac flagged as one of his favorites in the brainstorm; we're keeping it on the active list specifically.** Build is non-trivial AND depends on Phase 2 infrastructure (Telegram bot, auth rework, push notifications). When the trigger fires, the design doc above should be revisited and refined — the "details that need real work" section is the starting point for the design conversation.
+
+Related: [[feature-telegram-chatbot]] (chat-first UX is probably the right surface). [[feature-auth-rework]] (campaign creation needs real auth). [[feature-real-time-minyan-formation]] (when written — the registered-shul cousin of this feature, probably built first as a stepping stone).
