@@ -155,7 +155,7 @@ Each step is small and independent. Could ship across 3 PRs (schema + backfill /
 
 ## Unified post-ingestion pipeline: URL and email paths must do the same work
 
-Added: 2026-05-13 · **Status: principle locked, not yet built.**
+Added: 2026-05-13 · **Status: BUILT 2026-05-14 across PR1-PR3 (commits `6a61431`, `9fbcbbb`, `5889428`). Email path now respects guardrails — bug found in design retroactively fixed.**
 
 **Principle:** Submission channels are an ingestion concern, not a processing concern. Whether a shul reaches us via URL submit, forwarded email, or any future channel (claimed shul, public API, mailing-list subscribe), every step *after* the raw data is in hand must be identical. The channel only owns "how the bytes arrive"; everything else — extraction, dedup, address backfill, persistence, guardrails, admin treatment — runs through one shared pipeline.
 
@@ -363,7 +363,7 @@ Concrete win: `jewishwindsorterrace.org/templates/articlecco_cdo/aid/2710598/jew
 
 ## Admin notes per shul
 
-Added: 2026-05-14 · **Status: designed. Not yet built.**
+Added: 2026-05-14 · **Status: BUILT 2026-05-14 (commit `cd761ed`, migration 0008).**
 
 **The rule.** Every shul row in the admin gets a free-text notes field, editable from `/admin/shul/[slug]`. Stores institutional knowledge that doesn't fit any structured column: "moved domains in March," "gabbai responds via email only," "PDF tier needed because their HTML schedule is a screenshot," "approved against Yossi's recommendation, watch for stale times."
 
@@ -418,7 +418,7 @@ Related: [[admin-ux-simplification]] (when written) — notes is one of the smal
 
 ## Home-page address search: 25-mile radius, nearest first
 
-Added: 2026-05-14 · **Principle locked. Implementation TBD.**
+Added: 2026-05-14 · **Status: BUILT 2026-05-14 (commit `f5e2239`). Per-shul grouping + empty-state CTA shipped per recommended option set.**
 
 **The rule.** When a user enters an address on the home page (the `FindCard` widget), the feed shows every minyan within a **25-mile radius** of that address, **ranked nearest first** (shul → user distance ascending). The radius and ranking are independent of the time-window logic.
 
@@ -470,7 +470,7 @@ Related: [[home-page-find-card-ux]] (when written), the [[no-stale-data]] freshn
 
 ## No stale data: only list shuls with fresh verified tfila times
 
-Added: 2026-05-14 · **Principle locked. Backend implementation TBD.**
+Added: 2026-05-14 · **Status: BUILT 2026-05-14 (commit `fe0737e`). 14-day query-time gate + slug-page stale variant + admin freshness pill shipped per recommended option set.**
 
 **The rule.** A shul is only visible to public daveners (home-page feed, fuzzy search, `/shul/[slug]` page, `/find` results) when we have **active, verified tfila times** for it. No active times → not listed. Period.
 
@@ -530,3 +530,31 @@ Because the rule is the product. Discovery, extraction, cascade, anti-bot proxy 
 ### Decision
 
 **Principle locked 2026-05-14.** Backend implementation deferred to a separate work session. When picked up: pick a threshold (start with 14 days), pick an architecture (start with query-time filtering — easier to undo), implement the public-facing "we don't have current times" page (option C), and add a freshness pill to the admin shul list so we can see at a glance which shuls are at risk of going stale.
+
+---
+
+## Admin UX: inbox-style dashboard, one row per shul
+
+Added: 2026-05-14 · **Status: BUILT 2026-05-14 (commit `5443c8c`).**
+
+The admin pipeline (candidate → shul → data_source → review → activate) used to span 5 separate landing pages, and `/admin/queue` + `/admin/rejected` listed `data_source` rows — so a shul with 2 pending sources showed up twice. The unified design treats **the shul as the unit of work** and renders an inbox-style row per shul with a verb-first label.
+
+### Decisions (locked 2026-05-14)
+
+- **Inbox = only shuls needing attention.** Healthy + active shuls don't appear in the inbox; they live in the catalog at `/admin/shuls`. Inbox empty when nothing's wrong.
+- **Verb-first labels** ("Review 2 new extractions" / "Investigate broken extraction" / "No good source — triage" / etc.) rather than state names. Inbox reads like a to-do list.
+- **One row per shul guaranteed**. `data_source` becomes an internal artifact you only see on the shul detail page.
+- **No taxonomy collapse.** `archived` / `unsupported` / `broken` / `rejected` stay separate — different actions to take, even if the inbox row labels smooth them over for day-to-day use.
+
+### What got built
+
+- `lib/admin-state.ts` — `deriveAdminShulState()` returns one of 8 derived states from the shul row + its aggregated data_source flags. Order-priority: `archived > unsupported > broken > pending_review > no_good_source > awaiting_extraction > stale > active`. `adminShulStateLabel()` maps to the verb. `adminShulStateSortKey()` for inbox urgency-ordering.
+- `lib/queries.ts:listAdminShuls` extended with a fifth LATERAL aggregating `has_pending_source`, `has_approved_source`, `has_rejected_source`, `has_broken_run`, `pending_source_count`. Single SQL round-trip; one row per shul guaranteed.
+- `components/AdminInbox.tsx` — reusable shul-row renderer.
+- `/admin` is now the inbox dashboard (was orphaned). `/admin/queue` + `/admin/rejected` are filtered views of the same data. `/admin/shuls` gained `?state=<derived>` for the dashboard tile clicks.
+- `app/admin/layout.tsx` — wordmark links to `/` (public home); new "Admin" nav entry → `/admin`.
+
+### Open follow-ups (not blockers)
+
+- Status taxonomy could collapse later (`unsupported` and `broken` overlap functionally — both mean "system gave up"; `rejected` is the human verdict). Defer until the existing distinction proves redundant in day-to-day use.
+- `/admin/data-source/[id]` still exists as a deep-link target. Could be inlined into the shul page eventually.

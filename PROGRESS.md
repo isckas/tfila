@@ -13,38 +13,56 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-05-14 (deep dive on shul discovery + Cloudflare proxy).**
+**Last working session: 2026-05-14 (long night — full-stack code review + 17 fix commits).**
 
-### Active concern — admin flow review
+See **[SESSION.md](./SESSION.md)** for the canonical pickup doc — it's the most up-to-date snapshot of state, what to verify post-deploy, and where the seams are.
 
-User flagged the admin pipeline as **convoluted** end of session: the candidate → shul → data_source → review → activate lifecycle now spans `/admin/candidates`, `/admin/queue`, `/admin/shuls`, `/admin/shul/[slug]`, and `/admin/data-source/[id]`. Each was built independently; together they don't read as one coherent workflow. Worth a session of UX simplification — likely a unified pipeline view that shows each shul's stage and the single next action.
+### Decided + designed, ready to build (or: think about)
 
-### Decided + designed, ready to build
-
-- **Unified post-ingestion pipeline parity (steps 2-7)** — Step 1 shipped (shared `backfillShulLocation` helper called from both URL + email paths). Steps 2-7 (factor slug allocation, guardrails, persist body, configJson normalization, name-preference logic, etc.) still pending. See [FEATURES.md](./FEATURES.md) "Unified post-ingestion pipeline".
-- **Admin extract route DRY pass** — `app/api/admin/shul/[id]/extract/route.ts:215-241` still has an inline copy of the Places address-backfill logic. Same 5-line swap to call `backfillShulLocation()` we did in the URL + email paths.
-
-### Deferred refactor (med priority)
-
-- **Same-origin URL fallback only runs in HTML tier.** JS-rendered, PDF, and Vision tiers don't try `/worship/shabbat`, `/services`, etc. **Note:** less urgent now that the schedule-page resolver (FEATURES.md "Discovery: schedule-page resolver") routes URLs to the right page before the cascade even runs.
+- **Same-origin URL fallback only runs in HTML tier** — deferred refactor. JS-rendered, PDF, and Vision tiers don't try `/worship/shabbat`, `/services`, etc. Less urgent since the schedule-page resolver routes URLs to the right page before the cascade.
 - **Vision-extractor calibration** — need ~5 more real vision extractions to assess prompt quality on stylized typography.
+- **API error-response convention via `lib/http.ts`** — touches every route; deferred from the code-review night. Convention: form POST → 303 redirect with `?err=`; JSON POST → JSON response. Today the three styles are mixed.
+- **Per-IP rate limit on `/submit`** — best done at the Vercel WAF level, not in code. Current per-domain cooldown handles the most common spam shape.
 
-### Outstanding security cleanup (still owed)
+### Deferred build-stage cleanup (do once project is stable)
 
-- Revoke Neon API key (`napi_0iis7jtr...`)
-- Rotate Neon DB password — paste new value into Vercel `DATABASE_URL`
-- Revoke Vercel API token (`vcp_5HB4LJ...`) — 24h scoped, will auto-expire
-- Revoke + rotate Inngest signing key (`signkey-prod-0cd76db3...`)
-- Revoke Cloudflare API token (`cfut_CS851YDvXHU8LjNC2oG...`)
-- Revoke Google API key (you didn't share it; remains untouched)
+Per [[feedback-security-cleanup-deferred]]: don't surface credential rotation here while we're in build mode.
 
 ### Still pending user-side setup (not new)
 
-- **Anthropic Auto-Reload + monthly cap** — recommended after the cascade work bumped per-extraction cost ~10×
+- **Anthropic Auto-Reload + monthly cap** — recommended after the cascade work bumped per-extraction cost ~10×. The 2026-05-14 hash bug fix should reduce weekly cron LLM spend dramatically (was paying for full extraction every Saturday on every shul).
 
 ---
 
 ## Done
+
+### 2026-05-14 (evening) — Code review + 17 fix commits ✅
+
+Full-stack code review (3 parallel agents) + worked through all findings in a single night. Migrations 0008 + 0009 applied to prod Neon. 18-row location backfill completed. See [SESSION.md](./SESSION.md) for the canonical session log.
+
+**Commits, in order:**
+- `6a61431` PR1 — `allocateUniqueSlug` shared + admin extract uses `backfillShulLocation`
+- `9fbcbbb` PR2 — shared guardrails + `insertRuleFromExtraction`; **email path now respects guardrails** (bad-week emails no longer wipe rules)
+- `5889428` PR3 — `persistDataSourceWithRules` + `applyShulNameAndAddressFromExtraction` — completes FEATURES.md "Unified post-ingestion pipeline"
+- `f5e2239` Address-search 25-mi nearest-first + per-shul grouping (FEATURES.md "Home-page address search")
+- `fe0737e` No-stale-data gate (FEATURES.md "No stale data") — public surfaces hide shuls without a successful run in 14d
+- `cd761ed` Admin notes per shul (FEATURES.md "Admin notes per shul") — migration 0008
+- `fa17ce3` Housekeeping (FEATURES.md entries, logo source, diag script, favicon)
+- `fb06f77` `geocodeAddressIfMissingLocation` — fixes the bug where address-set email-shuls had `location IS NULL` and were invisible to ST_DWithin
+- `5443c8c` Admin UX inbox overhaul — verb-first one-row-per-shul; queue/rejected became filtered views
+- `c078e1f` MinyanList times in shul TZ instead of server UTC
+- `c3eacbf` + `7914b6c` Tagline copy edits
+- `49aeb4a` Cost: pageContentHash sanitized-vs-raw bug + Sonnet skip on Haiku zero-rules
+- `acbff05` Idempotency: HTML + non-HTML rescrape paths atomic + retry-safe
+- `af30511` Security: magic-link single-use + drop attacker-controlled Origin + Postmark fail-closed (migration 0009)
+- `21f2b84` Security: SSRF guard + per-domain extraction cooldown on `/submit`
+- `9babf55` Correctness: build/scrape race + findShulPlace disambiguation + email guardrail bail
+- `282ae08` Refactor: `lib/format.ts` + `components/badges/*` — kill duplication
+- `9a002c4` Zmanim TZ from lat/lng (was UTC) + a11y labels + h3 headings + RelativeTime hydration + delete dead `SearchBox`
+
+**Prod-side migrations applied:** 0008 (`shul.admin_notes`), 0009 (`consumed_magic_link`).
+
+**Backfill ran:** 18 shuls had `address` set but `location` NULL — all geocoded via `scripts/backfill-shul-locations.mjs`.
 
 ### 2026-05-14 — Cloudflare Worker fetch proxy (anti-bot bypass) (commit `eec5202`) ✅
 
