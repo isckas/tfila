@@ -558,3 +558,67 @@ The admin pipeline (candidate → shul → data_source → review → activate) 
 
 - Status taxonomy could collapse later (`unsupported` and `broken` overlap functionally — both mean "system gave up"; `rejected` is the human verdict). Defer until the existing distinction proves redundant in day-to-day use.
 - `/admin/data-source/[id]` still exists as a deep-link target. Could be inlined into the shul page eventually.
+
+---
+
+## Schedule update timing — when emails arrive vs when the cron runs
+
+Added: 2026-05-15 · **Note (no decisions to make).** Codifies how the system reacts to a weekly bulletin email that lands BEFORE the Saturday-night URL rescrape, and where the date for each rule is stored.
+
+### Two ingestion clocks, not one
+
+The repo has two scheduled-update mechanisms; they're independent:
+
+1. **Postmark inbound emails — PUSH.** A shul's weekly bulletin lands in `submit@tfila.co` whenever the gabbai sends it (often Wednesday or Thursday for the upcoming Shabbat week). Postmark POSTs the parsed email to `/api/inbound/email`, which fires `email.received` Inngest. There is **no cron** behind this; the email itself is the trigger. So an email arriving Wednesday updates the database Wednesday — the times are live before Shabbat.
+2. **URL rescrape — CRON.** `weekly-rescrape.ts` fans out `shul.scrape.requested` events at Sat 22:00 ET (motzaei Shabbat). This refreshes any shul whose data_source is `kind='website_llm'` / `'shulcloud_website'`. Email-derived data_sources are NOT touched by this cron; they only update when a new email arrives.
+
+So a "weekly email sent before the Saturday update" is the *normal* case — emails update on receipt, not on the cron.
+
+### Where the rule's date lives
+
+Every `minyan_rule` row carries:
+
+| Column | For | Used by |
+|---|---|---|
+| `days_of_week` (smallint[]) | Regular weekly rules. e.g. `[1,2,3,4,5]` for Monday-Friday | Home feed + shul page filter "is today's day-of-week in this set?" |
+| `valid_from` (date) | Date-bounded rules. ISO date string. e.g. `"2026-05-22"` | Shul page filter `selectedIso >= validFrom` |
+| `valid_to` (date) | Date-bounded rules. Same shape | Shul page filter `selectedIso <= validTo` |
+| `special_schedule_kind` (enum) | Tags the rule's nature: `regular`, `yom_tov`, `three_weeks`, `aseres_yemei_teshuvah`, `fast_day`, `rosh_chodesh`, `ad_hoc` | Resolution + priority |
+| `priority` (int) | 0 for regular, 10 for date-bounded special. Higher wins on date overlap | Rule resolution at query time |
+
+There is **no separate "schedule_for_week_of" date** — each rule individually carries either a recurring `days_of_week` (regular) or a `valid_from`/`valid_to` (special). Together they let one shul mix "Mincha Mon-Fri at 19:30" (regular, no date) with "Tisha B'Av Maariv 21:15 on 2026-08-13" (special, date-bounded).
+
+### Replace-vs-add semantics on a fresh email
+
+In `lib/inngest/functions/process-email.ts:301-406`, after the LLM returns its rules:
+
+- **Regular rules** (`special_schedule_kind === 'regular'` or omitted) — every existing live regular rule under that data_source is soft-deleted; new regular rules are inserted. This means a Wednesday email completely replaces the prior week's regular schedule. If the gabbai changed Mincha's time, the old time is gone.
+- **Special rules** (any non-regular kind) — ADD. Existing special rules are NOT touched. So if last week's email included a "Tisha B'Av schedule" with `validFrom=2026-08-13`, AND this week's email also includes the Tisha B'Av schedule, you now have two date-bounded rules for the same date. (Today this is benign — query-time resolution picks one by priority + position. We'd improve dedup if it became noisy.)
+
+### Resolution at query time
+
+Both the home feed and the shul page resolve which rule applies for a given date by walking all rules for the shul:
+
+1. Special rule? Skip if `selectedIso < validFrom` or `selectedIso > validTo`.
+2. Regular rule? Skip if `days_of_week` is set and doesn't include the day-of-week.
+3. Among rules that pass, the one with higher `priority` wins on overlap (special's `10` beats regular's `0`).
+
+The `selectedIso` for the shul page comes from the URL `?date=YYYY-MM-DD` (or today if absent), in the **shul's** timezone, not the user's. The home feed uses `now` resolved in the user's location's timezone (per the `geo-tz` fix from 2026-05-14).
+
+### Edge case: email with year-omitted dates
+
+The LLM extraction prompt was tightened on 2026-05-14 (commit `4b1fc95`) to never default partial dates ("May 8-9") to a year in the past — it uses the upcoming occurrence or the email's own date as the floor. This shows up as the special rule's `validFrom` correctly resolving to the next May 8, not the May 8 that already passed.
+
+### Why no per-email "received_at"-as-validity-window field
+
+Considered and rejected: storing the *email's* received_at and treating each rule as "valid until next email arrives." Two reasons against:
+
+1. The schedule the gabbai SENT applies to a specific date range, not "from this Wednesday until I send another email." If the next email is delayed two weeks, the prior schedule is still correct for those two weeks.
+2. The replace-on-receipt semantics already handle the "schedule changed" case for regular rules. Date-bounded rules carry their own `validFrom`/`validTo` from the bulletin's text.
+
+### tl;dr
+
+- Emails are **push, not cron** — no Saturday-night dependency.
+- Regular weekly rules: no date column; live until next email replaces them; gated at query time by `days_of_week`.
+- Date-bounded special rules: `valid_from` / `valid_to` columns; ADD on top of regular; gated at query time by date.
+- The Saturday cron only refreshes URL-derived data_sources, never email-derived ones.
