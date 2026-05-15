@@ -16,14 +16,7 @@ export const TEFILLAH_ORDER = ["shacharis", "mincha", "maariv", "selichos", "nei
 
 const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Shabbos"];
 
-export function formatClock12(date: Date, timezone: string): string {
-  return date.toLocaleTimeString([], {
-    timeZone: timezone,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
+export { formatClockFromDate as formatClock12 } from "./format";
 
 export function formatTimeLabel(t: MinyanTime): string {
   if (t.kind === "fixed") {
@@ -97,11 +90,7 @@ export function haversineMiles(
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-export function formatDistance(miles: number): string {
-  if (miles < 0.1) return `${Math.round(miles * 1609.344)} m`;
-  if (miles < 10) return `${miles.toFixed(1)} mi`;
-  return `${Math.round(miles)} mi`;
-}
+export { formatDistanceMiles as formatDistance } from "./format";
 
 /** JS Date → "YYYY-MM-DD" in a given timezone. */
 export function isoDateInTz(date: Date, timezone: string): string {

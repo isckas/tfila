@@ -5,7 +5,7 @@ import {
   deriveAdminShulState,
   type AdminShulState,
 } from "@/lib/admin-state";
-import { shulFreshnessTier, STALE_THRESHOLD_DAYS } from "@/lib/freshness";
+import { FreshnessBadge } from "@/components/badges/FreshnessBadge";
 import type { AdminShulRow } from "@/lib/queries";
 
 interface Props {
@@ -88,7 +88,7 @@ function AdminInboxRow({
             )}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1 text-xs">
-            <FreshnessChip lastFreshAt={row.lastFreshAt} />
+            <FreshnessBadge lastFreshAt={row.lastFreshAt} />
             {row.dataSourceCount > 0 && (
               <span className="text-neutral-400 tabular-nums">
                 {row.dataSourceCount} source
@@ -99,41 +99,5 @@ function AdminInboxRow({
         </div>
       </Link>
     </li>
-  );
-}
-
-function FreshnessChip({ lastFreshAt }: { lastFreshAt: Date | null }) {
-  const days =
-    lastFreshAt == null
-      ? null
-      : Math.floor((Date.now() - new Date(lastFreshAt).getTime()) / 86_400_000);
-  const tier = shulFreshnessTier(days);
-
-  const styles: Record<string, string> = {
-    fresh: "bg-emerald-100 text-emerald-800",
-    warning: "bg-amber-100 text-amber-800",
-    stale: "bg-rose-100 text-rose-800",
-    never: "bg-neutral-100 text-neutral-500",
-  };
-  const text =
-    tier === "never"
-      ? "never"
-      : tier === "stale"
-        ? `${days}d stale`
-        : `${days}d`;
-  const title =
-    tier === "stale"
-      ? `Hidden from public — no fresh data_source in last ${STALE_THRESHOLD_DAYS} days`
-      : tier === "never"
-        ? "No successful run yet"
-        : `Last verified ${days}d ago`;
-
-  return (
-    <span
-      title={title}
-      className={`rounded px-1.5 py-0.5 tabular-nums ${styles[tier]}`}
-    >
-      {text}
-    </span>
   );
 }

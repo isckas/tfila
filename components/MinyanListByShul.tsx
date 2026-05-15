@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { RelativeTime } from "./RelativeTime";
 import { TEFILLAH_LABEL, type ResolvedMinyan } from "./MinyanList";
+import { formatClockFromIso, formatDistanceMeters } from "@/lib/format";
 
 export interface ShulGroup {
   shulId: number;
@@ -43,7 +44,7 @@ export function MinyanListByShul({ groups }: Props) {
                 )}
               </div>
               <div className="shrink-0 text-right text-xs tabular-nums text-neutral-500">
-                {formatDistance(g.distanceMeters)}
+                {formatDistanceMeters(g.distanceMeters)}
               </div>
             </div>
 
@@ -63,7 +64,7 @@ export function MinyanListByShul({ groups }: Props) {
                   </span>
                   <span className="shrink-0 text-right">
                     <span className="font-semibold tabular-nums text-neutral-900">
-                      {formatTime(m.startIso, m.timezone)}
+                      {formatClockFromIso(m.startIso, m.timezone)}
                     </span>
                     <span className="ml-2 text-xs text-neutral-500">
                       <RelativeTime iso={m.startIso} />
@@ -79,18 +80,3 @@ export function MinyanListByShul({ groups }: Props) {
   );
 }
 
-function formatTime(iso: string, timezone: string | null): string {
-  return new Date(iso).toLocaleTimeString([], {
-    timeZone: timezone ?? "America/New_York",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function formatDistance(meters: number): string {
-  const miles = meters / 1609.344;
-  if (miles < 0.1) return `${Math.round(meters)} m`;
-  if (miles < 10) return `${miles.toFixed(1)} mi`;
-  return `${Math.round(miles)} mi`;
-}

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getShulForAdmin, getRecentScrapeRunsForShul } from "@/lib/queries";
 import { parseCascadeAttempts } from "@/lib/llm/cascade";
+import { StatusBadge } from "@/components/badges/StatusBadge";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -60,7 +61,7 @@ export default async function AdminShulDetailPage({
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-        <StatusPill status={s.status} />
+        <StatusBadge status={s.status} />
         {s.timezone && (
           <span className="rounded bg-neutral-100 px-2 py-0.5 font-mono text-neutral-700">
             {s.timezone}
@@ -610,21 +611,6 @@ export default async function AdminShulDetailPage({
         </form>
       </section>
     </div>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    active: "bg-emerald-100 text-emerald-800",
-    pending_review: "bg-amber-100 text-amber-800",
-    broken: "bg-rose-100 text-rose-800",
-    archived: "bg-neutral-100 text-neutral-600",
-    unsupported: "bg-rose-100 text-rose-900",
-  };
-  return (
-    <span className={`rounded px-1.5 py-0.5 text-xs ${styles[status] ?? "bg-neutral-100 text-neutral-700"}`}>
-      {STATUS_LABEL[status] ?? status}
-    </span>
   );
 }
 

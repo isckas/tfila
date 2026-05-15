@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { listAdminShuls, countByShulStatus } from "@/lib/queries";
-import { shulFreshnessTier } from "@/lib/freshness";
 import {
   adminShulStateLabel,
   deriveAdminShulState,
   type AdminShulState,
 } from "@/lib/admin-state";
+import { FreshnessBadge } from "@/components/badges/FreshnessBadge";
+import {
+  StatusBadge,
+  SHUL_STATUS_LABELS,
+} from "@/components/badges/StatusBadge";
 
 export const dynamic = "force-dynamic";
 
@@ -24,14 +28,7 @@ const ADMIN_STATES: AdminShulState[] = [
   "active",
 ];
 
-const STATUS_LABELS: Record<string, string> = {
-  pending_review: "Pending review",
-  active: "Active",
-  broken: "Broken",
-  archived: "Archived",
-  unsupported: "Unsupported",
-};
-
+const STATUS_LABELS = SHUL_STATUS_LABELS;
 const STATUSES = ["pending_review", "active", "broken", "archived", "unsupported"];
 
 export default async function AdminShulsPage({ searchParams }: PageProps) {
@@ -183,7 +180,10 @@ export default async function AdminShulsPage({ searchParams }: PageProps) {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <FreshnessBadge lastFreshAt={s.lastFreshAt} />
+                      <FreshnessBadge
+                        lastFreshAt={s.lastFreshAt}
+                        variant="full"
+                      />
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-neutral-700">
                       {s.liveRuleCount}
@@ -224,55 +224,3 @@ export default async function AdminShulsPage({ searchParams }: PageProps) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    active: "bg-emerald-100 text-emerald-800",
-    pending_review: "bg-amber-100 text-amber-800",
-    broken: "bg-rose-100 text-rose-800",
-    archived: "bg-neutral-100 text-neutral-600",
-    unsupported: "bg-rose-100 text-rose-900",
-  };
-  return (
-    <span
-      className={`rounded px-1.5 py-0.5 text-xs ${styles[status] ?? "bg-neutral-100 text-neutral-700"}`}
-    >
-      {STATUS_LABELS[status] ?? status}
-    </span>
-  );
-}
-
-function FreshnessBadge({ lastFreshAt }: { lastFreshAt: Date | null }) {
-  const days =
-    lastFreshAt == null
-      ? null
-      : Math.floor((Date.now() - new Date(lastFreshAt).getTime()) / 86_400_000);
-  const tier = shulFreshnessTier(days);
-
-  const styles: Record<string, string> = {
-    fresh: "bg-emerald-100 text-emerald-800",
-    warning: "bg-amber-100 text-amber-800",
-    stale: "bg-rose-100 text-rose-800",
-    never: "bg-neutral-100 text-neutral-500",
-  };
-  const labels: Record<string, string> = {
-    fresh: days != null ? `${days}d` : "—",
-    warning: days != null ? `${days}d` : "—",
-    stale: days != null ? `stale · ${days}d` : "stale",
-    never: "never",
-  };
-  const title =
-    tier === "stale"
-      ? "Hidden from public — no fresh data_source in last 14 days"
-      : tier === "never"
-        ? "No successful run yet"
-        : `Last verified ${days}d ago`;
-
-  return (
-    <span
-      title={title}
-      className={`rounded px-1.5 py-0.5 text-xs tabular-nums ${styles[tier]}`}
-    >
-      {labels[tier]}
-    </span>
-  );
-}

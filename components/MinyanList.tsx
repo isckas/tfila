@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { RelativeTime } from "./RelativeTime";
+import { formatClockFromIso, formatDistanceMeters } from "@/lib/format";
 
 export interface ResolvedMinyan {
   ruleId: number;
@@ -79,13 +80,13 @@ export function MinyanList({ items, serverNowMs }: Props) {
               </div>
               <div className="text-right shrink-0">
                 <div className="font-semibold tabular-nums text-neutral-900">
-                  {formatTime(m.startIso, m.timezone)}
+                  {formatClockFromIso(m.startIso, m.timezone)}
                 </div>
                 <div className="text-xs">
                   <RelativeTime iso={m.startIso} />
                 </div>
                 <div className="text-xs text-neutral-500 tabular-nums">
-                  {formatDistance(m.distanceMeters)}
+                  {formatDistanceMeters(m.distanceMeters)}
                 </div>
               </div>
             </div>
@@ -97,22 +98,6 @@ export function MinyanList({ items, serverNowMs }: Props) {
       ))}
     </ul>
   );
-}
-
-function formatTime(iso: string, timezone: string | null): string {
-  return new Date(iso).toLocaleTimeString([], {
-    timeZone: timezone ?? "America/New_York",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function formatDistance(meters: number): string {
-  const miles = meters / 1609.344;
-  if (miles < 0.1) return `${Math.round(meters)} m`;
-  if (miles < 10) return `${miles.toFixed(1)} mi`;
-  return `${Math.round(miles)} mi`;
 }
 
 export { TEFILLAH_LABEL };
