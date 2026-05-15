@@ -980,3 +980,105 @@ Before this entry can credibly be revisited:
 - A real trigger event has happened — see "When to revisit" above.
 
 Related: [[feature-no-stale-data]] (the principle that has to extend to every layer added). [[feedback-security-cleanup-deferred]] — same "wait for build stability" timing logic.
+
+---
+
+## Multi-language UI — Hebrew, Russian, French, Spanish (post-traction)
+
+Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+
+**The idea.** Localize the public-facing UI into the four languages most used by underserved Jewish populations: Hebrew (Israeli + Israeli-diaspora), Russian (NYC, Israel, Berlin, Toronto), French (NYC, Montreal, Israel), Spanish (Mexican, Argentinian, Sefardi). Yiddish for the chassidish slice. Auto-detect from `Accept-Language`; manual override in the header. Separate URL paths (`/he/`, `/ru/`, `/fr/`, `/es/`) so each locale gets indexed independently.
+
+**Source/inspiration.** Wikipedia's per-language wikis (different content trees per language, not just translation). Wise's localization-as-product approach. Booking.com's 40+ language support — a major reason it dominates international travel. The fact that Mexican / French / Russian-speaking Jewish populations are large and currently invisible to English-only Jewish web tools.
+
+### Why it's a long-term play, not a build-now play
+
+- **Translation drift is a maintenance tax that compounds with every feature.** Every English copy tweak forces N translation updates. Without process discipline (translation memory, structured copy IDs, automated diffing) this becomes a tax that grows linearly with N languages × M components. Better to internationalize *once* when the English UI is stable than to retrofit translations onto a moving target.
+- **Localization isn't translation** — "Mincha" is universal but a French-speaking user expects French halachic conventions in zmanim labels (Shkia → Coucher du soleil); a Hebrew user expects גמרא mode rather than transliteration. Surface-level word-replacement is wrong; cultural localization needs per-locale review.
+- **Tefillah-name databases vary by tradition** — Sefardi vs Ashkenazi name differences are real. Each language probably needs a small "what does this tefillah mean?" glossary, which is its own data-modeling and authoring effort.
+- **Engineering opt-in** — every component has to be touched once. Server components + Next.js i18n routing makes this manageable but it's still real work. Doing it before there's audience demand for a specific language is wasted effort.
+
+### When to revisit
+
+- **Concrete trigger:** when a meaningful chunk of monthly visitors arrive with `Accept-Language` set to a target locale (e.g. ≥10% Hebrew or ≥5% any non-English). Web analytics will tell us; today we likely see <1% of any single non-English language.
+- **Or:** when a community in a target language (e.g. an Israeli WhatsApp group, a French-speaking shul network) explicitly asks for the site in their language, multiple times.
+- **Or:** when a community volunteer offers to translate + maintain one language. Cold-start solution to the localization burden — start with whichever language they're willing to own.
+
+### Pros (when the time comes)
+
+- Real underserved audiences with effectively zero current English-Jewish-web competition.
+- SEO multiplier — separate URL paths get indexed separately. Each language doubles the surface Google sees.
+- Hebrew is special — much of our content (zmanim, tefillah names, parsha references) is already partially Hebrew. RTL + bilingual mode is more *natural* for a Jewish site than for most products.
+- `next-intl` + Crowdin + an LLM first-pass + community polish would get a 70% translated UI in a week of focused work.
+
+### Cons (worth flagging upfront)
+
+- Drift maintenance burden grows with feature surface.
+- Cultural localization (not just word translation) is its own discipline.
+- Per-locale halachic conventions need expert review (a French-Sefardi user expects different Shabbos labels than a French-Ashkenazi user).
+- Risk of half-supporting languages (English fully translated, Spanish 60%, Russian 30%) — partial localization can read worse than English-only.
+
+### What to do first (when revisited)
+
+1. **Pick ONE language first** based on the trigger event. Don't try to ship 4 at once.
+2. **Audit existing copy for translation-readiness.** Long sentences with embedded Hebrew terms, dynamic strings with interpolation — those need to be refactored before any translation tool can handle them cleanly.
+3. **Set up structured copy IDs.** Every visible string gets a key in a JSON file; the React components reference keys, not strings. Forces the discipline before translations start.
+4. **Find one community contributor for the chosen language.** Don't rely solely on machine translation; ship with at least one human-reviewed pass.
+5. **Plan the second language only after the first is stable.** Each language reveals its own infrastructure gaps.
+
+### Decision
+
+**Deferred until traction signals one of the trigger events.** Note exists so future-Isaac knows the work is anticipated and the right place to start (next-intl + structured copy IDs + community contributor) is already mapped.
+
+Related: [[feedback-security-cleanup-deferred]] — same wait-for-build-stability timing.
+
+---
+
+## Predictive "missing bulletin" admin alert (post-traction)
+
+Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+
+**The idea.** Per email-newsletter sender, learn the typical day-of-week + hour-of-day cadence (Safra usually sends Wed 11am ET; Edgware Adath sends Thu 4pm GMT; etc.). When a sender's expected bulletin hasn't arrived by ~24h past their typical send time, alert admin: "*Safra usually sends by Wed 1pm — nothing yet today. Likely outage / cadence change / sender unsubscribed?*" Admin can dismiss, mark cadence as changed, or follow up with the gabbai directly.
+
+**Source/inspiration.** Pingdom's site-uptime monitoring (alert when expected heartbeat misses). Datadog's anomaly detection on metrics. PagerDuty's escalation flow. Strava's "you usually run Tuesdays — wanna run today?" nudge. The general "we know what normal looks like; alert on deviation" pattern operations tools live on. For accuracy-critical products specifically: Stripe's webhook-failure alerting, Twilio's delivery-failure escalation.
+
+### Why it's a long-term play, not a build-now play
+
+- **Needs ≥4 weeks of per-sender cadence data to bootstrap.** Until each sender has a stable cadence pattern, every gap is unexplainable; the system would generate noise, not signal. Premature deployment trains admin to ignore alerts.
+- **Email-only signal** — doesn't help URL-derived shuls (cron handles those). Limited to `data_source.kind = 'email_newsletter'`. Today email is a small slice of our inventory; the feature gets meaningfully useful only when there are dozens of email senders with established cadences.
+- **The stale-gate already covers the public-facing risk.** Today, if a gabbai stops sending, the shul disappears from public surfaces 14 days later. The predictive alert closes a 13-day gap (admin notices on day 1 instead of the user noticing on day 14) — meaningful but not urgent until the daily-traffic cost of that 13-day gap becomes real.
+- **Sender cadence is irregular for some shuls** — chag weeks, summer breaks, gabbai vacation. Need an admin "this is expected" snooze action and graceful handling of seasonal patterns. That's its own UX discipline that benefits from operating-with-real-data refinement.
+
+### When to revisit
+
+- **Concrete trigger:** ≥30 active email_newsletter data_sources with at least 8 weeks of receive-history each. That's roughly when there's enough cadence data to learn from + enough surface area that admin reactive-monitoring becomes a burden.
+- **Or:** when the first user complaint of "shul X stopped having times last month, why didn't anyone notice?" arrives. That's the latency cost made concrete.
+- **Or:** when admin onboards a second person — proactive alerts save the second admin from learning the cadences manually. Pairs with the auth-rework entry.
+
+### Pros (when the time comes)
+
+- Promotes the no-stale-data principle from "hide stale shuls" to "prevent shuls from going stale in the first place."
+- Lightweight implementation — no real ML needed. A 4-week rolling median of last-received-at intervals per data_source + a 1.5× tolerance threshold is sufficient. Maybe 100 lines of code.
+- Reuses existing admin notification infra (`notifyAdmin`).
+- Sharpens the operational discipline — turns "react to user complaints" into "reach out to gabbai before user notices."
+
+### Cons (worth flagging upfront)
+
+- Noisy until per-sender history accumulates.
+- Cadence is genuinely irregular for some shuls (seasonal, holidays).
+- Doesn't cover URL-derived shuls — those use the cron's existing failure-detection.
+- Cadence-changed events (gabbai switched from email to WhatsApp) look identical to outages; admin still has to disambiguate.
+
+### What to do first (when revisited)
+
+1. **Backfill the cadence history.** Per `data_source` of kind `email_newsletter`, derive the median + std-dev of intervals between `last_received_at` values from `scrape_run` history (or a derived view). This is a read-only analysis pass — no new data needed.
+2. **Pick the threshold conservatively.** Start with `expected_next_at + 24 hours` as the alert trigger. Tune over time based on false-positive rate.
+3. **Build the admin snooze action FIRST.** Before any alert fires. Otherwise the first day of alerts will burn admin's trust.
+4. **One alert per sender per gap.** No re-alerting until the gap closes (a new bulletin arrives) or admin acknowledges.
+5. **Inngest cron**, not real-time. Run every 4-6 hours; alerts surface in a dedicated `/admin/alerts` view + an optional email digest.
+
+### Decision
+
+**Deferred until ≥30 active email senders + ≥8 weeks of cadence data per sender.** Note exists so the design is captured while it's fresh; the implementation is ~1 day of focused work when the trigger fires.
+
+Related: [[feature-no-stale-data]] (the principle this would extend). [[feedback-security-cleanup-deferred]] — same timing logic.
