@@ -24,6 +24,10 @@ See **[SESSION.md](./SESSION.md)** for the canonical pickup doc — it's the mos
 - **API error-response convention via `lib/http.ts`** — touches every route; deferred from the code-review night. Convention: form POST → 303 redirect with `?err=`; JSON POST → JSON response. Today the three styles are mixed.
 - **Per-IP rate limit on `/submit`** — best done at the Vercel WAF level, not in code. Current per-domain cooldown handles the most common spam shape.
 
+### Needs live-data verification
+
+- **Email schedule pipeline date handling** — FEATURES.md "Schedule update timing" notes how the code is *meant* to work (regular rules replace, special rules add, dates stored per-rule via `valid_from`/`valid_to`). Pick this up after ~2-3 weeks of real email cycles have run so there's enough data to spot patterns. Walk a real shul (e.g. Safra `id=59`) end-to-end against the source bulletin, check categorization, check prior-week soft-delete, sample LLM date extraction. See the "⚠ Needs verification on live data" subsection of that FEATURES.md entry.
+
 ### Deferred build-stage cleanup (do once project is stable)
 
 Per [[feedback-security-cleanup-deferred]]: don't surface credential rotation here while we're in build mode.

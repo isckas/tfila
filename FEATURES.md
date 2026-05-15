@@ -622,3 +622,17 @@ Considered and rejected: storing the *email's* received_at and treating each rul
 - Regular weekly rules: no date column; live until next email replaces them; gated at query time by `days_of_week`.
 - Date-bounded special rules: `valid_from` / `valid_to` columns; ADD on top of regular; gated at query time by date.
 - The Saturday cron only refreshes URL-derived data_sources, never email-derived ones.
+
+### ⚠ Needs verification on live data
+
+Everything above is what the **code** does. We haven't yet confirmed it matches what daveners experience for real schedule cycles. Worth a deliberate examination once we have a few weeks of email-driven shuls in prod:
+
+- **Pick a real email-derived shul** (Safra `id=59` is the canonical one with 12+ regular rules, but any `data_source.kind='email_newsletter'` works) and walk a full cycle:
+  1. Inspect the live `minyan_rule` rows: which carry `days_of_week`? Which carry `valid_from`/`valid_to`? Spot any that look mis-categorized — e.g. a "regular" rule that should have been `yom_tov`?
+  2. Compare today's home-feed render at the shul's location vs what a human reads off the source bulletin. Mismatches?
+  3. After the shul sends NEXT week's bulletin, verify the prior week's regular rules got soft-deleted (not still showing up) and special rules from prior bulletins are still around if their `valid_to` hasn't passed.
+- **Check the LLM's date-handling specifically** — re-process a few real bulletins and read the extracted `valid_from`/`valid_to` against the bulletin text. The 2026-05-14 prompt fix (commit `4b1fc95`) should keep partial dates ("May 8-9") from defaulting to the past, but a sample of 5-10 forwards would tell us if it's sticking.
+- **Cross-week handling** — what happens when one bulletin covers a date range that overlaps with the next bulletin's? Probably both special rules survive and the priority+date filter picks one, but worth confirming with a real overlap.
+- **Stale-special-rules drift** — there's no GC for special rules whose `valid_to` is in the past. They linger in the table forever. Inert for query purposes (filtered out) but accumulates rows. If it becomes noisy, add a periodic job to soft-delete `valid_to < NOW() - INTERVAL '90 days'`.
+
+Pick this up after a few normal email cycles have run in prod (~2-3 weeks of activity), so we have enough data to spot patterns rather than one-shot anecdotes.
