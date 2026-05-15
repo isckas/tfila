@@ -867,3 +867,116 @@ Drop the bespoke magic-link entirely. Sign-in via the third party; map their ses
 **Deferred. Note exists so future-Isaac (or a code review) doesn't read the env-var allow-list and wonder if it's intentional. It IS intentional, AND it has a known migration path when the time comes.**
 
 Related: [[feedback-security-cleanup-deferred]] — keep credential rotation and auth-model rework on the same "after build phase" timeline.
+
+---
+
+# 🚀 Long-term ideas (post-traction, not for initial build)
+
+The two entries below are **NOT for the initial build phase.** They're parked here as deliberate design records so the ideas don't get lost — but they should only be picked up after the site is mature, has consistent traffic, and the core product (find a current minyan near me) is rock-solid.
+
+The trigger to revisit: **there's a real, recurring user need for them.** Until then, building either would dilute focus from the directory-quality work that defines the product.
+
+---
+
+## Telegram chatbot (post-traction)
+
+Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+
+**The idea.** A Telegram bot at `@tfila_bot` that lets users query the directory by chat: "mincha near me" → bot asks for location → returns options. "mincha brooklyn 7pm" → returns a filtered list. Forwarding a shul flyer image to the bot triggers extraction (reusing the existing vision tier). WhatsApp Business is the obvious follow-on once Telegram proves the concept, but ship Telegram first — it's free and instant; WhatsApp is a Meta-API gauntlet.
+
+**Source/inspiration.** The wave of ChatGPT-on-Telegram bots that went viral in 2023. Hebcal's email-zmanim feature. Domino's-on-WhatsApp pizza ordering. The fact that many older / chassidish / Sefardi daveners barely use the open web but live in WhatsApp groups all day.
+
+### Why it's a long-term play, not a build-now play
+
+- **It's a different distribution channel, not a different product.** The website needs to be the canonical source of truth + the smoothest UX before there's any value in a chat surface that proxies to it.
+- **Adds a per-platform support tax** — every new feature has to ship to website + Telegram + (eventually) WhatsApp. Locks in surface area we shouldn't commit to before the website's feature set is stable.
+- **Conversational UX is its own design discipline** — fallbacks for "I don't understand," typo handling, intent disambiguation. Without traction-validated UX patterns to mirror, we'd be designing in a vacuum.
+- **Discoverability is hard without an audience** — bots have no SEO. They need either marketing push or organic word-of-mouth. Both require an existing user base.
+
+### When to revisit
+
+- **Concrete trigger:** when ≥3 distinct users ask "is there an app version" or "can I get this in WhatsApp" in a single month. Not the first time it's asked — when the volume signals real demand.
+- **Or:** if user research with a Sefardi / chassidish / Israeli community shows they won't visit a website but they'd use a bot. That's a clear "we're missing this audience without it" signal.
+- **Or:** when the photo-submission feature (idea queue: "snap the flyer") ships and we want a frictionless way to receive flyer photos — the bot is a natural inbound channel.
+
+### Pros (when the time comes)
+
+- Meets users where they already are — minimal friction.
+- Doubles as a flyer-photo submission channel (one-tap forward of the bulletin photo).
+- Telegram bots are nearly free to host (webhook → Inngest event → response).
+- Cross-cultural reach: Israeli + Sefardi + South American Jewish communities skew heavily to WhatsApp/Telegram over web.
+
+### Cons (worth flagging upfront)
+
+- WhatsApp Business API is gnarlier than Telegram (Meta business account, template-message approval, fees). Telegram-first reduces this.
+- One support burden per platform; keep the bot intentionally narrow (find + submit, nothing else).
+- No SEO backlinks; doesn't help domain-authority growth the way the website does.
+
+### Implementation sketch (when revisited)
+
+- New route `app/api/telegram/route.ts` — Telegram webhook receiver. Validates secret token, dispatches to an intent router.
+- New `lib/chatbot/intents.ts` — small NLU layer (keyword + regex; no LLM needed for the v1 commands).
+- Reuses the existing `searchActiveShuls`, `getNearbyShulsWithRules`, and image-extraction pipeline.
+- A `/start` command that helps the user share their location once; we cache it per chat_id for follow-up queries.
+- Skill-set deliberately scoped to: find-near-me, find-by-name, submit-flyer-photo, my-saved-shuls. Nothing else for v1.
+
+Related: prior ideas-list entry for this concept (chat-first interface). [[feature-snap-the-flyer]] (when written).
+
+---
+
+## Layered Jewish-life map: minyanim + eruv + mikvah + kosher (post-traction)
+
+Added: 2026-05-15 · **Status: long-term, deferred until traction.**
+
+**The idea.** Beyond shul pins, the map renders optional toggleable layers: eruv boundaries (where you can carry on Shabbos), nearest mikvah, kosher restaurants, kollelim/yeshivas. One canonical map for "where can I live a Jewish life here?" instead of 4 fragmented sites.
+
+**Source/inspiration.** Google Maps' multi-layer pattern (traffic / transit / biking). Strava's heat maps. Real-estate sites overlaying schools, walkability, crime. Existing single-purpose Jewish sites (eruv.org, mikvah.org, OU's kosher restaurants directory) that each solve one slice but never compose.
+
+### Why it's a long-term play, not a build-now play
+
+- **Massive data-acquisition lift** — eruv polygons are GeoJSON drawn per-community by different groups; mikvah.org has structured data but not an API; kosher restaurant data drifts weekly. Each layer is its own ingestion pipeline + freshness gate, on top of our existing minyan pipeline. Doing this before the minyan layer is dialed in would over-extend.
+- **Trust transfer risk** — if our kosher data is wrong (and someone shows up at a non-kosher restaurant), they'll blame *tfila.co* even though we sourced it elsewhere. Adjacent layers carry their data's reputation onto our brand. We need the minyan layer to be unimpeachable first.
+- **Vision dilution** — "we're a Jewish-life navigator" is a much broader vision than "minyan times that don't go stale." That focus is our differentiator. Adding layers before traction risks becoming a mediocre everything-app instead of an excellent one-thing-app.
+- **Map infrastructure cost** — current iframe-to-OSM is fine for low volume. Multi-layer + interactivity needs MapLibre + a tile server (self-hosted) or Mapbox subscription. Ongoing $ before product-market fit is risky.
+
+### When to revisit
+
+- **Concrete trigger:** when daveners explicitly ask for one of the adjacent layers in feedback, multiple times. ("How do I know if there's an eruv there?" being the most likely first ask after minyan times.)
+- **Or:** when a volunteer in a target community offers to maintain the eruv data for their neighborhood — that's the cold-start solution to the data-acquisition problem.
+- **Or:** when the minyan directory hits "good enough across N major Jewish neighborhoods" that maintenance is mostly automated and there's bandwidth to expand scope.
+
+### Staged build (NOT a single-PR feature)
+
+If/when we revisit, do NOT try to ship all four layers at once. Stage:
+
+1. **Eruv only.** Highest signal, lowest update churn (eruv boundaries change rarely). Read-only GeoJSON loaded from a community-maintained registry. Validates the multi-layer UX pattern on the cheapest data.
+2. **Mikvah** as the second layer. Structured data; per-row records similar to shul. Re-uses our existing admin tooling for review/approval.
+3. **Kosher restaurants** third — most volatile, hardest to keep fresh. Probably depends on integrating with OU/Star-K APIs rather than self-curating.
+4. **Yeshivas / kollelim** fourth, lowest priority. Niche but high-value for the audiences that care.
+
+Each stage is an independent product decision: only proceed to the next if the prior layer is actually being used.
+
+### Pros (when the time comes)
+
+- Same audience, adjacent need — every Shabbat-keeping davener cares about eruv + mikvah + minyan.
+- Lock-in compounds — once tfila.co is *the* Jewish-life map, switching cost grows.
+- Triangulation evidence for our own data quality (a shul next to a kosher restaurant + inside an eruv + near a mikvah is more likely to be a real, established shul).
+- Photogenic — multi-layer maps look impressive in marketing screenshots / app-store listings.
+
+### Cons (worth flagging upfront)
+
+- Each layer is a sub-product; total build effort is multi-PRs across multiple weeks.
+- Per-layer freshness story is its own gate (the equivalent of the no-stale-data work we did for minyanim).
+- Permission complexity — some communities don't publish eruv polygons publicly; need a respectful "ask before scraping" approach.
+- Risk of becoming a generic Jewish-stuff-finder rather than the trusted minyan-times product.
+
+### Sequencing — do these things first
+
+Before this entry can credibly be revisited:
+
+- Minyan directory has ≥1000 active shuls (signal we own the core domain).
+- Stale gate is provably trusted (no user complaints about wrong times for ≥3 months).
+- The "automated tests" and "auth model" gaps from the prior FEATURES entries are addressed (we need infrastructure mature enough to support a 4× larger data surface).
+- A real trigger event has happened — see "When to revisit" above.
+
+Related: [[feature-no-stale-data]] (the principle that has to extend to every layer added). [[feedback-security-cleanup-deferred]] — same "wait for build stability" timing logic.
