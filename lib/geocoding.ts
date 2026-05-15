@@ -243,6 +243,15 @@ export async function findShulPlace(
     .split(/\s+/)
     .filter((t) => t.length > 2);
 
+  // Hostname tokens from the URL hint. When present, we use them as a
+  // disambiguator: a Places hit whose name+address contain at least one
+  // hostname token is far more likely to be the right shul. Helps
+  // when the shul name is generic ("Beth Israel" — many cities).
+  const hintTokens =
+    opts.urlHint != null
+      ? extractHostnameTokens(opts.urlHint)
+      : [];
+
   let best: PlaceMatch | null = null;
   for (const p of places) {
     if (
@@ -254,6 +263,7 @@ export async function findShulPlace(
       continue;
     }
     const hay = p.displayName.text.toLowerCase();
+    const haystack = `${hay} ${p.formattedAddress.toLowerCase()}`;
     let nameScore = 0;
     for (const t of needleTokens) {
       if (hay.includes(t)) nameScore += 1;
@@ -268,8 +278,22 @@ export async function findShulPlace(
     else if (types.includes("place_of_worship")) typeBoost = 0.25;
     else if (types.includes("religious_organization")) typeBoost = 0.15;
 
-    // Final confidence: weighted blend
-    const confidence = Math.min(1, nameSim * 0.7 + typeBoost);
+    // URL-hint disambiguator: small bonus when any hostname token
+    // appears in the place name or address. Catches "Beth Israel of
+    // Nashville" being matched correctly when the URL was bethisrael
+    // .nashville.org and there are 30 other "Beth Israel"s out there.
+    let hintBoost = 0;
+    if (hintTokens.length > 0) {
+      const hit = hintTokens.some((t) => haystack.includes(t));
+      if (hit) hintBoost = 0.15;
+    }
+
+    // Floor on name similarity — even a "synagogue"-typed place
+    // shouldn't claim the match if 0% of the needle tokens appear.
+    if (nameSim < 0.3) continue;
+
+    // Final confidence: weighted blend, capped at 1.
+    const confidence = Math.min(1, nameSim * 0.7 + typeBoost + hintBoost);
 
     if (!best || confidence > best.confidence) {
       best = {
@@ -283,10 +307,23 @@ export async function findShulPlace(
       };
     }
   }
-  // Mark urlHint as touched so we don't get unused-warning even when
-  // we don't yet use it (kept in signature for future refinement).
-  void opts.urlHint;
   return best;
+}
+
+function extractHostnameTokens(urlHint: string): string[] {
+  try {
+    const host = new URL(urlHint).hostname.replace(/^www\./, "");
+    // "agudahsouth.com" → ["agudahsouth"], "bethisrael.nashville.org" →
+    // ["bethisrael", "nashville"]. Strip TLDs + short tokens.
+    return host
+      .split(".")
+      .slice(0, -1)
+      .flatMap((part) => part.split(/[-_]/))
+      .filter((t) => t.length > 3 && !/^www$|^the$/i.test(t))
+      .map((t) => t.toLowerCase());
+  } catch {
+    return [];
+  }
 }
 
 /**

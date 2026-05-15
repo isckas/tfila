@@ -23,11 +23,14 @@ function hostOfUrl(url: string): string {
 export const buildDataSource = inngest.createFunction(
   {
     id: "data-source-build",
-    // Per-host concurrency cap so we never DDoS one provider (ShulCloud,
-    // Wix, etc) when many submissions land in the same minute.
+    // Concurrency keyed on shulId — same key as scrapeOneShul — so the
+    // initial-build path and the rescrape path are mutually exclusive
+    // for a given shul. Otherwise an admin "Re-extract" while the
+    // weekly cron is mid-flight on the same shul double-writes
+    // data_source rows + races on the shul.address / shul.name COALESCE.
     concurrency: {
-      key: "event.data.url",
-      limit: 2,
+      key: "event.data.shulId",
+      limit: 1,
     },
     triggers: [{ event: "data-source.requested" }],
   },

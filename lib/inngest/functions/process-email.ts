@@ -73,9 +73,17 @@ export const processEmail = inngest.createFunction(
       extractFromEmail(subject, body),
     );
 
+    // Early bail when the LLM is unconfident or saw no rules. Was 0.3;
+    // raised to 0.5 to keep "garbage in, garbage out" extractions from
+    // creating permanent shul rows on the new-shul branch (where there's
+    // no prior data_source to compare against, so persistFromEmail's
+    // guardrail block doesn't run). Equivalent shuls with strong
+    // bulletins comfortably score 0.8+, so the threshold raise has
+    // headroom — borderline emails still surface for the admin via
+    // the explicit "skipped: low confidence" log line.
     if (
       extracted.extraction.rules.length === 0 ||
-      extracted.extraction.confidence < 0.3
+      extracted.extraction.confidence < 0.5
     ) {
       return {
         skipped: true,
