@@ -5,6 +5,14 @@ import { useEffect, useState } from "react";
 interface Props {
   /** ISO string. Stable across server/client renders. */
   iso: string;
+  /**
+   * Server's Date.now() at render time. Used as the initial state so
+   * the SSR HTML and the first client render produce the SAME label
+   * (no hydration flicker). After mount the client takes over its
+   * own clock and updates on its interval. Pass `now.getTime()` from
+   * the parent server component.
+   */
+  serverNowMs?: number;
   /** Update interval in ms. Default 30s. */
   intervalMs?: number;
 }
@@ -14,11 +22,14 @@ interface Props {
  * upcoming/in-progress minyan time. Updates itself on a timer so the
  * page stays accurate without server round-trips.
  */
-export function RelativeTime({ iso, intervalMs = 30_000 }: Props) {
+export function RelativeTime({ iso, serverNowMs, intervalMs = 30_000 }: Props) {
   const target = new Date(iso).getTime();
-  const [now, setNow] = useState(() => Date.now());
+  // Initial value matches server SSR — eliminates hydration flicker.
+  // After mount, the effect below catches the client up to real Date.now().
+  const [now, setNow] = useState(() => serverNowMs ?? Date.now());
 
   useEffect(() => {
+    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(id);
   }, [intervalMs]);

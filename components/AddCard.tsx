@@ -26,10 +26,15 @@ export function AddCard() {
 
       {/* URL submission — straight to /api/submit */}
       <form method="post" action="/api/submit" className="flex gap-1.5">
+        <label htmlFor="addcard-url" className="sr-only">
+          URL of the shul&apos;s schedule page
+        </label>
         <input
+          id="addcard-url"
           type="url"
           name="url"
           required
+          aria-label="Shul schedule URL"
           placeholder="https://your-shul.org/schedule"
           className="w-full rounded border border-neutral-300 px-2.5 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
         />

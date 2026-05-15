@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import { find as findTz } from "geo-tz";
 import {
   getNearbyShulsWithRules,
   listShulsForLookup,
@@ -205,8 +206,12 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   const trimmed = resolved.slice(0, MAX_ITEMS);
 
-  const userTz =
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York";
+  // Derive the timezone FROM lat/lng (the user's search location) — not
+  // from the server's TZ. On Vercel, Intl.DateTimeFormat returns "UTC"
+  // server-side, which would render every clock 4-5 hours off in NYC/LA.
+  // geo-tz maps any lat/lng to its IANA tz; defensive fallback to ET
+  // for the rare unmapped point.
+  const userTz = findTz(lat, lng)[0] ?? "America/New_York";
   const stripSnapshot = computeZmanimStrip({ lat, lng, timezone: userTz }, now);
   const placeName = await reverseGeocode(lat, lng).catch(() => null);
   const addressLabel = sp.q?.trim() || placeName;
@@ -237,7 +242,7 @@ export default async function HomePage({ searchParams }: PageProps) {
                   within {radiusMiles} mi · nearest first
                 </span>
               </h2>
-              <MinyanListByShul groups={shulGroups} />
+              <MinyanListByShul groups={shulGroups} serverNowMs={now.getTime()} />
             </>
           ) : (
             <EmptyAddressSearch addressLabel={addressLabel} radiusMiles={radiusMiles} />

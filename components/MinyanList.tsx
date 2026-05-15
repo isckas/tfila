@@ -71,12 +71,12 @@ export function MinyanList({ items, serverNowMs }: Props) {
                     </span>
                   )}
                 </div>
-                <div className="truncate text-sm text-neutral-600">
+                <h3 className="truncate text-sm font-normal text-neutral-600">
                   {m.shulName}
                   {m.address && (
                     <span className="ml-2 text-neutral-400">· {m.address}</span>
                   )}
-                </div>
+                </h3>
               </div>
               <div className="text-right shrink-0">
                 <div className="font-semibold tabular-nums text-neutral-900">

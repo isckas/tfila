@@ -91,10 +91,15 @@ export function FindCard() {
       </div>
 
       <form method="get" action="/api/search" className="flex gap-1.5">
+        <label htmlFor="findcard-q" className="sr-only">
+          Address, zip code, or city to search for nearby minyanim
+        </label>
         <input
+          id="findcard-q"
           type="search"
           name="q"
           required
+          aria-label="Address, zip code, or city"
           placeholder="Address, zip, or city"
           className="w-full rounded border border-neutral-300 px-2.5 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
         />

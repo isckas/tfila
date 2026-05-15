@@ -57,10 +57,15 @@ export function LookupCard({ shuls }: Props) {
         Search by name — matches as you type.
       </p>
 
+      <label htmlFor="lookupcard-q" className="sr-only">
+        Shul name to search for
+      </label>
       <input
+        id="lookupcard-q"
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
+        aria-label="Shul name"
         placeholder="e.g. Agudah, Young Israel…"
         autoComplete="off"
         autoCorrect="off"

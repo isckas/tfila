@@ -15,6 +15,9 @@ export interface ShulGroup {
 
 interface Props {
   groups: ShulGroup[];
+  /** Server's render-time `Date.now()`, threaded into each
+   * RelativeTime to eliminate hydration flicker. */
+  serverNowMs: number;
 }
 
 /**
@@ -23,7 +26,7 @@ interface Props {
  * radius — see FEATURES.md "Home-page address search". For the dense
  * 2-mi walking feed we still use the flat MinyanList.
  */
-export function MinyanListByShul({ groups }: Props) {
+export function MinyanListByShul({ groups, serverNowMs }: Props) {
   return (
     <ul className="space-y-2">
       {groups.map((g) => (
@@ -34,9 +37,9 @@ export function MinyanListByShul({ groups }: Props) {
           >
             <div className="flex items-baseline justify-between gap-3">
               <div className="min-w-0">
-                <div className="truncate font-medium text-neutral-900">
+                <h3 className="truncate font-medium text-neutral-900">
                   {g.shulName}
-                </div>
+                </h3>
                 {g.address && (
                   <div className="truncate text-xs text-neutral-500">
                     {g.address}
@@ -67,7 +70,7 @@ export function MinyanListByShul({ groups }: Props) {
                       {formatClockFromIso(m.startIso, m.timezone)}
                     </span>
                     <span className="ml-2 text-xs text-neutral-500">
-                      <RelativeTime iso={m.startIso} />
+                      <RelativeTime iso={m.startIso} serverNowMs={serverNowMs} />
                     </span>
                   </span>
                 </li>
