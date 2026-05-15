@@ -714,3 +714,156 @@ Probably where this lands if we go deep.
 - `lib/llm/extract-email.ts:11-50` — email-specific prompt with the 2026-05-14 partial-date fix
 - The "Schedule update timing" FEATURES entry above — the verification walk it describes will surface the kinds of accuracy issues this entry is meant to address
 - [[feedback-minimize-user-work]] — if we go RAG (C), the build-out should come with a script to seed the vector store, not a manual web-UI uploader
+
+---
+
+## Automated tests — typecheck is the only safety net today
+
+Added: 2026-05-15 · **Status: gap noted. No decisions yet.**
+
+`package.json` has no test runner. The only programmatic check between "I edited this" and "this hits prod" is `tsc --noEmit`. That's caught a handful of real bugs but is structurally incapable of catching the most expensive class of regression in this codebase: silent behavior drift in the extraction / persistence pipeline.
+
+### Why this is on the books
+
+Concrete prior-art that would have been caught by a small test suite:
+
+- **`pageContentHash` mismatch (fixed 2026-05-15, commit `49aeb4a`).** `scrape-one-shul.ts` hashed raw HTML at 80K chars; `extract.ts` stored a hash of sanitized HTML at 120K. They never matched. The weekly cron's "no_change" optimization never fired, so every Saturday paid for a full LLM extraction on every shul. Lived for months. A 6-line vitest test (`hashSanitizedHtml(html) === extractFromHtml(html).pageContentHash`) would have caught it on first commit.
+- **Rescrape `apply-changes` not transactional (fixed 2026-05-15, commit `acbff05`).** A partial failure mid-loop could have inserted duplicate rule rows on Inngest retry. Tonight's transaction wrap fixed it, but a fixture-based test that simulates a mid-loop failure would have surfaced the issue much earlier.
+- **`backfillShulLocation` short-circuited when address was set (fixed 2026-05-14, commit `fb06f77`).** Bais Menachem invisible to address search for weeks. A boolean assertion test ("after extraction, every shul with `address NOT NULL` should also have `location NOT NULL`") would have flagged the entire population.
+- **MinyanList times rendered in UTC (fixed 2026-05-14, commit `c078e1f`).** A snapshot test on the rendered HTML would have caught it the moment the bug was introduced.
+
+Each of these survived months of weekly crons because nobody had a way to assert the invariant.
+
+### Options ranked
+
+#### A. Vitest + small unit tests on `lib/llm/*`, `lib/pipeline/*`, `lib/freshness.ts` (Recommended starting point)
+
+Install vitest. Write 15-25 unit tests covering:
+- Hash stability across `extract.ts` ↔ `scrape-one-shul.ts`
+- `evaluateExtractionGuardrails` for known input/output pairs
+- `deriveAdminShulState` for each of the 8 derived states
+- `freshDataSourceExistsForShul` SQL predicate (mocked DB)
+- `findShulPlace` confidence math (no real Places call — pre-shape the API response)
+- `assertPublicHttpUrl` for the SSRF allowlist (every CIDR class)
+- `formatClockFromIso` for known TZ + ISO inputs
+
+**Pros:** smallest possible test surface; runs in <2s; no infrastructure needed.
+**Cons:** doesn't cover end-to-end flows; mocking the DB / Anthropic / fetch is awkward.
+
+#### B. Add Playwright E2E for the public-facing flows
+
+Browser tests against tfila.co (or a preview deploy):
+- Home page loads
+- "Use my location" → home feed renders with at least one minyan card
+- Type "Brooklyn" → 25-mi address search renders with grouped shuls + correct local-time strings
+- Open a shul page → schedule renders; map renders; "Last updated" present
+- Open a stale shul → "we don't have current times" page renders
+
+**Pros:** catches the kind of bug we shipped tonight (TZ render, missing shul). One CI run = one prod-equivalent smoke.
+**Cons:** slow (1-2 min per run); brittle to copy edits; needs a stable test shul fixtured in the DB.
+
+#### C. Inngest replay tests for the extraction cascade
+
+Anthropic supports replaying past API calls. Combined with Inngest's local dev server, you could:
+- Capture 3-5 representative cascades (HTML success, JS-rendered, PDF, vision, failed)
+- Snapshot the `data_source` + `minyan_rule` rows produced
+- Re-run the cascade in test against the captured input, assert the output matches
+
+**Pros:** catches behavior drift in the most complex code path (where most bugs hide).
+**Cons:** real infra dependency (test Postgres, mocked Anthropic); requires fixture maintenance as prompts evolve.
+
+#### D. Property tests on the rule-resolution algorithm
+
+`fast-check` / `vitest` property tests for: given a synthetic shul with N rules of mixed kinds, querying any date returns at most one rule per tefillah, and that rule satisfies the date filters. Catches edge cases in `app/shul/[slug]/page.tsx` rule resolution + future home-feed grouping logic.
+
+**Pros:** finds bugs you didn't think to write tests for.
+**Cons:** moderate learning curve; setup is involved.
+
+### Open sub-questions
+
+- **CI vs local-only:** Vercel doesn't run a test command on deploy by default. Either add a GitHub Action that runs `vitest` on push (10 min setup), or rely on local pre-push.
+- **Fixtures for DB tests:** docker-compose with a throwaway Postgres + drizzle migrations? Neon branch per-test? In-memory better-sqlite3 with manual schema? Each has trade-offs; Neon-branch-per-test is the closest to prod but slowest.
+- **Coverage target:** none today. Even 30% on `lib/` would catch most of the prior bugs. Don't aim for 80% — diminishing returns past the critical-path modules.
+
+### What to do first
+
+1. **Install vitest** + write the 6-line hash-stability test. Validates the toolchain.
+2. **Snapshot test on `deriveAdminShulState`** for all 8 derived states. Quick win + protects the inbox state machine going forward.
+3. **Test on `assertPublicHttpUrl`** — security-relevant, easy to write, easy to regress.
+4. After 5-10 tests are committed, add a GitHub Action to run them on push.
+5. Defer Playwright (option B) until Vitest covers the most-commonly-edited modules.
+
+### Decision
+
+**Deferred per [[feedback-security-cleanup-deferred]] equivalent — don't add big infra during build phase.** Pick this up when the project is stable enough that fixing a bug feels expensive (i.e. when there are real users and a bug = trust loss). Cost of waiting: more bugs ship to prod first; cost of doing now: ~2 days of test-writing instead of feature work. Worth scheduling explicitly when the build phase ends.
+
+---
+
+## Auth model — single-admin today, will need rework for co-admin
+
+Added: 2026-05-15 · **Status: gap noted. No decisions yet.**
+
+`lib/auth.ts:63-67` `isAllowedAdmin()` checks one env var (`ADMIN_EMAIL`). The magic-link, the session cookie, the allow-list check on every admin route, the request-link sender — every layer of the auth chain assumes a single admin. The day Isaac wants help is the day this needs a full rework, not a small extension.
+
+### Why this is on the books
+
+Today the model is the simplest possible thing that works for one person — and that's correct for now. But "one admin" is a lot of structural assumption to unwind:
+
+- `isAllowedAdmin(email)` does exact equality on a single env var
+- Magic-link is sent to whatever email matches that env var
+- Session cookie's payload is `{ email, exp, kind }` — no role, no user id, no audit
+- No `admin_user` table; no `admin_action_log` table
+- Every admin POST route checks `getAdminSession()` which only confirms "is this the single admin"
+- Notifications (`notifyAdmin`) go to the single email
+- New admin = redeploy with a different env var. Two admins = ??? (today, you'd have to pick one and the other can't sign in)
+
+This isn't a problem until the moment you want a second person on the admin side. Then it's an all-at-once migration: schema, auth chain, notification routing, audit, possibly a UI for managing admins.
+
+### Options when the time comes
+
+#### A. `admin_user` + `admin_session` tables — minimal real auth
+
+New `admin_user (id, email, created_at, status)` + `admin_session (id, admin_user_id, token_hash, expires_at)`. Drop the env-var allow-list; replace with `SELECT FROM admin_user WHERE email = ? AND status = 'active'`. Magic-link writes to admin_session. Cookie carries session_id. Adding an admin = INSERT row. Removing = UPDATE status = 'archived'.
+
+**Pros:** smallest delta from current state; one migration; preserves the magic-link flow.
+**Cons:** no roles (every admin can do everything); no audit log; no UI for managing.
+
+#### B. A + audit log
+
+Same as A, plus `admin_action (id, admin_user_id, action, target_type, target_id, payload_jsonb, created_at)`. Every admin POST route writes a row before the action.
+
+**Pros:** answers "who archived shul X" three months later. Important once there's >1 admin and any disagreement.
+**Cons:** writes-amplification on every admin action (small); UI to view the log is its own piece.
+
+#### C. A + B + roles (`reviewer` vs `superadmin`)
+
+Most ambitious. `reviewer` can approve/reject data_sources but not archive shuls or run discovery. `superadmin` can do everything.
+
+**Pros:** safer for admins-with-less-context onboarding (won't accidentally archive everything).
+**Cons:** RBAC is its own complexity hole; probably overkill for tfila.co's foreseeable team size (2-3 max).
+
+#### D. Outsource to Clerk / WorkOS / Auth0
+
+Drop the bespoke magic-link entirely. Sign-in via the third party; map their session to our admin_user.
+
+**Pros:** SOC2-grade auth out of the box; SSO; future-proof.
+**Cons:** vendor lock-in; monthly cost; overkill for a 1-3 admin team; magic-link is already working.
+
+### Open sub-questions
+
+- **What's the actual second-admin scenario?** A volunteer Isaac knows wanting to triage candidates? A paid VA? A different shul's gabbai uploading content for their own shul (different — that's a per-shul-claim model, not co-admin)? Each implies a different RBAC shape.
+- **Magic-link or password?** Magic-link works at single-admin scale because Isaac always has email access. At 2+ admins with potentially shared inboxes, a password-with-2FA model might be safer. Worth deciding before building.
+- **Where does notification routing go?** Today `notifyAdmin` sends to one email. With multiple admins, do all notifications fan out to all? Or per-admin preferences? Or is there a single shared admin@tfila.co alias?
+- **How invasive is the migration?** Rough scope: one migration (3-4 tables), `lib/auth.ts` rewrite, every admin route swap (`getAdminSession` → `requireAdmin` returning a typed user), one new admin UI page (`/admin/users`). Estimate: 1-2 days focused work. Doesn't need test coverage in advance — auth is small enough to validate by clicking through.
+
+### What to do first (when picked up)
+
+1. **Decide the actual scenario** that will trigger this. Without a real second-admin user story, you'll over-engineer (option C/D) or under-engineer (option A). The user story informs the option.
+2. **Sketch the migration** even if you don't ship it. The exercise of writing the schema + routes will tell you whether option A is enough or you need B from day one.
+3. **Don't build until needed.** Option A is small enough to land in a single PR when the second admin shows up. Don't pre-build now.
+
+### Decision
+
+**Deferred. Note exists so future-Isaac (or a code review) doesn't read the env-var allow-list and wonder if it's intentional. It IS intentional, AND it has a known migration path when the time comes.**
+
+Related: [[feedback-security-cleanup-deferred]] — keep credential rotation and auth-model rework on the same "after build phase" timeline.
