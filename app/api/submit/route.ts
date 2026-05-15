@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul, dataSource } from "@/db/schema";
 import { slugify, nameFromTitle, allocateUniqueSlug } from "@/lib/slug";
@@ -7,6 +7,10 @@ import { inngest } from "@/lib/inngest/client";
 import { notifyAdmin } from "@/lib/email";
 import { matchDomainOf } from "@/lib/dedup";
 import { resolveScheduleUrl } from "@/lib/discovery/find-schedule-page";
+import { assertPublicHttpUrl, UnsafeHostError } from "@/lib/ssrf";
+
+/** Don't re-fire extraction for the same domain more than once per this. */
+const DOMAIN_REFIRE_COOLDOWN_MIN = 30;
 
 // Submissions are processed ASYNC. We validate + dedupe + create a
 // placeholder shul row + fire an Inngest event in <1s, then return
@@ -43,6 +47,19 @@ export async function POST(req: Request): Promise<NextResponse> {
     return fail(req, "invalid");
   }
 
+  // ─── SSRF guard ──────────────────────────────────────────────
+  // Refuse private/loopback/link-local/metadata IPs before we ever
+  // fetch this URL. /submit is unauthenticated; without this guard
+  // an attacker can drive the server into probing internal infra.
+  try {
+    await assertPublicHttpUrl(url);
+  } catch (e) {
+    if (e instanceof UnsafeHostError) {
+      return fail(req, "unsafe-host");
+    }
+    return fail(req, "invalid");
+  }
+
   // ─── Resolve to schedule page when only a root URL was submitted ─
   // If the user pasted "jewishwindsorterrace.org" we'd otherwise miss
   // the actual /Times-and-Schedule.htm. Resolver short-circuits when
@@ -50,6 +67,20 @@ export async function POST(req: Request): Promise<NextResponse> {
   // find-schedule-page.ts for the hybrid strategy.
   const resolved = await resolveScheduleUrl(url);
   const resolvedUrl = resolved.url;
+
+  // The resolver may have moved us to a different URL on the same
+  // domain — re-validate. (Same-origin only by design, but a redirect
+  // could in principle land somewhere unexpected.)
+  if (resolvedUrl !== url) {
+    try {
+      await assertPublicHttpUrl(resolvedUrl);
+    } catch (e) {
+      if (e instanceof UnsafeHostError) {
+        return fail(req, "unsafe-host");
+      }
+      return fail(req, "invalid");
+    }
+  }
 
   const matchDomain = matchDomainOf(resolvedUrl);
 
@@ -130,21 +161,42 @@ export async function POST(req: Request): Promise<NextResponse> {
     finalShulSlug = newShul.slug;
   }
 
+  // ─── Per-domain extraction cooldown ─────────────────────────
+  // For the dedup-attach case (same domain hits us repeatedly), don't
+  // fire a fresh extraction event each time — we'd burn LLM $ for no
+  // new info. Allow re-fire only if the shul's most recent successful
+  // run is older than DOMAIN_REFIRE_COOLDOWN_MIN.
+  let suppressExtraction = false;
+  if (attachedShulId) {
+    const recent = await db
+      .select({ n: sql<number>`COUNT(*)::int` })
+      .from(dataSource)
+      .where(
+        and(
+          eq(dataSource.shulId, attachedShulId),
+          sql`${dataSource.lastRunAt} > NOW() - (${DOMAIN_REFIRE_COOLDOWN_MIN} || ' minutes')::interval`,
+        ),
+      );
+    suppressExtraction = (recent[0]?.n ?? 0) > 0;
+  }
+
   // ─── Fire async extraction event ────────────────────────────
   // The Inngest data-source.requested handler picks this up, runs the
   // cascade, and creates the data_source row. For the auto-merge case
   // this means a new data_source gets attached to the existing shul.
-  try {
-    await inngest.send({
-      name: "data-source.requested",
-      data: {
-        shulId: finalShulId,
-        url: resolvedUrl,
-        sourceKind: "website_llm",
-      },
-    });
-  } catch (err) {
-    console.error("[submit] inngest.send failed:", (err as Error).message);
+  if (!suppressExtraction) {
+    try {
+      await inngest.send({
+        name: "data-source.requested",
+        data: {
+          shulId: finalShulId,
+          url: resolvedUrl,
+          sourceKind: "website_llm",
+        },
+      });
+    } catch (err) {
+      console.error("[submit] inngest.send failed:", (err as Error).message);
+    }
   }
 
   // ─── Notify admin (best effort) ─────────────────────────────
