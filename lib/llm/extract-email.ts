@@ -251,6 +251,18 @@ export async function extractFromEmail(
       usage: { haiku: haiku.usage },
     };
   }
+  // Skip Sonnet when Haiku is sure the email body has no schedule.
+  if (
+    haiku.extraction.rules.length === 0 &&
+    haiku.extraction.confidence < 0.2
+  ) {
+    return {
+      extraction: haiku.extraction,
+      model: "claude-haiku-4-5",
+      bodyHash,
+      usage: { haiku: haiku.usage },
+    };
+  }
   const sonnet = await callClaude("claude-sonnet-4-6", subject, trimmed);
   const winner =
     sonnet.extraction.confidence > haiku.extraction.confidence ? sonnet : haiku;

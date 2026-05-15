@@ -62,6 +62,20 @@ function hashHtml(html: string): string {
   return createHash("sha256").update(html, "utf8").digest("hex");
 }
 
+/**
+ * Sanitize + truncate + hash, in the exact same order extractFromHtml
+ * uses. Exported so the rescrape pre-flight (scrape-one-shul.ts hash
+ * comparison) and the extraction itself produce *the same* hash for
+ * the same input HTML — if they diverge, the "no_change" optimization
+ * never fires and the weekly cron pays for a full LLM extraction
+ * every Saturday on every shul. (That was the case until this helper.)
+ */
+export function hashSanitizedHtml(html: string): string {
+  const sanitized = sanitizeHtmlForLLM(html);
+  const { html: trimmedHtml } = trimHtml(sanitized);
+  return hashHtml(trimmedHtml);
+}
+
 async function callClaude(
   model: "claude-haiku-4-5" | "claude-sonnet-4-6",
   html: string,
@@ -193,6 +207,22 @@ export async function extractFromHtml(html: string): Promise<ExtractionResult> {
   const haiku = await callClaude("claude-haiku-4-5", trimmedHtml, truncated);
 
   if (haiku.extraction.confidence >= HAIKU_CONFIDENCE_FLOOR) {
+    return {
+      extraction: haiku.extraction,
+      model: "claude-haiku-4-5",
+      pageContentHash,
+      usage: { haiku: haiku.usage },
+    };
+  }
+
+  // Skip Sonnet when Haiku is *very* sure the page has no schedule
+  // (zero rules + sub-0.2 confidence). Sonnet won't manufacture rules
+  // out of thin air; this just doubles cost on clearly-not-a-schedule
+  // pages (about / contact / blog post that mentions "Mincha at sunset").
+  if (
+    haiku.extraction.rules.length === 0 &&
+    haiku.extraction.confidence < 0.2
+  ) {
     return {
       extraction: haiku.extraction,
       model: "claude-haiku-4-5",

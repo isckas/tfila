@@ -206,6 +206,19 @@ export async function extractFromPdfUrl(
       usage: { haiku: haiku.usage },
     };
   }
+  // Skip Sonnet when Haiku is sure the PDF has no schedule. Saves
+  // ~$0.05/PDF on bulletins that are mostly community announcements.
+  if (
+    haiku.extraction.rules.length === 0 &&
+    haiku.extraction.confidence < 0.2
+  ) {
+    return {
+      extraction: haiku.extraction,
+      model: "claude-haiku-4-5",
+      pdfUrl,
+      usage: { haiku: haiku.usage },
+    };
+  }
   const sonnet = await callClaude("claude-sonnet-4-6", pdfBase64);
   const winner =
     sonnet.extraction.confidence > haiku.extraction.confidence ? sonnet : haiku;

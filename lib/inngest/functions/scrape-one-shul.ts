@@ -14,7 +14,7 @@ import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { dataSource, minyanRule, scrapeRun, shul } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
-import { extractFromHtml } from "../../llm/extract";
+import { extractFromHtml, hashSanitizedHtml } from "../../llm/extract";
 import { runCascade } from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
@@ -121,14 +121,15 @@ export const scrapeOneShul = inngest.createFunction(
       return { html: res.html, finalUrl: res.finalUrl, status: res.status };
     });
 
-    // ─── 3. Quick path: extractor will hash & compare ──────────
-    // We let extractFromHtml() compute the hash so we have a single
-    // source of truth for it. But if the hash matches the last run, we
-    // skip the LLM entirely.
+    // ─── 3. Quick path: hash + compare against the last stored hash.
+    // Both this hash AND extractFromHtml's stored pageContentHash
+    // come from hashSanitizedHtml() — same sanitize + truncate + hash
+    // pipeline — so an unchanged page produces the same hash and we
+    // skip the LLM entirely. Prior to the shared helper the two
+    // hashes diverged (raw vs sanitized) and the optimization never
+    // fired, so every weekly cron paid for full extraction.
     const newHashOnly = await step.run("hash-check", async () => {
-      const { createHash } = await import("node:crypto");
-      const truncated = fetched.html.slice(0, 80_000);
-      return createHash("sha256").update(truncated, "utf8").digest("hex");
+      return hashSanitizedHtml(fetched.html);
     });
 
     if (previousHash && newHashOnly === previousHash) {
