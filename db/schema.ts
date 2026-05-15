@@ -136,6 +136,20 @@ export const shul = pgTable(
   ],
 );
 
+// Single-use marker for magic-link tokens. INSERT on first use; the
+// PRIMARY KEY conflict on replay tells us the token is spent. See
+// migration 0009 + lib/auth.ts:consumeMagicLinkToken.
+export const consumedMagicLink = pgTable(
+  "consumed_magic_link",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("consumed_magic_link_consumed_at_idx").on(t.consumedAt)],
+);
+
 // ─── data_source ─────────────────────────────────────────────────────────
 // 1:N from shul. A shul can have multiple data sources (website, email,
 // manual). When rules from different sources conflict, the higher

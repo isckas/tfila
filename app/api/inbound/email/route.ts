@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { inngest } from "@/lib/inngest/client";
 import { extractOriginalSender } from "@/lib/inbound/extract-original-sender";
 
@@ -30,7 +31,19 @@ interface PostmarkInboundPayload {
 function checkAuth(req: Request): boolean {
   const u = process.env.POSTMARK_INBOUND_USERNAME;
   const p = process.env.POSTMARK_INBOUND_PASSWORD;
-  if (!u || !p) return true; // dev / test mode
+
+  // Fail closed in production — a misconfigured prod deploy must reject
+  // unauthenticated webhook calls. Dev / test still accepts to avoid
+  // breaking local synthetic POSTs.
+  if (!u || !p) {
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[inbound/email] POSTMARK_INBOUND_USERNAME/PASSWORD not set in production — refusing webhook",
+      );
+      return false;
+    }
+    return true;
+  }
 
   const header = req.headers.get("authorization");
   if (!header || !header.startsWith("Basic ")) return false;
@@ -38,10 +51,17 @@ function checkAuth(req: Request): boolean {
     const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
     const [user, ...rest] = decoded.split(":");
     const pass = rest.join(":");
-    return user === u && pass === p;
+    // Constant-time comparison so the configured creds aren't exposed
+    // to a timing oracle.
+    return safeStringEq(user, u) && safeStringEq(pass, p);
   } catch {
     return false;
   }
+}
+
+function safeStringEq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

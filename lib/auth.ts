@@ -1,6 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { db } from "../db/client";
+import { consumedMagicLink } from "../db/schema";
 
 const COOKIE_NAME = "tfila_admin";
 const COOKIE_MAX_AGE_S = 60 * 60 * 24 * 30; // 30 days
@@ -77,6 +79,23 @@ export function signMagicLinkToken(email: string): string {
 export function verifyMagicLinkToken(token: string): string | null {
   const p = verify(token);
   return p && p.kind === "magic" && isAllowedAdmin(p.email) ? p.email : null;
+}
+
+/**
+ * Mark a magic-link token as consumed. Returns true on first use,
+ * false if the token has already been consumed (replay attempt).
+ *
+ * Stores SHA-256 of the token (not the token itself) so a DB read
+ * can't impersonate. Idempotent via the PRIMARY KEY conflict.
+ */
+export async function consumeMagicLinkToken(token: string): Promise<boolean> {
+  const hash = createHash("sha256").update(token, "utf8").digest("hex");
+  const result = await db
+    .insert(consumedMagicLink)
+    .values({ tokenHash: hash })
+    .onConflictDoNothing({ target: consumedMagicLink.tokenHash })
+    .returning({ tokenHash: consumedMagicLink.tokenHash });
+  return result.length > 0;
 }
 
 function signSessionToken(email: string): string {
