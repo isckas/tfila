@@ -636,3 +636,81 @@ Everything above is what the **code** does. We haven't yet confirmed it matches 
 - **Stale-special-rules drift** — there's no GC for special rules whose `valid_to` is in the past. They linger in the table forever. Inert for query purposes (filtered out) but accumulates rows. If it becomes noisy, add a periodic job to soft-delete `valid_to < NOW() - INTERVAL '90 days'`.
 
 Pick this up after a few normal email cycles have run in prod (~2-3 weeks of activity), so we have enough data to spot patterns rather than one-shot anecdotes.
+
+---
+
+## LLM extraction context — explore a Jewish-bulletin-aware skill / prompt
+
+Added: 2026-05-15 · **Status: exploration. No decisions yet.**
+
+The current extraction prompts (`lib/llm/prompts.ts`, plus channel-specific variants in `extract.ts` / `extract-pdf.ts` / `extract-email.ts` / `extract-image.ts`) are mostly generic. They tell Claude what fields to fill but don't ground it in the cultural/halachic context of a Jewish-shul bulletin. Worth exploring whether richer context would meaningfully reduce extraction errors — especially on edge cases like:
+
+- Abbreviations that are obvious to a davener but ambiguous to a generic LLM (Mn, Mch, S, Y, Selichos, Vasikin, Hashkamah, Mussaf, Krias HaTorah).
+- Calendar context the bulletin omits because "everyone knows" (a Selichos schedule in Elul vs Aseres Yemei Teshuvah differs in start time and structure; "Tisha B'Av" implies a specific date this year).
+- Denomination-specific schedules (Chabad bulletins reference Tanya/Rambam classes alongside minyanim — not minyanim; Sefardi bulletins use slightly different tefillah names; Vasikin shacharis means "at sunrise" but the page may say "Vasikin 6:42" mixing kind+clock).
+- Date ambiguity in headers ("for Parshas Behar" — without a year/date, what week is that?).
+
+### Why this might matter
+
+We've already had two prompt-driven bugs in prod:
+
+1. The Edmond J. Safra forward (2026-05-14) initially landed with all 12 rules tagged `ad_hoc` and dated to a past validFrom — fixed by the prompt update at commit `4b1fc95` ("default to regular weekly; for partial dates, use upcoming occurrence").
+2. The `findShulPlace` low-confidence false-positive case (2026-05-14, fixed in `9babf55`) — Places-side, not LLM-side, but same shape: the model didn't know enough about the shul to disambiguate.
+
+Both were patched by adding context to the prompt or the matching logic. A more deliberate approach would be a single source of "what Claude needs to know about Jewish-shul bulletins" rather than a series of incremental prompt patches.
+
+### Options to explore
+
+**A. Beefier system prompt with embedded glossary (smallest)**
+Extend `SYSTEM_PROMPT` with: a tefillah-name normalization table (Vasikin → shacharis with anchor=netz), a list of common one-off schedule kinds and how to tag them, an explicit "calendar context" preamble (current Hebrew date + upcoming Yom Tov windows). Runs on every extraction; no infra change.
+
+- **Pros:** simplest; ~50-100 lines added; immediate effect.
+- **Cons:** prompt token cost on every call (inflates input by ~1K tokens × every extraction); harder to iterate on (each tweak is a code change + redeploy); doesn't leverage Claude's tooling for structured knowledge.
+
+**B. Anthropic Claude Skill (or "agent skill") bundle**
+Anthropic recently shipped Claude Skills — a packaged combination of prompt, reference docs, and scripts that the model loads on demand. Build a "Jewish-shul-bulletin-extractor" skill that includes:
+- A comprehensive glossary
+- 5-10 anonymized example bulletins with reference extractions (few-shot)
+- A small calendar helper that returns "today's Hebrew date" + "next 4 Yom Tovim" when the model invokes it
+- Channel-specific variants (HTML, PDF, email body, vision)
+
+- **Pros:** clean separation of model knowledge vs caller code; iterable without redeploys; Anthropic-blessed pattern; example-based grounding usually beats prose grounding.
+- **Cons:** new infra dependency (skill upload + versioning); skill-loading might add latency; learning curve.
+
+**C. RAG over a curated glossary + a few exemplar bulletins**
+Build a tiny vector store of (a) glossary entries (b) ~20 representative bulletins with annotated extractions. Each extraction call retrieves the top 3-5 matching entries and includes them in the prompt.
+
+- **Pros:** scales naturally as we add more domain knowledge; relevant context only (smaller per-call prompt than option A).
+- **Cons:** more moving parts (vector DB, embedding pipeline); retrieval quality matters; harder to debug a wrong extraction ("which RAG hit caused this?").
+
+**D. Two-pass: extract, then critique with a second model call**
+First call: Haiku extracts as today. Second call: Claude (Haiku again? Sonnet?) reads the extracted rules + the source bulletin and answers "is anything obviously wrong?" — flag low-confidence rules for review.
+
+- **Pros:** orthogonal to A/B/C — could compose. Catches inconsistencies the first pass missed.
+- **Cons:** doubles cost; second pass needs its own prompt designed to find errors (different skill from extraction).
+
+**E. Hybrid: SKILL (B) + calendar tool (A's context preamble) + critique pass (D) for low-confidence cases**
+Probably where this lands if we go deep.
+
+### Open sub-questions
+
+- **Cost vs accuracy curve:** what's an acceptable per-extraction $$ envelope? Today the cascade averages ~$0.01-0.05 per shul. A skill or RAG bumps that. Is even 2× acceptable if it reduces admin-review time substantially?
+- **Where to source few-shot examples:** real bulletins from current shuls (privacy — bulletins often have phone numbers + names) vs synthetic examples we author. Probably author 5-10 synthetic ones first, then expand from real bulletins after admin review of the redacted-version-vs-original.
+- **Calendar tool scope:** just current Hebrew date + Yom Tov list, or also zmanim ranges (Mincha typically 18 min before shkia, etc.)?
+- **Per-denomination prompt variants:** Chabad / Sefardi / Yeshivish / Modern Orthodox bulletins have noticeably different conventions. Do we detect denomination upfront and switch prompts, or train one prompt to handle all four?
+- **Verify against ground truth:** how do we measure improvement? Need a small test set of ~20 bulletins with hand-curated correct extractions, run before-and-after on each option.
+
+### What to do first (when picked up)
+
+1. **Build the test set.** Even 15-20 hand-curated bulletins (5 HTML schedule pages, 5 email forwards, 5 PDF bulletins) with correct extractions written out. This is the hardest part, but without it every improvement claim is anecdotal.
+2. **Run the test set against the current prompt** to establish baseline accuracy (e.g. % of rules correctly extracted, % of dates correct, % of special-schedule kinds correctly tagged).
+3. **Try option A first** — extend the system prompt. Cheap to test; easy to revert. Re-run the test set.
+4. **If A is hitting a ceiling**, evaluate B (skill) or C (RAG). The cost/iteration trade probably favors B.
+5. **D (critique pass)** is orthogonal; revisit independently once the primary extraction is dialed in.
+
+### Related
+
+- `lib/llm/prompts.ts` — current system prompt (single source for HTML extraction)
+- `lib/llm/extract-email.ts:11-50` — email-specific prompt with the 2026-05-14 partial-date fix
+- The "Schedule update timing" FEATURES entry above — the verification walk it describes will surface the kinds of accuracy issues this entry is meant to address
+- [[feedback-minimize-user-work]] — if we go RAG (C), the build-out should come with a script to seed the vector store, not a manual web-UI uploader
