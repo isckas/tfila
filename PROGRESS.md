@@ -13,24 +13,37 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-05-14 (long night — full-stack code review + 17 fix commits).**
+**Last working session: 2026-05-14 (code work) + 2026-05-15 (docs + Phase 2 brainstorm).**
 
-See **[SESSION.md](./SESSION.md)** for the canonical pickup doc — it's the most up-to-date snapshot of state, what to verify post-deploy, and where the seams are.
+See **[SESSION.md](./SESSION.md)** for the canonical pickup doc — most up-to-date snapshot of state, what to verify post-deploy, and where the seams are.
 
-### Decided + designed, ready to build (or: think about)
+### Phase 2 candidate pool (FEATURES.md "🚀 Phase 2 features" section)
 
-- **Same-origin URL fallback only runs in HTML tier** — deferred refactor. JS-rendered, PDF, and Vision tiers don't try `/worship/shabbat`, `/services`, etc. Less urgent since the schedule-page resolver routes URLs to the right page before the cascade.
+Documented but not committed-to. Final cut TBD when traction is established. Quick list:
+- Telegram chatbot
+- Layered Jewish-life map (eruv / mikvah / kosher overlays)
+- Multi-language UI (Hebrew, Russian, French, Spanish, Yiddish)
+- Predictive "missing bulletin" admin alert
+- "Make a Minyan" (ad-hoc location-based) — Isaac-flagged favorite
+
+Each entry has explicit revisit triggers + design notes. The next "what should we build?" conversation probably starts in this section.
+
+### Active deferred items (Phase 1 cleanup, not Phase 2)
+
+- **Same-origin URL fallback only runs in HTML tier** — deferred refactor. Less urgent since the schedule-page resolver routes URLs to the right page before the cascade.
 - **Vision-extractor calibration** — need ~5 more real vision extractions to assess prompt quality on stylized typography.
 - **API error-response convention via `lib/http.ts`** — touches every route; deferred from the code-review night. Convention: form POST → 303 redirect with `?err=`; JSON POST → JSON response. Today the three styles are mixed.
 - **Per-IP rate limit on `/submit`** — best done at the Vercel WAF level, not in code. Current per-domain cooldown handles the most common spam shape.
+- **Email schedule pipeline date-handling verification** — pick up after ~2-3 weeks of real email cycles have run. Walk a real shul (Safra `id=59`) against its source bulletin. See FEATURES.md "Schedule update timing — Needs verification on live data" subsection.
 
-### Needs live-data verification
+### Build-stage gaps (deferred until "build phase ends")
 
-- **Email schedule pipeline date handling** — FEATURES.md "Schedule update timing" notes how the code is *meant* to work (regular rules replace, special rules add, dates stored per-rule via `valid_from`/`valid_to`). Pick this up after ~2-3 weeks of real email cycles have run so there's enough data to spot patterns. Walk a real shul (e.g. Safra `id=59`) end-to-end against the source bulletin, check categorization, check prior-week soft-delete, sample LLM date extraction. See the "⚠ Needs verification on live data" subsection of that FEATURES.md entry.
+Per `[[feedback-security-cleanup-deferred]]` — three items in this category, all documented in FEATURES.md:
+- Credential rotation (Neon, Inngest, Cloudflare, Google)
+- Automated tests (FEATURES.md "Automated tests" gap entry — recommended starting point: 6-line hash-stability test in vitest)
+- Auth model rework for co-admin (FEATURES.md "Auth model" gap entry — trigger = first real second-admin user story)
 
-### Deferred build-stage cleanup (do once project is stable)
-
-Per [[feedback-security-cleanup-deferred]]: don't surface credential rotation here while we're in build mode.
+Working definition of "build phase ends" (per SESSION.md): daily active users > 50, ≥3 months without a critical bug shipped, marketing motion in flight. When 2 of 3 are true, revisit.
 
 ### Still pending user-side setup (not new)
 
@@ -39,6 +52,15 @@ Per [[feedback-security-cleanup-deferred]]: don't surface credential rotation he
 ---
 
 ## Done
+
+### 2026-05-15 — Documentation + Phase 2 brainstorm (8 doc commits) ✅
+
+Pure documentation session. No code changes; FEATURES.md grew substantially. See [SESSION.md](./SESSION.md) for the full doc commit table.
+
+- New FEATURES entries: schedule-update timing (with live-data verification flag), LLM extraction context exploration (5 options), automated-tests gap, auth-model gap.
+- Renamed and re-framed the post-traction section as **"🚀 Phase 2 features (final cut TBD)"** to make explicit these are candidates, not commitments.
+- Five Phase 2 candidates now documented with revisit triggers + design considerations: Telegram chatbot, layered Jewish-life map, multi-language UI, predictive missing-bulletin alert, "Make a Minyan" (Isaac-flagged favorite, has detailed "details that need real work" subsection).
+- Analyzed 7 user-suggested ideas in conversation; the verdicts (4 skip / 1 small enhancement / 1 link-only / 1 added to Phase 2) are captured in SESSION.md.
 
 ### 2026-05-14 (evening) — Code review + 17 fix commits ✅
 
