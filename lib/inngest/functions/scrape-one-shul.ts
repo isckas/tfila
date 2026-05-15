@@ -19,6 +19,13 @@ import { runCascade } from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
 
+// Permissive step type — we only use step.run. Avoids the gnarly
+// `Parameters<typeof inngest.createFunction>[…]` extraction while
+// still letting us pass `step` into helper functions for memoization.
+type Step = {
+  run: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+};
+
 export const scrapeOneShul = inngest.createFunction(
   {
     id: "shul-scrape-one",
@@ -99,7 +106,7 @@ export const scrapeOneShul = inngest.createFunction(
       strategy === "pdf_document" ||
       strategy === "vision_image"
     ) {
-      return rescrapeNonHtml({
+      return rescrapeNonHtml(step as Step, {
         shulId,
         dataSourceId,
         identifier: loaded.identifier,
@@ -224,71 +231,72 @@ export const scrapeOneShul = inngest.createFunction(
       };
     }
 
-    // ─── 6. Apply changes: soft-delete old rules, insert new ─────
+    // ─── 6. Apply changes atomically: soft-delete old + insert new
+    // + update data_source + write scrape_run audit. Wrapped in
+    // db.transaction so a partial failure mid-loop doesn't leave
+    // duplicate rules on Inngest retry (the soft-delete would be a
+    // no-op the second time, then the loop would re-insert).
     const applied = await step.run("apply-changes", async () => {
       const now = new Date();
+      return db.transaction(async (tx) => {
+        const deleted = await tx
+          .update(minyanRule)
+          .set({ deletedAt: now, updatedAt: now })
+          .where(
+            and(eq(minyanRule.dataSourceId, dataSourceId), isNull(minyanRule.deletedAt)),
+          )
+          .returning({ id: minyanRule.id });
 
-      // Soft-delete every currently-live rule linked to this data_source
-      const deleted = await db
-        .update(minyanRule)
-        .set({ deletedAt: now, updatedAt: now })
-        .where(
-          and(eq(minyanRule.dataSourceId, dataSourceId), isNull(minyanRule.deletedAt)),
-        )
-        .returning({ id: minyanRule.id });
+        let inserted = 0;
+        for (const r of extracted.extraction.rules) {
+          await insertRuleFromExtraction(tx, {
+            shulId,
+            dataSourceId,
+            rule: r,
+            lastSeenAt: now,
+          });
+          inserted++;
+        }
 
-      // Insert the new rules
-      let inserted = 0;
-      for (const r of extracted.extraction.rules) {
-        await insertRuleFromExtraction(db, {
+        await tx
+          .update(dataSource)
+          .set({
+            lastRunAt: now,
+            lastRunStatus: "ok",
+            confidenceScore: extracted.extraction.confidence,
+            builtAt: now,
+            builtBy: "llm",
+            configJson: {
+              ...(loaded.configJson as object | null ?? {}),
+              version: 1,
+              page_url: url,
+              final_url: fetched.finalUrl,
+              fetched_status: fetched.status,
+              page_content_hash: extracted.pageContentHash,
+              model: extracted.model,
+              prompt_version: "tfila-v1",
+              extracted_at: now.toISOString(),
+              reasoning: extracted.extraction.reasoning,
+              usage: extracted.usage,
+              last_rejected_extraction: undefined,
+            },
+            updatedAt: now,
+          })
+          .where(eq(dataSource.id, dataSourceId));
+
+        await tx.insert(scrapeRun).values({
           shulId,
           dataSourceId,
-          rule: r,
-          lastSeenAt: now,
+          startedAt: now,
+          finishedAt: new Date(),
+          status: "ok",
+          rulesAdded: inserted,
+          rulesRemoved: deleted.length,
+          rulesChanged: 0,
         });
-        inserted++;
-      }
 
-      // Refresh data_source: new hash, new confidence, last_run timestamps
-      await db
-        .update(dataSource)
-        .set({
-          lastRunAt: now,
-          lastRunStatus: "ok",
-          confidenceScore: extracted.extraction.confidence,
-          builtAt: now,
-          builtBy: "llm",
-          configJson: {
-            ...(loaded.configJson as object | null ?? {}),
-            version: 1,
-            page_url: url,
-            final_url: fetched.finalUrl,
-            fetched_status: fetched.status,
-            page_content_hash: extracted.pageContentHash,
-            model: extracted.model,
-            prompt_version: "tfila-v1",
-            extracted_at: now.toISOString(),
-            reasoning: extracted.extraction.reasoning,
-            usage: extracted.usage,
-            last_rejected_extraction: undefined, // clear any prior broken-flag context
-          },
-          updatedAt: now,
-        })
-        .where(eq(dataSource.id, dataSourceId));
-
-      // Audit row
-      await db.insert(scrapeRun).values({
-        shulId,
-        dataSourceId,
-        startedAt: now,
-        finishedAt: new Date(),
-        status: "ok",
-        rulesAdded: inserted,
-        rulesRemoved: deleted.length,
-        rulesChanged: 0, // we do replace-all, not in-place change tracking
+        return { rulesAdded: inserted, rulesRemoved: deleted.length };
       });
-
-      return { rulesAdded: inserted, rulesRemoved: deleted.length };
     });
 
     return {
@@ -304,18 +312,21 @@ export const scrapeOneShul = inngest.createFunction(
 
 /**
  * Re-scrape path for non-HTML strategies (js_rendered, pdf_document,
- * vision_image). Reruns the cascade pinned to the stored strategy so
- * we don't pay for earlier tiers. Applies the same broken-flag and
- * soft-delete semantics as the HTML path but without the hash check
- * (these tiers don't produce a stable content hash anyway).
+ * vision_image). Each unit of work is wrapped in step.run so Inngest
+ * memoizes results — a transient failure won't replay the cascade
+ * (which costs LLM $) or duplicate rule inserts. The apply-changes
+ * step is also wrapped in db.transaction for atomic row replacement.
  */
-async function rescrapeNonHtml(args: {
-  shulId: number;
-  dataSourceId: number;
-  identifier: string;
-  strategy: "js_rendered" | "pdf_document" | "vision_image";
-  previousConfig: object | null;
-}): Promise<{
+async function rescrapeNonHtml(
+  step: Step,
+  args: {
+    shulId: number;
+    dataSourceId: number;
+    identifier: string;
+    strategy: "js_rendered" | "pdf_document" | "vision_image";
+    previousConfig: object | null;
+  },
+): Promise<{
   changed: boolean;
   broken?: boolean;
   rulesAdded?: number;
@@ -331,36 +342,42 @@ async function rescrapeNonHtml(args: {
     (args.previousConfig as { submitted_url?: string } | null)?.submitted_url ??
     args.identifier;
 
-  const cascade = await runCascade(submittedUrl, {
-    timeoutMs: 25_000,
-    preferredStrategy: args.strategy,
-  });
+  const cascade = await step.run("cascade-rerun", async () =>
+    runCascade(submittedUrl, {
+      timeoutMs: 25_000,
+      preferredStrategy: args.strategy,
+    }),
+  );
 
   if (cascade.strategy === "failed" || !cascade.extraction) {
-    await db.insert(scrapeRun).values({
-      shulId: args.shulId,
-      dataSourceId: args.dataSourceId,
-      startedAt: new Date(),
-      finishedAt: new Date(),
-      status: "broken",
-      rulesAdded: 0,
-      rulesRemoved: 0,
-      rulesChanged: 0,
-      error: `cascade re-run failed for strategy ${args.strategy}`,
+    await step.run("mark-broken-cascade-failed", async () => {
+      await db.insert(scrapeRun).values({
+        shulId: args.shulId,
+        dataSourceId: args.dataSourceId,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        status: "broken",
+        rulesAdded: 0,
+        rulesRemoved: 0,
+        rulesChanged: 0,
+        error: `cascade re-run failed for strategy ${args.strategy}`,
+      });
     });
     return { changed: false, broken: true, strategy: args.strategy };
   }
 
-  const prevCount = await db
-    .select({ n: sql<number>`COUNT(*)::int` })
-    .from(minyanRule)
-    .where(
-      and(
-        eq(minyanRule.dataSourceId, args.dataSourceId),
-        isNull(minyanRule.deletedAt),
-      ),
-    )
-    .then((rows) => rows[0]?.n ?? 0);
+  const prevCount = await step.run("count-existing-rules", async () =>
+    db
+      .select({ n: sql<number>`COUNT(*)::int` })
+      .from(minyanRule)
+      .where(
+        and(
+          eq(minyanRule.dataSourceId, args.dataSourceId),
+          isNull(minyanRule.deletedAt),
+        ),
+      )
+      .then((rows) => rows[0]?.n ?? 0),
+  );
 
   const newCount = cascade.extraction.rules.length;
   const verdict = evaluateExtractionGuardrails({
@@ -370,27 +387,31 @@ async function rescrapeNonHtml(args: {
   });
 
   if (verdict.shouldFlagBroken) {
-    await db.insert(scrapeRun).values({
-      shulId: args.shulId,
-      dataSourceId: args.dataSourceId,
-      startedAt: new Date(),
-      finishedAt: new Date(),
-      status: "broken",
-      rulesAdded: 0,
-      rulesRemoved: 0,
-      rulesChanged: 0,
-      error: verdict.reason ?? "broken",
+    await step.run("mark-broken-guardrail", async () => {
+      await db.transaction(async (tx) => {
+        await tx.insert(scrapeRun).values({
+          shulId: args.shulId,
+          dataSourceId: args.dataSourceId,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          status: "broken",
+          rulesAdded: 0,
+          rulesRemoved: 0,
+          rulesChanged: 0,
+          error: verdict.reason ?? "broken",
+        });
+        await tx
+          .update(dataSource)
+          .set({
+            lastRunAt: new Date(),
+            lastRunStatus: "broken",
+            reviewStatus: "pending",
+            confidenceScore: cascade.extraction!.confidence,
+            updatedAt: new Date(),
+          })
+          .where(eq(dataSource.id, args.dataSourceId));
+      });
     });
-    await db
-      .update(dataSource)
-      .set({
-        lastRunAt: new Date(),
-        lastRunStatus: "broken",
-        reviewStatus: "pending",
-        confidenceScore: cascade.extraction.confidence,
-        updatedAt: new Date(),
-      })
-      .where(eq(dataSource.id, args.dataSourceId));
     return {
       changed: false,
       broken: true,
@@ -399,75 +420,80 @@ async function rescrapeNonHtml(args: {
     };
   }
 
-  // Apply: soft-delete old, insert new
-  const now = new Date();
-  const deleted = await db
-    .update(minyanRule)
-    .set({ deletedAt: now, updatedAt: now })
-    .where(
-      and(
-        eq(minyanRule.dataSourceId, args.dataSourceId),
-        isNull(minyanRule.deletedAt),
-      ),
-    )
-    .returning({ id: minyanRule.id });
+  // Apply atomically: soft-delete + insert + data_source update + audit.
+  // The whole block is one transaction so a partial failure mid-loop
+  // doesn't leave duplicate rules on Inngest retry.
+  const applied = await step.run("apply-changes", async () => {
+    const now = new Date();
+    return db.transaction(async (tx) => {
+      const deleted = await tx
+        .update(minyanRule)
+        .set({ deletedAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(minyanRule.dataSourceId, args.dataSourceId),
+            isNull(minyanRule.deletedAt),
+          ),
+        )
+        .returning({ id: minyanRule.id });
 
-  let inserted = 0;
-  for (const r of cascade.extraction.rules) {
-    await insertRuleFromExtraction(db, {
-      shulId: args.shulId,
-      dataSourceId: args.dataSourceId,
-      rule: r,
-      lastSeenAt: now,
+      let inserted = 0;
+      for (const r of cascade.extraction!.rules) {
+        await insertRuleFromExtraction(tx, {
+          shulId: args.shulId,
+          dataSourceId: args.dataSourceId,
+          rule: r,
+          lastSeenAt: now,
+        });
+        inserted++;
+      }
+
+      await tx
+        .update(dataSource)
+        .set({
+          identifier: submittedUrl,
+          lastRunAt: now,
+          lastRunStatus: "ok",
+          confidenceScore: cascade.extraction!.confidence,
+          builtAt: now,
+          builtBy: "llm",
+          configJson: {
+            ...(args.previousConfig ?? {}),
+            version: 2,
+            page_url: submittedUrl,
+            submitted_url: submittedUrl,
+            extraction_strategy: cascade.strategy,
+            last_extracted_resource: cascade.winningUrl,
+            cascade_attempts: cascade.attempts,
+            model: cascade.model,
+            prompt_version: "tfila-v1",
+            extracted_at: now.toISOString(),
+            reasoning: cascade.extraction!.reasoning,
+            usage: cascade.usage,
+          },
+          updatedAt: now,
+        })
+        .where(eq(dataSource.id, args.dataSourceId));
+
+      await tx.insert(scrapeRun).values({
+        shulId: args.shulId,
+        dataSourceId: args.dataSourceId,
+        startedAt: now,
+        finishedAt: new Date(),
+        status: "ok",
+        rulesAdded: inserted,
+        rulesRemoved: deleted.length,
+        rulesChanged: 0,
+      });
+
+      return { rulesAdded: inserted, rulesRemoved: deleted.length };
     });
-    inserted++;
-  }
-
-  await db
-    .update(dataSource)
-    .set({
-      // Keep identifier on the page URL so next week's rescrape still
-      // re-targets the page (and re-discovers the new week's resource).
-      // The specific image/PDF URL goes to configJson.last_extracted_resource.
-      identifier: submittedUrl,
-      lastRunAt: now,
-      lastRunStatus: "ok",
-      confidenceScore: cascade.extraction.confidence,
-      builtAt: now,
-      builtBy: "llm",
-      configJson: {
-        ...(args.previousConfig ?? {}),
-        version: 2,
-        page_url: submittedUrl,
-        submitted_url: submittedUrl,
-        extraction_strategy: cascade.strategy,
-        last_extracted_resource: cascade.winningUrl,
-        cascade_attempts: cascade.attempts,
-        model: cascade.model,
-        prompt_version: "tfila-v1",
-        extracted_at: now.toISOString(),
-        reasoning: cascade.extraction.reasoning,
-        usage: cascade.usage,
-      },
-      updatedAt: now,
-    })
-    .where(eq(dataSource.id, args.dataSourceId));
-
-  await db.insert(scrapeRun).values({
-    shulId: args.shulId,
-    dataSourceId: args.dataSourceId,
-    startedAt: now,
-    finishedAt: new Date(),
-    status: "ok",
-    rulesAdded: inserted,
-    rulesRemoved: deleted.length,
-    rulesChanged: 0,
   });
 
   return {
     changed: true,
-    rulesAdded: inserted,
-    rulesRemoved: deleted.length,
+    rulesAdded: applied.rulesAdded,
+    rulesRemoved: applied.rulesRemoved,
     confidence: cascade.extraction.confidence,
     strategy: args.strategy,
   };
