@@ -85,11 +85,11 @@ export default async function HomePage({ searchParams }: PageProps) {
                   Tfila times that don&apos;t go stale.
                 </h1>
                 <p className="mt-2 text-sm text-neutral-600">
-                  Every tfila / Shul directory has the same problem
-                  &mdash; times posted years ago, never updated. tfila.co
-                  reads each shul&apos;s own website or weekly email
+                  Every Tfila / Shul directory has the same problem
+                  &mdash; times posted years ago, never updated. Tfila.co
+                  reads  each shul&apos;s own website or weekly email
                   bulletin, refreshes every Motzei Shabbat, for real
-                  accurate tfila times.
+                  accurate Tfila times.
                 </p>
               </div>
             </div>
