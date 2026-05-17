@@ -88,6 +88,7 @@ export async function insertRuleFromExtraction(
     priority,
     nusach: r.nusach ?? null,
     notes: r.notes ?? null,
+    sourceQuote: r.sourceQuote ?? null,
     lastSeenInScrapeAt: args.lastSeenAt,
   });
 }
