@@ -213,6 +213,12 @@ export const minyanRule = pgTable(
     priority: integer("priority").default(0).notNull(),
     nusach: varchar("nusach", { length: 32 }),
     notes: text("notes"),
+    // Exact source text the rule was extracted from. Populated by the
+    // v2 extraction pipeline (EXTRACTION-ONE-SHOT-PLAN); NULL for rules
+    // extracted under v1. Used for admin audit trail (hover-tooltip on
+    // each rule) and for the critique pass's "did the model invent
+    // this rule?" check.
+    sourceQuote: text("source_quote"),
     lastSeenInScrapeAt: timestamp("last_seen_in_scrape_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
