@@ -98,6 +98,18 @@ export const RuleSchema = z.object({
     .describe(
       "Short note attached to this rule from the source (e.g. 'Main sanctuary', 'Beis Medrash'). Don't include marketing copy.",
     ),
+  // v2 extraction requires this; v1 leaves it absent. Schema is
+  // optional at the type level so v1 callers don't break, but the
+  // v2 prompt + tool definition both REQUIRE the model to populate
+  // it. Validation enforced at the tool-input-schema layer, not in
+  // this Zod schema.
+  sourceQuote: z
+    .string()
+    .max(500)
+    .optional()
+    .describe(
+      "REQUIRED in v2: the exact text from the source that this rule was extracted from. Quote verbatim, no paraphrasing. If you can't quote it, you can't emit the rule. Example: 'Mincha 7:15 PM weekday' or 'Shacharis: 8:00 AM (Sunday)'.",
+    ),
 });
 
 export type ExtractedRule = z.infer<typeof RuleSchema>;
