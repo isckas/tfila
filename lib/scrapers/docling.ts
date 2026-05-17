@@ -1,10 +1,13 @@
 // Docling PDF preprocessor.
 //
 // Docling is IBM's open-source PDF parser — agentic OCR + layout
-// detection + table-structure preservation. Self-hosted (Python), free
-// forever. Run it as a separate service (Vercel Python serverless,
-// Render hobby instance, Cloudflare Worker via Python wasm, etc.) and
-// point DOCLING_URL at it.
+// detection + table-structure preservation. Self-hosted via the
+// official `quay.io/docling-project/docling-serve-cpu` container.
+//
+// Our deployment: a Hugging Face Space running the container at
+//   https://iska123-tfila-docling-serve.hf.space
+// Free CPU Basic tier (2 vCPU, 16 GB RAM). Sleeps after 48h idle
+// (~30s cold start); fine for our weekly cron workload.
 //
 // When DOCLING_URL is unset, fetchViaDocling returns ok=false so the
 // caller can fall back to the existing direct-Claude-on-PDF path. This
@@ -12,7 +15,8 @@
 //
 // Per EXTRACTION-ONE-SHOT-PLAN.md → "Docling" section.
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+// PDFs can take 30-120s on CPU tier depending on page count.
+const DEFAULT_TIMEOUT_MS = 180_000;
 
 export interface DoclingResult {
   ok: boolean;
@@ -36,19 +40,16 @@ export interface DoclingOpts {
  * If DOCLING_URL is unset, returns { ok: false, notConfigured: true }
  * so callers can fall back gracefully (e.g. direct PDF-to-Claude path).
  *
- * Expected DOCLING_URL endpoint contract:
- *   POST <DOCLING_URL>/parse
- *   body: { url: "https://..." }
- *   response: { markdown: string, pageCount?: number }
- *
- * If your hosting differs (e.g. exposes a different path or accepts
- * the PDF body directly), update this function to match.
+ * Real docling-serve API contract:
+ *   POST <DOCLING_URL>/v1/convert/source
+ *   body: { sources: [{kind:"http", url:"..."}], options: {to_formats:["md"]} }
+ *   response: { status: "success" | ..., document: { md_content: string, ... }, errors: [], processing_time }
  */
 export async function fetchViaDocling(
   pdfUrl: string,
   opts: DoclingOpts = {},
 ): Promise<DoclingResult> {
-  const baseUrl = process.env.DOCLING_URL?.trim();
+  const baseUrl = process.env.DOCLING_URL?.trim().replace(/\/$/, "");
   if (!baseUrl) {
     return {
       ok: false,
@@ -59,7 +60,7 @@ export async function fetchViaDocling(
     };
   }
 
-  const endpoint = baseUrl.endsWith("/") ? baseUrl + "parse" : baseUrl + "/parse";
+  const endpoint = `${baseUrl}/v1/convert/source`;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -74,7 +75,10 @@ export async function fetchViaDocling(
     res = await fetch(endpoint, {
       method: "POST",
       headers,
-      body: JSON.stringify({ url: pdfUrl }),
+      body: JSON.stringify({
+        sources: [{ kind: "http", url: pdfUrl }],
+        options: { to_formats: ["md"] },
+      }),
       signal: ctrl.signal,
     });
   } catch (err) {
@@ -96,9 +100,14 @@ export async function fetchViaDocling(
     };
   }
 
-  let json: { markdown?: string; pageCount?: number };
+  let json: {
+    status?: string;
+    document?: { md_content?: string };
+    errors?: unknown[];
+    processing_time?: number;
+  };
   try {
-    json = (await res.json()) as { markdown?: string; pageCount?: number };
+    json = (await res.json()) as typeof json;
   } catch (err) {
     return {
       ok: false,
@@ -107,18 +116,26 @@ export async function fetchViaDocling(
     };
   }
 
-  if (!json.markdown || json.markdown.trim().length === 0) {
+  if (json.status && json.status !== "success" && json.status !== "partial_success") {
     return {
       ok: false,
       markdown: "",
-      error: "docling returned empty markdown",
+      error: `docling status=${json.status}: ${JSON.stringify(json.errors ?? []).slice(0, 200)}`,
+    };
+  }
+
+  const md = json.document?.md_content ?? "";
+  if (!md || md.trim().length === 0) {
+    return {
+      ok: false,
+      markdown: "",
+      error: "docling returned empty md_content",
     };
   }
 
   return {
     ok: true,
-    markdown: json.markdown,
-    pageCount: json.pageCount,
+    markdown: md,
   };
 }
 
