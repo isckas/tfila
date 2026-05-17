@@ -11,7 +11,8 @@ Feature design + decision doc. Each section describes a single feature or concer
 | **FEATURES.md** | Designs with open choices we *will* build | Per-feature with options + tradeoffs + decision | Decided → built → archived |
 | [EXTRACTION.md](./EXTRACTION.md) | Data-pipeline tech-stack research; tools surveyed; swap candidates ranked | Per-tool / per-tier | Living research doc |
 | [LLM-CONTEXT.md](./LLM-CONTEXT.md) | LLM-side strategies — using Claude as a context-aware agent vs pure function (critique pass, tool use, context-rich prompts, etc.) | Per-strategy | Living research doc |
-| [EXTRACTION-PLAN.md](./EXTRACTION-PLAN.md) | Phased upgrade plan synthesizing EXTRACTION.md + LLM-CONTEXT.md. Test rig first, then 4 phases with measurable success criteria | Per-phase | Living plan doc |
+| [EXTRACTION-PLAN.md](./EXTRACTION-PLAN.md) | Phased upgrade plan synthesizing EXTRACTION.md + LLM-CONTEXT.md. Test rig first, then 4 phases with measurable success criteria | Per-phase | Living plan doc (superseded by EXTRACTION-ONE-SHOT-PLAN for actual execution) |
+| [EXTRACTION-ONE-SHOT-PLAN.md](./EXTRACTION-ONE-SHOT-PLAN.md) | **CHOSEN APPROACH.** Single comprehensive rewrite of the extraction stack in one branch + feature flag + safe rollout. Combines all high-value improvements from the other extraction docs | Per-component + rollout phases | Living implementation doc |
 | [PROGRESS.md](./PROGRESS.md) | Rolling build log | Per-PR / per-day | Append-only |
 | [SESSION.md](./SESSION.md) | Pickup-state doc for resuming long sessions | Per-session | Refresh at end of major sessions |
 | [CHANGELOG.md](./CHANGELOG.md) | Day-versioned release log for admin | Per-version | Auto-bumped at midnight ET |
