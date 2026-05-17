@@ -1154,3 +1154,103 @@ This is the "we'd really have to work out the details" list — the design quest
 **Phase 2 candidate. Isaac flagged as one of his favorites in the brainstorm; we're keeping it on the active list specifically.** Build is non-trivial AND depends on Phase 2 infrastructure (Telegram bot, auth rework, push notifications). When the trigger fires, the design doc above should be revisited and refined — the "details that need real work" section is the starting point for the design conversation.
 
 Related: [[feature-telegram-chatbot]] (chat-first UX is probably the right surface). [[feature-auth-rework]] (campaign creation needs real auth). [[feature-real-time-minyan-formation]] (when written — the registered-shul cousin of this feature, probably built first as a stepping stone).
+
+---
+
+## Flip the model: "Tfila for Shuls" gabbai portal (Phase 2)
+
+Added: 2026-05-16 · **Status: Phase 2 candidate — paradigm-shift idea; deferred until traction.**
+
+**The idea.** Stop scraping shuls. Instead, build a free "Tfila for Shuls" portal where the **gabbai publishes their schedule to us**. They enter their schedule once — including the underlying rules ("Mincha = shkia − 18", weekday Shacharis 6:45, etc.) — and we auto-generate:
+
+- The weekly bulletin email (and send it for them, to their list)
+- An embeddable widget for their shul's website
+- A clean iCal / RSS feed
+- The canonical schedule that flows into tfila.co with zero scraping
+
+In exchange for the convenience, we get clean structured data, real-time updates the moment the gabbai edits, and attribution from the shul itself. The current LLM extraction cascade becomes a fallback for shuls that haven't adopted the portal yet — not the primary mechanism.
+
+### Source / inspiration
+
+- **The Stripe playbook.** Stripe didn't try to scrape payment data from merchants. They built the simplest payment integration and the data came free. The merchant problem was "I need to take payments"; Stripe solved it; the structured data fell out as a side effect. Same shape here — the gabbai problem is "I have to manually write the bulletin every week"; we solve it; clean schedule data falls out.
+- **Mindbody / PlanningCenter** as adjacent-domain proof. Both built "ops software for a vertical" (gyms / churches respectively); both became the data layer for their entire industry because they solved the operational pain first. Mindbody knows every yoga class in the country not because they scraped — because the studios use them for booking.
+- **The pattern repeats:** every directory that won (Yelp, OpenTable, Square's location data) eventually got its data from the businesses themselves, not from scraping. Scraping was the wedge; ops software was the destination.
+
+### Why this is a Phase 2 candidate, not Phase 1
+
+- **Two-sided product.** Today tfila.co is one-sided (consumer-facing). A portal adds a second side (shul-facing) with its own UX, support, billing, onboarding. That's a fundamentally bigger product surface; not the right next step before the consumer side is proven and stable.
+- **Requires sales motion.** The first 50 shuls have to be hand-walked through portal onboarding. That's gabbai outreach, demo calls, follow-up — a different skill set than the engineering-driven motion that built the directory. Premature without a clear ICP (ideal customer profile) and a story of why the first gabbais should adopt before there are network effects.
+- **Doesn't deprecate the scraping work.** The cascade stays as the fallback for non-portal shuls. The portal is an additive bet, not a replacement. So nothing about Phase 1 work is wasted — but adding the portal before Phase 1 is rock-solid would split focus.
+- **Cold-start is asymmetric.** Consumer directory: usable from day 1 (we scrape what's there). Shul portal: usable only after gabbais adopt. Trying to launch both simultaneously means each fails to bootstrap the other.
+
+### Why it's the most powerful reframe in the candidate pool
+
+Every other minyan-finder in history has tried scraping and lost the data-quality war (Hashkamah Hub, Minyan Maps, GoDaven historically — all flat or declining). The product that wins this category will be the one that becomes **infrastructure FOR shuls**, not infrastructure *about* them.
+
+Pairs structurally with another out-of-the-box research thread: **compute the schedule from rules, don't scrape weekly bulletins.** A shul's full year of times is usually derivable from 8-15 rules (e.g. "Mincha = shkia − 18", "weekday Shacharis 6:45", "Shabbos Mincha 15 min before shkia"). The weekly bulletin is just those rules re-rendered for this week's dates. If the portal captures the rules once, we generate the schedule for the next 365 days automatically. The "weekly bulletin email" becomes a derived artifact, not a source of truth. This rule-based computation is half the value of the portal; without it, the portal is just a fancier text editor.
+
+### What the portal would offer the gabbai (the value side)
+
+In rough priority of what makes a gabbai sign up:
+
+1. **Auto-generated weekly bulletin email**, ready to send to their list. Gabbai saves ~20 min/week.
+2. **One-time setup** — enter the recurring rules once, the system generates schedules forever.
+3. **Yom Tov / Selichos / fast-day templates** pre-filled per Hebrew calendar; gabbai just confirms or tweaks.
+4. **Embeddable widget** for their shul website so its homepage always shows current times (most shul sites have stale times because the webmaster forgets to update them).
+5. **Free** at small scale, paid only at organizational tiers (think Substack pricing: free for individual, paid for organizations).
+
+### What we get from the portal (the data side)
+
+- **Clean structured schedules** with zero LLM cost — gabbai is the source.
+- **Real-time updates** the moment the gabbai edits — no Saturday-night cron lag.
+- **Attribution** — every bulletin and widget is "powered by tfila.co," driving brand + sign-ups for daveners.
+- **Per-shul authentication** — the gabbai has an account, so we know who's making changes, can fix errors fast, and have someone to ask when data looks off.
+- **Multi-source corroboration with scraping** — for shuls that publish to the portal AND have a website, we can validate one against the other (sister-idea: trust scoring).
+
+### When to revisit
+
+- **Concrete trigger:** ≥1000 shuls in the directory with daily user traffic AND a recurring gabbai question / complaint that the portal would directly solve (e.g. "the bulletin we send out and the times on your site disagree — can we just update them in one place?").
+- **Or:** Isaac decides to take the project from "side directory" to "shul ops platform." That's a strategic pivot, not an incremental feature; deserves its own decision moment.
+- **Or:** a community organization (Vaad, NCSY, OU) asks "could you maintain schedules for all 30 of our member shuls in one tool?" That's an enterprise-style ICP that drops the cold-start problem by 30× in one conversation.
+
+### Pros (when revisited)
+
+- Eliminates entire problem classes: PDF extraction, email parsing, anti-bot 403s, LLM hallucinations on stylized typography. Cascade collapses to fallback-only.
+- Network effects: every adopting shul becomes a marketing channel (their bulletin + widget both carry our branding).
+- Defensible moat: once 50+ shuls use it for ops, switching cost is real.
+- Aligns long-term incentives with the audience — solving the gabbai's actual problem, not just paraphrasing their content.
+- Unlocks downstream features cheaply: candle-lighting subscriptions, kiddush sponsor management, member directory — all natural extensions once we have shul-side accounts.
+
+### Cons / risks (worth being honest about)
+
+- **Bigger product to maintain.** Two-sided product = 2× the bug surface, 2× the UX work, 2× the support load.
+- **Sales motion isn't engineering.** Acquiring the first 50 shuls is door-knocking work. Premature investment if Isaac (or whoever) isn't ready to wear that hat.
+- **Risk of being copied at scale.** Once the concept is proven, a bigger Jewish org (Chabad.org, OU, Aish) could fast-follow with more distribution. Counter: tfila.co's existing user base + brand from the consumer side is the moat.
+- **Cultural fit varies.** Some gabbais (older, more traditional) don't want "another portal." For them, scraping remains the right answer. Portal is additive, not universal.
+- **Pricing decision deferred but real.** Free forever risks unsustainability; paid risks adoption. Mindbody-style "free for one location, paid for chains" is probably right but worth careful thought.
+
+### What to do first (when picked up)
+
+1. **Interview 5 gabbais.** Open-ended. "Walk me through how you publish your schedule each week." Look for: what tools do they use today (Mailchimp? Word? WhatsApp?), what's the biggest pain, what would make them try something new.
+2. **Sketch the minimum portal.** Three screens: (a) enter recurring rules, (b) preview this week's auto-generated schedule, (c) one-click send the bulletin. If a gabbai can go from "I never heard of tfila.co" to "I sent this week's bulletin via the portal" in 15 minutes, the UX is right. If not, iterate.
+3. **Decide the rule-based computation scope upfront.** Day-of-week + zmanim-anchored rules cover ~80% of shuls. Yom Tov / Selichos / fast-day templates cover another ~15%. The remaining ~5% (weird seasonal variations, dual-nusach minyanim, etc.) might still need manual override. Scope the first version to the 80%; let the gabbai handle edge cases manually for now.
+4. **Pair-launch with one Vaad or community organization** — easier to onboard 5 shuls at once than 1-by-1. Find a community connector first; don't try to recruit shuls in isolation.
+5. **Keep the existing scraping cascade fully operational.** The portal is additive. Shuls not on the portal continue to be scraped as today. Don't deprecate anything until 50%+ of active listings come from portal-published data.
+
+### Sequencing — what should happen first
+
+Several Phase 2 entries are pre-requisites or natural pairs:
+
+- **[[feature-auth-rework]]** — the portal needs proper multi-user auth (each gabbai gets their own account, with permissions only over their shul). Today's single-admin model can't support this.
+- **[[feature-real-time-minyan-formation]]** (registered-shul minyan campaigns from the prior brainstorm) — the portal is the obvious surface for this; gabbais inside the portal can open a campaign with one click.
+- **[[feature-make-a-minyan]]** (ad-hoc minyan campaigns) — could be a portal feature too, scaled to non-affiliated venues.
+
+The portal is the **substrate** for several other Phase 2 ideas. If we ever commit to it, the related entries should reorganize as portal-features rather than standalone.
+
+### Decision
+
+**Deferred to Phase 2. This is the most strategically interesting candidate in the pool — strongest potential to flip the data-quality dynamics, the operational economics, AND the competitive moat all at once. Also the most ambitious; not the right starting point for Phase 2 unless and until traction + a clear ICP justifies the sales motion that comes with it.**
+
+Notes for future-Isaac: if this idea keeps surfacing in the next 6 months without an obvious trigger, that itself is signal. The fact that scraping has been the focus for so long is partly path dependence — once the cascade was built, every incremental improvement was a cascade improvement. The portal idea requires zooming out and asking "is this actually the right architecture for the product we're trying to build, 3 years out?" The honest answer is probably no; the *right* architecture is portal-first with scraping as fallback. The question is whether and when to make that bet.
+
+Related: prior research-mode conversation laid out 6 out-of-the-box reframes; this is reframe #1. The full discussion (rules-not-bulletins, schema.org, davener-as-sensor, multi-source trust, ambient computing) is in the session transcript — worth re-reading when the time comes to flesh this out.
