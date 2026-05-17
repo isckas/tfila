@@ -82,13 +82,17 @@ const issues = await c.query(
   [String(hours)],
 );
 
+// Use full URLs so they're clickable from anywhere this script is run
+// (terminal, piped to email, copied into a doc, etc.).
+const BASE_URL = (process.env.AUTH_URL?.trim() || "https://tfila.co").replace(/\/$/, "");
+
 if (issues.rows.length > 0) {
   console.log(`\nBroken / error runs (${issues.rows.length}):`);
   for (const r of issues.rows) {
     console.log(
       `\n  [${r.run_status}] ${r.name} (shul ${r.shul_id} · ds ${r.data_source_id})`,
     );
-    console.log(`    slug:   /admin/shul/${r.slug}`);
+    console.log(`    url:    ${BASE_URL}/admin/shul/${r.slug}`);
     console.log(`    when:   ${r.started_at.toISOString()}`);
     if (r.error) console.log(`    error:  ${r.error}`);
   }

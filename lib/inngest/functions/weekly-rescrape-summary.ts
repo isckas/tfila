@@ -18,6 +18,14 @@ import { STALE_THRESHOLD_DAYS } from "../../freshness";
 
 const LOOKBACK_MINUTES = 90;
 
+// Absolute base URL for links in the email body. Email clients won't
+// auto-link relative paths — every URL has to be a full https://...
+// to be clickable. Fall back to the canonical prod host if AUTH_URL
+// isn't configured in the runtime env.
+const BASE_URL = (
+  process.env.AUTH_URL?.trim() || "https://tfila.co"
+).replace(/\/$/, "");
+
 export const weeklyRescrapeSummary = inngest.createFunction(
   {
     id: "shul-weekly-rescrape-summary",
@@ -120,7 +128,8 @@ export const weeklyRescrapeSummary = inngest.createFunction(
         lines.push("");
         lines.push(`  [${r.run_status}] ${r.name}`);
         lines.push(`    shul ${r.shul_id} · data_source ${r.data_source_id}`);
-        lines.push(`    /admin/shul/${r.slug}`);
+        // Full URLs so the link is clickable from the email client.
+        lines.push(`    ${BASE_URL}/admin/shul/${r.slug}`);
         if (r.error) lines.push(`    ${r.error}`);
       }
     }
@@ -130,7 +139,9 @@ export const weeklyRescrapeSummary = inngest.createFunction(
       lines.push(
         `⚠ Active shuls HIDDEN from public by stale-gate (no fresh data_source in ${STALE_THRESHOLD_DAYS}d): ${staleCount}`,
       );
-      lines.push("  Check /admin/shuls — red-pilled rows.");
+      lines.push(
+        `  Check ${BASE_URL}/admin/shuls — red-pilled rows.`,
+      );
     }
 
     lines.push("");
