@@ -9,7 +9,9 @@ Feature design + decision doc. Each section describes a single feature or concer
 | [SCOPE.md](./SCOPE.md) | What tfila.co is and isn't, locked | Whole product | Edited rarely |
 | [IDEAS.md](./IDEAS.md) | Parking lot — "maybe someday" | One-line entries | Most never leave |
 | **FEATURES.md** | Designs with open choices we *will* build | Per-feature with options + tradeoffs + decision | Decided → built → archived |
+| [EXTRACTION.md](./EXTRACTION.md) | Data-pipeline tech-stack research; tools surveyed; swap candidates ranked | Per-tool / per-tier | Living research doc |
 | [PROGRESS.md](./PROGRESS.md) | Rolling build log | Per-PR / per-day | Append-only |
+| [SESSION.md](./SESSION.md) | Pickup-state doc for resuming long sessions | Per-session | Refresh at end of major sessions |
 | [CHANGELOG.md](./CHANGELOG.md) | Day-versioned release log for admin | Per-version | Auto-bumped at midnight ET |
 | [STYLE.md](./STYLE.md) | UX north star | Project-wide rules | Edited rarely |
 
