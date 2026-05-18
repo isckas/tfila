@@ -24,7 +24,6 @@ import { extractFromImageUrlV2 } from "./extract-vision-v2";
 import { extractFromPdfV2 } from "./extract-pdf-v2";
 import {
   classifyPage,
-  shouldRerenderJs,
   shouldSkipExtraction,
 } from "./router";
 import type { CascadeAttempt, CascadeResult, ExtractionStrategy } from "./cascade";
@@ -187,17 +186,12 @@ export async function runCascadeV2(
           confidence: null,
           errorMessage: `router: ${cls.pageType} — ${cls.reasoning}`,
         });
-      } else if (shouldRerenderJs(cls.pageType)) {
-        // Skip to JS tier — router thinks the schedule is behind JS
-        attempts.push({
-          strategy: "html",
-          status: "skipped",
-          rulesCount: 0,
-          confidence: null,
-          errorMessage: `router: ${cls.pageType} — jumping to JS render`,
-        });
       } else {
-        // Run v2 HTML extraction
+        // Always try HTML extraction. shouldRerenderJs is now advisory
+        // only — recorded in v2Meta but we still attempt HTML first.
+        // Reason: BAYT canary showed router classifies extractable
+        // calendars as "calendar_widget" and skipping HTML lost 48
+        // rules vs v1. JS tier remains as fallback if HTML returns 0.
         const r = await extractFromHtmlV2({
           source: { kind: "markdown", markdown },
           shulId: opts.shulId,
