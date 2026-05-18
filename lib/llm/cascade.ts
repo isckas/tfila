@@ -103,10 +103,37 @@ interface CascadeOpts {
   /** When set, skip directly to this tier (used by weekly rescrapes). */
   preferredStrategy?: ExtractionStrategy;
   timeoutMs?: number;
+  /**
+   * Shul ID — required for v2 (context preamble + tools + critique).
+   * Optional for v1 (ignored). When v2 is active and shulId is missing
+   * we silently fall through to v1 with a console.warn.
+   */
+  shulId?: number;
 }
 
 function isUseful(rules: number, confidence: number): boolean {
   return rules > 0 && confidence >= MIN_USEFUL_CONFIDENCE;
+}
+
+// ─── Feature flag dispatch ───────────────────────────────────
+//
+// EXTRACTION_PIPELINE_V2=true  → use v2 for ALL shuls
+// EXTRACTION_V2_SHUL_IDS=12,34 → use v2 only for those specific shuls
+// (neither set)                → use v1 for everything (current behavior)
+//
+// Per EXTRACTION-ONE-SHOT-PLAN.md "Feature flag design".
+
+function shouldUseV2(shulId: number | undefined): boolean {
+  if (process.env.EXTRACTION_PIPELINE_V2 === "true") return true;
+  if (shulId == null) return false;
+  const idsRaw = process.env.EXTRACTION_V2_SHUL_IDS;
+  if (!idsRaw) return false;
+  const ids = idsRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number);
+  return ids.includes(shulId);
 }
 
 /**
@@ -210,7 +237,38 @@ function findImageCandidates(htmls: string[], baseUrl: string): string[] {
     .map((r) => r.url);
 }
 
+/**
+ * Top-level cascade entry point. Dispatches to v1 (current production
+ * pipeline) or v2 (extract-v2 + agent tools + critique + Jina/Docling)
+ * based on feature flags.
+ *
+ * v2 needs a shulId for context preamble. If the flag is on for a
+ * shul that has no shulId in scope (shouldn't happen but defensive),
+ * we fall back to v1 silently.
+ */
 export async function runCascade(
+  submittedUrl: string,
+  opts: CascadeOpts = {},
+): Promise<CascadeResult> {
+  if (shouldUseV2(opts.shulId)) {
+    if (opts.shulId == null) {
+      console.warn(
+        "[cascade] v2 enabled but no shulId provided; falling back to v1",
+      );
+    } else {
+      // Lazy-import so v2 dependencies aren't loaded in v1-only deploys
+      const { runCascadeV2 } = await import("./cascade-v2");
+      return runCascadeV2(submittedUrl, {
+        shulId: opts.shulId,
+        preferredStrategy: opts.preferredStrategy,
+        timeoutMs: opts.timeoutMs,
+      });
+    }
+  }
+  return runCascadeV1Internal(submittedUrl, opts);
+}
+
+async function runCascadeV1Internal(
   submittedUrl: string,
   opts: CascadeOpts = {},
 ): Promise<CascadeResult> {

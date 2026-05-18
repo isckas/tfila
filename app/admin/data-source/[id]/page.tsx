@@ -329,6 +329,16 @@ export default async function ReviewDetailPage({ params }: PageProps) {
                       {r.notes}
                     </div>
                   )}
+                  {r.sourceQuote && (
+                    <details className="mt-1.5 text-xs">
+                      <summary className="cursor-pointer text-neutral-400 hover:text-neutral-700">
+                        source
+                      </summary>
+                      <blockquote className="mt-1 border-l-2 border-neutral-300 bg-neutral-50 px-2 py-1 font-mono text-[11px] text-neutral-700">
+                        {r.sourceQuote}
+                      </blockquote>
+                    </details>
+                  )}
                 </div>
 
                 <form
