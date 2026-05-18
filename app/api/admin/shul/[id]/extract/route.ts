@@ -64,7 +64,10 @@ export async function POST(
   // hard errors (credit balance, rate limit).
   let cascade;
   try {
-    cascade = await runCascade(s.submittedUrl, { timeoutMs: 25_000 });
+    cascade = await runCascade(s.submittedUrl, {
+      timeoutMs: 25_000,
+      shulId: s.id,
+    });
   } catch (err) {
     const msg = (err as Error)?.message ?? "";
     const tag =

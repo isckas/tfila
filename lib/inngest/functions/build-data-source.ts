@@ -56,6 +56,7 @@ export const buildDataSource = inngest.createFunction(
       return runCascade(url, {
         timeoutMs: 25_000,
         preferredStrategy,
+        shulId,
       });
     });
 

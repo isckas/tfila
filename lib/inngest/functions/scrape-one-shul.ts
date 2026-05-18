@@ -346,6 +346,7 @@ async function rescrapeNonHtml(
     runCascade(submittedUrl, {
       timeoutMs: 25_000,
       preferredStrategy: args.strategy,
+      shulId: args.shulId,
     }),
   );
 

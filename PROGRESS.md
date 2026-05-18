@@ -13,9 +13,45 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-05-14 (code work) + 2026-05-15 (docs + Phase 2 brainstorm).**
+**Last working session: 2026-05-16 (observability + extraction research) + 2026-05-17 (full v2 extraction-pipeline rewrite on `extraction-v2` branch).**
 
-See **[SESSION.md](./SESSION.md)** for the canonical pickup doc — most up-to-date snapshot of state, what to verify post-deploy, and where the seams are.
+See **[SESSION.md](./SESSION.md)** for the canonical pickup doc and **[DECISIONS.md](./DECISIONS.md)** for the verbose rationale behind the v2 rewrite (16 step-by-step decisions covering branch isolation, feature flag, free-tier tech, agent loop, tools, source quoting, router, critique, model strategy, etc.).
+
+### Pickup: deploy `extraction-v2` canary
+
+The `extraction-v2` branch (14 commits ahead of main) is built end-to-end and typecheck-clean. v1 is untouched in main. Rollout plan (verbatim from DECISIONS.md "Rollout plan"):
+
+1. Push `extraction-v2` to GitHub for a preview deploy.
+2. (Optional) Deploy Docling to Fly.io. Without it v2 PDF tier silently falls back to v1's direct-PDF-to-Claude path — branch still works.
+3. Set `EXTRACTION_V2_SHUL_IDS=<one trusted shul id>` in Vercel prod env.
+4. Trigger "Extract now" from that shul's admin page.
+5. Review the resulting data source: do the new `source` disclosures show under each rule? Confidence higher? Rules correct? Cascade attempts logged with router classification?
+6. Good → widen `EXTRACTION_V2_SHUL_IDS` to 5–10 more shuls. Wait one weekly cron cycle.
+7. Still good → flip `EXTRACTION_PIPELINE_V2=true` for the global rollout.
+8. Monitor the Sunday-morning cron-summary email (built 2026-05-16) for v2-induced regressions.
+
+### Phase 2 candidate pool (FEATURES.md "🚀 Phase 2 features" section)
+
+Documented but not committed-to. Final cut TBD when traction is established. Quick list:
+- Telegram chatbot
+- Layered Jewish-life map (eruv / mikvah / kosher overlays)
+- Multi-language UI (Hebrew, Russian, French, Spanish, Yiddish)
+- Predictive "missing bulletin" admin alert
+- "Make a Minyan" (ad-hoc location-based) — Isaac-flagged favorite
+- **"Tfila for Shuls" gabbai portal** — added 2026-05-16; marked as the most strategically interesting candidate but also the most ambitious (requires sales motion). Triggers: ≥1000 shuls + recurring gabbai complaint, OR a strategic pivot, OR a community org asking to manage multiple shuls.
+
+Each entry has explicit revisit triggers + design notes.
+
+### Active deferred items (Phase 1 cleanup, not Phase 2)
+
+- **Same-origin URL fallback only runs in HTML tier** — deferred refactor. Less urgent since the schedule-page resolver routes URLs to the right page before the cascade.
+- **Vision-extractor calibration** — need ~5 more real vision extractions to assess prompt quality on stylized typography.
+- **API error-response convention via `lib/http.ts`** — touches every route; deferred from the code-review night. Convention: form POST → 303 redirect with `?err=`; JSON POST → JSON response. Today the three styles are mixed.
+- **Per-IP rate limit on `/submit`** — best done at the Vercel WAF level, not in code. Current per-domain cooldown handles the most common spam shape.
+- **Email schedule pipeline date-handling verification** — pick up after ~2-3 weeks of real email cycles have run. Walk a real shul (Safra `id=59`) against its source bulletin. See FEATURES.md "Schedule update timing — Needs verification on live data" subsection.
+- **21 broken extractions** surfaced by the 2026-05-16 cron-summary script — not yet triaged. May resolve naturally on v2 rollout; if not, walk through the broken list once v2 is the global default.
+
+### Build-stage gaps (deferred until "build phase ends")
 
 ### Phase 2 candidate pool (FEATURES.md "🚀 Phase 2 features" section)
 
@@ -52,6 +88,63 @@ Working definition of "build phase ends" (per SESSION.md): daily active users > 
 ---
 
 ## Done
+
+### 2026-05-17 — Extraction Pipeline v2 — full one-shot rewrite on `extraction-v2` branch (14 commits) ✅
+
+Implementing the chosen one-shot plan from EXTRACTION-ONE-SHOT-PLAN.md. All 16 steps shipped end-to-end in a single day. Branch is `extraction-v2` (kept off main during the rewrite); typechecks clean throughout; v1 is dormant-untouched. **Full decision rationale in [DECISIONS.md](./DECISIONS.md) "2026-05-17 — Extraction Pipeline v2".**
+
+**What got built (commits in order):**
+
+- `ffb873b` Step 1 — Migration 0010 `minyan_rule.source_quote` nullable column. Applied to prod Neon without touching v1 (no code writes yet).
+- `00b4e54` Step 2 — Anthropic tool definition for structured output. `extractionOutputTool` wraps the entire extraction schema; eliminates all JSON-parse failure paths.
+- `b889963` Step 3 — Five mid-extraction tools: `lookupHebrewDate`, `getSunsetRange`, `getPreviousExtraction`, `validateRule`, `searchHebrewMonth`. Each is `lib/llm/tools/<name>.ts` with a `<name>Tool` export + handler.
+- `9c3756e` Step 4 — `build-context.ts` — context preamble: shul metadata (name, address, timezone, nusach) + today's Hebrew date + upcoming holidays + prior extraction summary.
+- `f90381a` Step 5 — `router.ts` page-type classifier (7 types) on Haiku + tool use. Skips extraction on about/blog/error pages, jumps to JS tier on calendar widgets.
+- `7000743` Step 6 — `jina-reader.ts` HTML preprocessor (Jina Reader free tier, no key needed). Smoke-tested: 901 chars / 233 tokens against bmnmb-com.
+- `61707b0` Step 7 — `docling.ts` PDF preprocessor wrapper. Falls back gracefully when `DOCLING_URL` unset.
+- `dd88f4e` Step 8 — `agent-loop.ts` shared tool-execution loop + `extract-critique.ts` second-pass audit. Critique triggers when confidence < 0.7 OR rules dropped >50% vs prior. Loop caps at 8 iterations.
+- `cc72c0e` Step 9 — `extract-v2.ts` HTML pipeline: Jina → context preamble → Haiku agent loop → Sonnet fallback with extended thinking → conditional critique.
+- `b0b1c7d` Step 10 — `extract-pdf-v2.ts`: Docling preprocess → feed into `extractFromHtmlV2` (full reuse). 83 lines because of delegation.
+- `91a61a6` Steps 11-12 — `extract-vision-v2.ts` (Sonnet only, extended thinking enabled, critique skipped to avoid double image cost) + `extract-email-v2.ts` (`shulId` optional since email path sometimes creates the shul).
+- `4f9e9e9` Step 13 — `cascade-v2.ts` (mirrors v1's 4-tier structure with v2 extractors + router pre-step) + dispatcher in `cascade.ts`. `shouldUseV2(shulId)` reads env flags.
+- `f8aeb89` Step 14 — `.env.example` documents `EXTRACTION_PIPELINE_V2`, `EXTRACTION_V2_SHUL_IDS`, `DOCLING_URL` rollout knobs.
+- `53fc4d0` Steps 15-16 — `persist-submission` writes `sourceQuote` to DB; admin data-source page shows collapsible "source" disclosure under each rule.
+
+**Architectural highlights:**
+- **Source-quote required.** Every v2 rule must include a verbatim quote from the source. Reviewer no longer has to open the URL/PDF to verify each rule.
+- **Free-tier tech.** Jina Reader (HTML), Docling (PDF, self-hosted), Hebcal (already installed). No new vendor billing surfaces.
+- **Agent loop with 5 tools** — model can resolve Hebrew dates, check zmanim, see prior extraction, validate rules, and resolve Hebrew months during extraction instead of guessing.
+- **Feature-flag canary** — `EXTRACTION_V2_SHUL_IDS=12,34` enables per-shul testing; `EXTRACTION_PIPELINE_V2=true` flips globally. v1 stays as fallback.
+- **PDF strategy** — Docling preprocess → reuse HTML agent loop. Massive code reuse, single source of truth for the agent infrastructure.
+
+**Rollout status:** branch lives locally + needs push. No env flags set in Vercel prod. v1 serves 100% of traffic. See "Now" above for the deploy sequence.
+
+### 2026-05-16 → 2026-05-17 — Extraction research thread (4 doc commits) ✅
+
+Three living research docs + one chosen-approach plan, written across two sessions before any code was touched:
+
+- `e0d737d` (5-16) **EXTRACTION.md** — tech-stack survey. Firecrawl, Jina Reader, Crawl4AI, ScrapeGraphAI, LlamaParse, Reducto, Docling, Unstructured, Browserbase, Scrapfly, Anthropic tool use. Ranked top 5 swaps by ROI: (1) Anthropic tool use, (2) Jina Reader preprocess, (3) PDF preprocessor, (4) Browserbase swap (low priority), (5) Full Firecrawl replacement (don't — loses our moat).
+- `fe72c9b` (5-17) **LLM-CONTEXT.md** — LLM-side strategy survey. Tool use, prompt caching, structured output schemas, citations/grounding, agent loops, extended thinking, multi-pass audit, multi-modal patterns.
+- `c747d3c` (5-17) **EXTRACTION-PLAN.md** — first synthesis: a 3-phase rollout over weeks. User pushed back: "I want the best bang for my buck — best possible improvement in one shot."
+- `4d1fa2b` (5-17) **EXTRACTION-ONE-SHOT-PLAN.md** — the chosen 16-step build sequence. Free tech only, branch-isolated, feature-flag-gated. This became the build above.
+
+### 2026-05-16 — Observability: cron-summary script + weekly digest (commits `165748d`, `23251e9`) ✅
+
+Closes part of the "no observability" gap from the 2026-05-14 code review.
+
+- `scripts/cron-summary.mjs` — manual on-demand digest. Connects via `DATABASE_URL` from `.env.local`; queries `scrape_run` grouped by status, lists broken/error rows with shul name + slug + error, reports current stale-gate hidden count. Default 6h lookback; `--hours N` to widen. Use Sunday morning to inspect what the Saturday-night cron actually did.
+- `lib/inngest/functions/weekly-rescrape-summary.ts` — fires Sundays 04:00 UTC (1h after the weekly-rescrape fan-out at Sun 03:00 UTC). 90-min lookback captures every scrape from the night. Emails `ADMIN_EMAIL` via `notifyAdmin` with counts by status, per-shul broken/error detail, and stale-gate alert if any active shul has dropped off the public surface. Subject line is information-dense: `"Weekly cron · 87 scrapes · 3 issues · 2 stale"`. Skips email entirely when `total=0` (cron didn't fire / deploy paused / `SCRAPE_ENABLED=false`).
+- `23251e9` followup — full URLs in cron-summary email + script so links are clickable in Resend (relative `/admin/shul/<slug>` doesn't resolve in mail clients).
+
+**Empirical surprise:** running the script for the first time turned up **21 broken extractions** silently failing for weeks. Sits on the "Now" pickup list — may auto-resolve on v2 rollout; if not, triage post-canary.
+
+### 2026-05-16 — Phase 2 candidate: "Tfila for Shuls" gabbai portal (commit `5949ae8`) ✅
+
+Documented but not committed-to. Reframe from research-mode brainstorm: stop scraping AT shuls, get shuls to PUBLISH to us. Stripe playbook — solve the gabbai's actual operational problem (manually writing weekly bulletins), structured data falls out as a side effect. Pairs structurally with "compute schedule from rules" thread.
+
+Marked as "the most strategically interesting candidate in the Phase 2 pool — but also the most ambitious; not the right starting point unless traction + ICP justify the sales motion."
+
+Triggers: ≥1000 shuls + recurring gabbai complaint, OR a strategic pivot, OR a community org asking to manage 30 member shuls in one tool. First concrete action when triggered: interview 5 gabbais BEFORE building anything; sketch minimum portal in 3 screens; pair-launch with a Vaad to skip the cold-start.
 
 ### 2026-05-15 — Documentation + Phase 2 brainstorm (8 doc commits) ✅
 
