@@ -13,6 +13,20 @@ Three sections:
 
 ## Now — next session
 
+**Last working session: 2026-05-19 (UNIQUE INDEX + cross-status dedup closed via PR #3 `0aba418`; PR #2 `aca0de9` shipped 29-fix bundle earlier in same compacted session).**
+
+### Pickup: phase-1 launch checklist (no new code work)
+
+The dedup + state-machine workstream is fully closed. Resume the launch-prep checklist:
+
+1. **UptimeRobot signup** (free tier, no card) → monitor `https://tfila.co/api/health`, 5-min interval, email alerts.
+2. **Pick the 3-5 person test cohort** → fill the table in `docs/FIRST-USERS-TEST-PLAN.md`.
+3. **PWA install sanity test** → one iPhone + one Android.
+4. **Trigger one deliberate test error** → verify Sentry receives it.
+5. **Send share message** → use the template in the test plan.
+
+### Historical pickup notes from prior session
+
 **Last working session: 2026-05-18 → 2026-05-19 (phase-1 launch prep + ops gates shipped; v2 went global; everything in commit `48aac17`, deploy `tfila-s3zf4v3cj`).**
 
 See **[SESSION.md](./SESSION.md)** for the canonical pickup doc and **[DECISIONS.md](./DECISIONS.md)** for verbose rationale.
@@ -131,6 +145,18 @@ Working definition of "build phase ends" (per SESSION.md): daily active users > 
 ---
 
 ## Done
+
+### 2026-05-19 — UNIQUE INDEX + cross-status dedup (PR #3 `0aba418`) ✅
+
+Closes the dedup + state-machine workstream that PR #2 started. Three cross-status duplicate pairs the original dedupe script missed (it only handled approved+ok-vs-approved+ok) got cleaned up via `scripts/dedupe-cross-status.ts`: Chevra (ds#83 wins vs 3 pending losers), Anshei Lubavitch (ds#80 wins vs ds#79), The Shul (ds#101 wins vs ds#102). 5 sources superseded, 35 minyan_rule rows soft-deleted.
+
+With prod state clean, migration 0012 added the partial UNIQUE INDEX `data_source_shul_identifier_idx ON data_source(shul_id, identifier) WHERE review_status <> 'rejected'`. The persistence layer already supersedes existing same-tuple sources on insert; the index is the DB-level belt to those suspenders. Declared in `db/schema.ts` with matching `.where()` predicate so drizzle-kit doesn't see drift.
+
+Verification: live index has the expected predicate; 0 duplicate (shul_id, identifier) tuples among non-rejected rows.
+
+**PR #3:** `0aba418 chore(db): UNIQUE INDEX on data_source(shul_id, identifier) + supplementary cleanup` — 5 files, +349. Squash-merged. Local `fix/duplicate-data-sources` + `chore/data-source-unique-index` branches deleted.
+
+---
 
 ### 2026-05-18 → 2026-05-19 — Phase-1 launch prep shipped; v2 global; ops gates live (commit `48aac17`) ✅
 

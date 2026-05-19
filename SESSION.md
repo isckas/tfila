@@ -4,6 +4,55 @@
 
 ---
 
+## 2026-05-19 — UNIQUE INDEX shipped; dedup workstream closed
+
+### Briefing for next session (read first)
+
+- **Where we are:** Dedup + state-machine fix workstream is fully closed in prod. PR #2 (`aca0de9`) shipped the 29-fix bundle; PR #3 (`0aba418`) added the DB-level partial UNIQUE INDEX on `data_source(shul_id, identifier) WHERE review_status <> 'rejected'`. All 3 cross-status duplicate pairs cleaned up (5 sources superseded, 35 rules soft-deleted). Working tree on `main`, only modified file is SESSION.md from this save.
+- **Next concrete action:** Resume the phase-1 launch checklist from PROGRESS.md "Now": (a) sign up for UptimeRobot (free) and point a 5-min monitor at `https://tfila.co/api/health`; (b) fill the test-cohort table in `docs/FIRST-USERS-TEST-PLAN.md`; (c) send share message.
+- **Constraints to preserve:** No auto-retry / no auto-retire on broken sources (cost-first policy). Build-phase deferrals still hold (no tests, no auth rework, no cred rotation while private). Future migrations: use the surgical-applier pattern (`scripts/apply-migration-NNNN.ts`) rather than `drizzle-kit push`, because the schema.ts has accumulated drift drizzle-kit wants to "fix" unrelatedly.
+- **Critical data:** PR #3 = commit `0aba418` (5 files, +349 lines); live index verified with predicate `WHERE (review_status <> 'rejected'::data_source_review_status)`. Both feature branches deleted (local + remote). Postgres MCP `pg-neon` works for ad-hoc SQL via `mcp__pg-neon__query`.
+
+### Done this session
+
+| Step | What shipped | Where |
+|---|---|---|
+| 1 | Cross-status dedup ran against prod | `scripts/dedupe-cross-status.ts`; 5 losers superseded (ds#79, #100, #102, #104, #105), 35 minyan_rule rows soft-deleted |
+| 2 | Migration 0012 created + applied to prod | `db/migrations/0012_data_source_unique_identifier.sql` + `scripts/apply-migration-0012.ts` |
+| 3 | Schema declaration matches live index | `db/schema.ts:200` — `uniqueIndex(...).on(...).where(sql\`...\`)` so drizzle-kit sees no drift |
+| 4 | PR #3 opened + squash-merged | `0aba418` (5 files, +349); `fix/duplicate-data-sources` + `chore/data-source-unique-index` deleted |
+
+### Decisions made
+
+See DECISIONS.md "2026-05-19 — UNIQUE INDEX + cross-status dedup" (3 decisions: approved-status as PRIMARY dedup sort key not tiebreaker; partial-index declared with `.where()` to prevent drizzle-kit drift; skip code review on migration-already-live PRs).
+
+### In-flight tasks
+
+None. All 60 tasks from prior session list completed.
+
+### Paused / blocked
+
+- **UptimeRobot signup** — user said done last session but actual monitor not confirmed in `/api/health`. Re-verify before sharing site externally.
+- **PDF tier real-world test** — still waiting on an organic PDF-bearing shul submission.
+
+### Code commits — 2026-05-19
+
+| Hash | Type | Summary |
+|---|---|---|
+| `0aba418` | chore(db) | UNIQUE INDEX on data_source(shul_id, identifier) + supplementary cleanup (PR #3) |
+| `aca0de9` | fix | state-machine + dedup + cascade adaptation bundle (PR #2) — already from prior turn |
+
+---
+
+## 2026-05-19 HH:MM UTC — QUICK SAVE (pre-compaction, auto-triggered)
+- Branch: `fix/duplicate-data-sources`; latest commit: `ed54ff7 fix: address review findings on PR #2 (recovery + mark-broken consistency)`
+- Working tree: 2 untracked (`scripts/apply-migration-0011.ts`, `scripts/dedupe-cross-status.ts`) — review before discarding; likely tied to dedup/migration 0011 work on this branch.
+- In-flight tasks: none active in this turn (PreCompact hook fired on session start with no user prompt yet).
+- Last user intent: PreCompact auto-save; prior session worked on PR #2 review-fixes bundle (state-machine + dedup + cascade adaptation) on the `fix/duplicate-data-sources` branch.
+- Next action: On /resume, decide whether the two untracked scripts should be committed, archived, or deleted; then continue PR #2 review cycle or move to next item from `PROGRESS.md` "Now".
+
+---
+
 ## 2026-05-18 → 2026-05-19 — Phase-1 launch prep shipped; v2 global; ops gates live
 
 ### Briefing for next session (read first)

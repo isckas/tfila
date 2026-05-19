@@ -15,6 +15,42 @@ to PROGRESS.md commits + FEATURES.md entries when relevant.
 
 ---
 
+## 2026-05-19 — UNIQUE INDEX + cross-status dedup
+
+Closing pass on the dedup + state-machine workstream. PR #2 left two follow-ups: clean up 3 cross-status duplicate pairs the original script missed, and add the DB-level UNIQUE INDEX. Both done this turn via PR #3 (`0aba418`).
+
+### Decision 1 — Approved-status as PRIMARY sort key when picking dedup winners, not a tiebreaker
+
+**Context:** Original `scripts/dedupe-data-sources.ts` only handled `approved+ok-vs-approved+ok` duplicates. Cross-status pairs (approved+ok vs pending, approved+ok vs approved+no_change) survived. First version of `scripts/dedupe-cross-status.ts` used the same sort as the original: `priority DESC, last_run_at DESC, id DESC`, with approved-status only as a tiebreaker for identical last_run_at. Dry-run revealed this picked pending+newer-last_run_at sources over approved+older — the wrong winner, because the pending row was a missed-supersede artifact, not a deliberate human approval.
+
+**Options:** (a) leave sort as-is and rely on luck, (b) move approved-status to PRIMARY sort key before priority/last_run_at, (c) only de-dup within same review_status (would leave cross-status dups).
+
+**Chose (b).** The semantic invariant is "human-approved sources should win over auto-pending re-extractions of the same URL." last_run_at recency is meaningless across review-status boundaries — a pending source can be more recent simply because the supersede gap let it accumulate.
+
+**Implication:** `scripts/dedupe-cross-status.ts` sorts by `approvedScore DESC, priority DESC, last_run_at DESC NULLS LAST, id DESC`. Verified correct winners on dry-run before running for real (ds#83 Chevra, ds#80 Anshei Lubavitch, ds#101 The Shul — all approved sources retained).
+
+### Decision 2 — Declare partial UNIQUE INDEX in schema.ts with matching `.where()` predicate
+
+**Context:** Migration 0012 creates `CREATE UNIQUE INDEX ... WHERE review_status <> 'rejected'` via raw SQL. Without a matching schema.ts declaration, drizzle-kit's next diff run would see the live index as drift and offer to "fix" it (likely by recreating without the predicate). Tried initial declaration without `.where()` — that's worse than no declaration at all because it actively misleads drizzle-kit.
+
+**Options:** (a) skip schema declaration entirely (drift never gets resolved in either direction), (b) declare without `.where()` (drift gets actively miscorrected), (c) declare with `.where()` to match prod (no drift).
+
+**Chose (c).** Drizzle's IndexBuilder exposes `.where(condition: SQL)` (verified via `node_modules/drizzle-orm/pg-core/indexes.d.ts:67`). Declaration: `uniqueIndex("data_source_shul_identifier_idx").on(t.shulId, t.identifier).where(sql\`${t.reviewStatus} <> 'rejected'\`)`.
+
+**Implication:** drizzle-kit diff will see schema = live state. Future migration writers can trust the schema as source of truth without needing to special-case this index.
+
+### Decision 3 — Skip code review on migration-already-live PRs
+
+**Context:** PR #3 represented changes already applied to prod (migration ran via surgical applier before PR was even opened). User asked "why do you need to run a code review?" on the auto-suggested `/code-review:code-review` step.
+
+**Options:** (a) run review for completeness, (b) skip when the artifact under review is post-hoc reconciliation of already-live state.
+
+**Chose (b).** Code review's value is catching problems before they ship. For a PR whose contents are (i) a migration already verified live, (ii) a runner script that already executed, (iii) a 7-line schema declaration mechanically derived from the live index — there's no in-flight risk to catch. Reviewing would be archaeology, not engineering.
+
+**Lesson:** The review skill is the default workflow but it's a cost. Skip it when the PR is reconciling state that's already shipped. Apply review when the PR contains forward-looking code surface.
+
+---
+
 ## 2026-05-18 → 2026-05-19 — phase-1 launch prep + ops gates
 
 After running a full-project gap audit (three parallel Explore agents — public UX, ops/observability, security/testing/privacy), pivoted from "finish v2 rollout" to "make the site shareable to a 3-5 person test cohort in 1-2 weeks." Sequenced 17 tasks across productivity setup, implementation, and planning docs. Single commit `48aac17` (31 files) shipped + pushed + verified live.
