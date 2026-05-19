@@ -41,7 +41,9 @@ export default async function SignInPage({ searchParams }: PageProps) {
               ? "Missing token in URL."
               : error === "send"
                 ? `Failed to send the magic link.${detail ? ` (${detail})` : ""}`
-                : "Something went wrong. Try again."}
+                : error === "rate-limited"
+                  ? "Too many sign-in attempts from this IP. Try again in an hour."
+                  : "Something went wrong. Try again."}
         </div>
       )}
 

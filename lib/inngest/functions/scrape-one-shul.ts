@@ -160,6 +160,39 @@ export const scrapeOneShul = inngest.createFunction(
       return { changed: false, reason, hash: newHashOnly };
     }
 
+    // ─── 3b. Cost gate — kill switch + daily budget cap. The hash
+    // check is free; the LLM call is not. Refuse if either condition
+    // trips. Writes a scrape_run row marked `error` so the weekly
+    // cron-summary surfaces the bail.
+    const gate = await step.run("cost-gate", async () => {
+      const { checkCostGate } = await import("../../llm/cost-gate");
+      return checkCostGate();
+    });
+    if (!gate.allowed) {
+      const gateMsg =
+        gate.reason === "kill_switch"
+          ? "extraction disabled via EXTRACTION_DISABLED kill switch"
+          : `daily LLM budget exceeded (today $${gate.todayUsd?.toFixed(2)} / cap $${gate.budgetUsd?.toFixed(2)})`;
+      await step.run("write-scrape-run-cost-gated", async () => {
+        await db.insert(scrapeRun).values({
+          shulId,
+          dataSourceId,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          status: "error",
+          rulesAdded: 0,
+          rulesRemoved: 0,
+          rulesChanged: 0,
+          error: gateMsg,
+        });
+        await db
+          .update(dataSource)
+          .set({ lastRunAt: new Date(), lastRunStatus: "error", updatedAt: new Date() })
+          .where(eq(dataSource.id, dataSourceId));
+      });
+      return { changed: false, reason: "cost-gated", gateReason: gate.reason };
+    }
+
     // ─── 4. Hash differs — re-extract ────────────────────────────
     const extracted = await step.run("llm-extract", async () => {
       return extractFromHtml(fetched.html);

@@ -28,9 +28,14 @@ const limiters = {
 };
 
 /**
- * Fail-open by design — when Upstash env vars are unset (local dev or
- * before the user has wired up the Redis instance), every check returns
- * success. Once the env vars land, real limits kick in automatically.
+ * Fail-open by design — under any of:
+ *   - Upstash env vars unset (local dev or pre-wire)
+ *   - Empty identifier (caller couldn't extract a key)
+ *   - Upstash transient error (Redis timeout, network blip, 5xx)
+ * the gate returns success. The cost of a missed rate-limit is one
+ * extra request through to the underlying handler; the cost of failing
+ * closed is the whole route 5xx'ing on Upstash availability blips —
+ * which would also retry-storm the inbound-email webhook.
  */
 export async function checkRateLimit(
   kind: keyof typeof limiters,
@@ -40,8 +45,13 @@ export async function checkRateLimit(
   if (!limiter || !identifier) {
     return { success: true, remaining: Infinity, reset: 0 };
   }
-  const { success, remaining, reset } = await limiter.limit(identifier);
-  return { success, remaining, reset };
+  try {
+    const { success, remaining, reset } = await limiter.limit(identifier);
+    return { success, remaining, reset };
+  } catch (err) {
+    console.error(`[rate-limit] ${kind} check failed; failing open`, err);
+    return { success: true, remaining: Infinity, reset: 0 };
+  }
 }
 
 /**
