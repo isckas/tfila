@@ -196,6 +196,13 @@ export const dataSource = pgTable(
   (t) => [
     index("data_source_shul_idx").on(t.shulId),
     index("data_source_review_idx").on(t.reviewStatus, t.confidenceScore),
+    // Partial UNIQUE INDEX (migration 0012): prevents two non-rejected
+    // sources from sharing the same (shul_id, identifier) tuple. Rejected
+    // rows (incl. superseded losers from the dedupe scripts) can legitimately
+    // repeat the same tuple as audit trail.
+    uniqueIndex("data_source_shul_identifier_idx")
+      .on(t.shulId, t.identifier)
+      .where(sql`${t.reviewStatus} <> 'rejected'`),
   ],
 );
 
