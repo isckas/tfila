@@ -7,7 +7,10 @@
 //               scrape_run row marked `broken`, flip data_source.review_status
 //               back to `pending`, leave rules untouched
 //
-// Always writes exactly one scrape_run row.
+// Writes one scrape_run row per attempt, EXCEPT on the early-bail
+// skip path (Fix F) where the source is already `strategy='failed'`
+// or the shul is `unsupported` — those skip writes entirely so they
+// don't pollute the cron-summary's no_change/error tallies.
 
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { inngest } from "../client";
@@ -364,6 +367,15 @@ export const scrapeOneShul = inngest.createFunction(
           .set({
             lastRunAt: now,
             lastRunStatus: "ok",
+            // Recovery from a broken streak: mark-broken flipped this to
+            // 'pending' (lines 269 area). Now that the extraction recovered,
+            // restore 'approved' so the source re-qualifies for the public
+            // freshness gate (lib/freshness.ts hasFreshDataSourceForShul +
+            // the EXISTS clauses in lib/queries.ts), all of which now
+            // require review_status='approved' per Fix P. Without this
+            // restore, broken→recovered cycles would permanently hide the
+            // shul from public surfaces.
+            reviewStatus: "approved",
             confidenceScore: extraction.confidence,
             extractionStrategy: cascade.strategy,
             firstBrokenAt: null,
@@ -477,6 +489,12 @@ async function rescrapeNonHtml(
           .set({
             lastRunAt: now,
             lastRunStatus: "broken",
+            // Match the other two mark-broken sites: bump back to pending
+            // review so this row appears in the admin Broken inbox. Without
+            // this, the source stays approved+broken and only Fix G/V's
+            // "no approved+ok+fresh source" reduction picks it up — but it
+            // still pollutes the apparent "approved" count.
+            reviewStatus: "pending",
             firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             updatedAt: now,
           })
@@ -613,6 +631,11 @@ async function rescrapeNonHtml(
           identifier: submittedUrl,
           lastRunAt: now,
           lastRunStatus: "ok",
+          // Recovery: restore reviewStatus='approved' if mark-broken
+          // had flipped it to 'pending'. See the matching block in the
+          // main scrapeOneShul apply-changes for the rationale (Fix P
+          // requires approved for public freshness).
+          reviewStatus: "approved",
           confidenceScore: cascade.extraction!.confidence,
           extractionStrategy: cascade.strategy,
           firstBrokenAt: null,
