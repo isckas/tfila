@@ -37,6 +37,13 @@ export const STALE_WARNING_DAYS = 10;
  * Slug-page check: does this shul have any fresh data_source? Returns
  * false → render the "we don't have current times" variant (FEATURES.md
  * option C). True → render the normal schedule.
+ *
+ * Fix P: source must also be `review_status='approved'`. A `pending`
+ * source whose `last_run_status='broken'` was previously treated as
+ * fresh (because last_run_at was recent), which displayed stale rules
+ * publicly while the re-extraction sat waiting for admin review.
+ * Constraining to approved+ok closes that gap — the public feed only
+ * shows shuls whose CURRENT canonical extraction succeeded.
  */
 export async function hasFreshDataSourceForShul(
   shulId: number,
@@ -48,6 +55,7 @@ export async function hasFreshDataSourceForShul(
       and(
         eq(dataSource.shulId, shulId),
         eq(dataSource.lastRunStatus, "ok"),
+        eq(dataSource.reviewStatus, "approved"),
         sql`COALESCE(${dataSource.lastReceivedAt}, ${dataSource.lastRunAt}) >=
             NOW() - (${STALE_THRESHOLD_DAYS} || ' days')::interval`,
       ),

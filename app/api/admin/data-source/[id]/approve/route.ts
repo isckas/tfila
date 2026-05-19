@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { dataSource, shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 export async function POST(
   req: Request,
@@ -19,14 +20,29 @@ export async function POST(
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
 
-  await db.transaction(async (tx) => {
-    const rows = await tx
-      .select({ shulId: dataSource.shulId })
-      .from(dataSource)
-      .where(eq(dataSource.id, dsId))
-      .limit(1);
-    if (!rows[0]) return;
+  // Fix M: refuse to approve a data_source whose cascade failed. There's
+  // nothing to approve when zero rules were extracted, and approval would
+  // pollute the shul-level state. Auto-rejection happens at insertion
+  // (persist-submission.ts Fix D); this guards against a stale row that
+  // already exists.
+  const existing = await db
+    .select({
+      shulId: dataSource.shulId,
+      extractionStrategy: dataSource.extractionStrategy,
+    })
+    .from(dataSource)
+    .where(eq(dataSource.id, dsId))
+    .limit(1);
 
+  if (!existing[0]) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
+  if (existing[0].extractionStrategy === "failed") {
+    return safeRedirect(req, `/admin/data-source/${dsId}?err=cannot-approve-failed`);
+  }
+
+  await db.transaction(async (tx) => {
     await tx
       .update(dataSource)
       .set({
@@ -36,7 +52,8 @@ export async function POST(
       })
       .where(eq(dataSource.id, dsId));
 
-    // If the shul was pending_review, activate it now.
+    // Fix BB: only flip shul.status to active from pending_review /
+    // unsupported. Refuse to silently un-archive a shul via source-approval.
     await tx
       .update(shul)
       .set({
@@ -44,8 +61,13 @@ export async function POST(
         activatedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(shul.id, rows[0].shulId));
+      .where(
+        and(
+          eq(shul.id, existing[0].shulId),
+          inArray(shul.status, ["pending_review", "unsupported"]),
+        ),
+      );
   });
 
-  return NextResponse.redirect(new URL("/admin/queue", req.url), 303);
+  return safeRedirect(req, "/admin/queue");
 }

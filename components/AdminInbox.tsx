@@ -6,6 +6,7 @@ import {
   type AdminShulState,
 } from "@/lib/admin-state";
 import { FreshnessBadge } from "@/components/badges/FreshnessBadge";
+import { formatRelativeDays } from "@/lib/format";
 import type { AdminShulRow } from "@/lib/queries";
 
 interface Props {
@@ -89,6 +90,18 @@ function AdminInboxRow({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1 text-xs">
             <FreshnessBadge lastFreshAt={row.lastFreshAt} />
+            {/* "Broken since N days ago" badge — only renders when the
+                shul is in a broken/no_good_source/stale tier AND has a
+                first_broken_at timestamp. Helps admin distinguish
+                fresh-this-week breakages from chronic ones at a glance. */}
+            {tier === "broken" && row.firstBrokenAt && (
+              <span
+                className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] tracking-wide text-rose-700"
+                title={`First broken: ${new Date(row.firstBrokenAt).toLocaleString()}`}
+              >
+                broken {formatRelativeDays(new Date(row.firstBrokenAt))}
+              </span>
+            )}
             {row.dataSourceCount > 0 && (
               <span className="text-neutral-400 tabular-nums">
                 {row.dataSourceCount} source

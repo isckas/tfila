@@ -292,10 +292,11 @@ Per earlier locked decisions: feature branch + PR + `/code-review:code-review` s
 
 ### Order of operations within the PR
 
-1. **DB migration** — add `uniqueIndex("data_source_shul_identifier_idx").on(t.shulId, t.identifier)`. Requires the dedupe script to have already run, so we sequence the cleanup BEFORE this migration even though they ship in the same PR. Order in deploy:
-   1. Deploy the PR's code (cleanup script available but not yet executed)
-   2. Run `npm run db:dedupe-sources` (Fix B) once against prod
-   3. Run `npm run db:push` to apply the migration
+1. **DB migration ordering** — the new code references `is_manual_edit` and `first_broken_at` columns unconditionally, so migration 0011 MUST apply BEFORE the code deploys, not after. Corrected deploy sequence:
+   1. **Apply migration 0011** — `npm run db:push` against prod. Both new columns are nullable/defaulted, so safe under the OLD code's reads/writes too. Postgres 15+ keeps `ADD COLUMN ... DEFAULT <const>` as a metadata-only change.
+   2. **Merge the PR** — Vercel auto-deploys. New code has the columns it needs.
+   3. **Run dedupe script** — `npm run db:dedupe-sources` against prod. Cleans up the 7 legacy duplicate shuls + auto-rejects the 27 legacy `extraction_strategy='failed'` rows.
+   4. **(Deferred) UNIQUE INDEX migration** — only after dedupe succeeds. Ships in a follow-up migration adding `uniqueIndex(t.shulId, t.identifier)` to prevent future duplicates at the DB level.
 2. **Persistence-layer fixes** — `persistDataSourceWithRules` auto-rejects failed, supersedes existing same-(shul, identifier) sources (Fixes C, D, E)
 3. **Query-layer fixes** — `getNearbyShulsWithRules` + `getPublicRulesForShul` + `listShulsForLookup` use winning-source CTE (Fixes A, A')
 4. **Cron-layer fixes** — `scrape-one-shul.ts` HTML path uses runCascade, hash-check respects 0-rule history, auto-retry counter, broken-escalation counter (Fixes H, I, K, L)

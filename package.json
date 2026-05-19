@@ -9,8 +9,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "db:dedupe-sources": "tsx scripts/dedupe-data-sources.ts",
     "discover:shulcloud": "tsx scripts/discover-shulcloud.ts",
-    "scrape:shulcloud": "tsx scripts/scrape-shulcloud.ts",
     "migrate:sprint1": "tsx scripts/migrate-sprint1-to-phase1.ts"
   },
   "dependencies": {

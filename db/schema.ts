@@ -11,6 +11,7 @@ import {
   timestamp,
   date,
   jsonb,
+  boolean,
   pgEnum,
   index,
   uniqueIndex,
@@ -31,14 +32,23 @@ export const geographyPoint = customType<{
 });
 
 // ─── Enums ───────────────────────────────────────────────────────────────
+// shul.status semantics (see DECISIONS.md "state-machine cleanup"):
+//   pending_review — newly submitted, awaiting first extraction OR awaiting
+//                    admin approval after broken/failed run
+//   active         — at least one approved+ok data_source produces rules
+//   archived       — admin-archived, hidden from public surfaces
+//   unsupported    — cascade exhausted all tiers; admin can recover via
+//                    /api/admin/shul/[id]/reset-status or a successful manual
+//                    Extract Now (auto-flips back to pending_review)
+//   broken         — DEPRECATED: no code path writes this. Reserved for
+//                    backward compatibility with existing rows that may
+//                    have this value. Reads should treat as equivalent to
+//                    pending_review. Do not write new rows with this value.
 export const shulStatusEnum = pgEnum("shul_status", [
   "pending_review",
   "active",
   "broken",
   "archived",
-  // Set by the extraction cascade when every tier (HTML, JS-rendered,
-  // PDF, vision) returns no usable rules. Weekly rescrape skips these
-  // unless an admin manually re-triggers.
   "unsupported",
 ]);
 
@@ -171,6 +181,11 @@ export const dataSource = pgTable(
     lastRunAt: timestamp("last_run_at", { withTimezone: true }),
     lastReceivedAt: timestamp("last_received_at", { withTimezone: true }),
     lastRunStatus: dataSourceRunStatusEnum("last_run_status"),
+    // Timestamp of the FIRST run in the current consecutive-broken streak.
+    // Set when lastRunStatus transitions ok|null → broken|error. Cleared
+    // (NULL) when status transitions back to ok. Powers the admin
+    // "Broken since" badge + the weekly digest's NEW-vs-CHRONIC split.
+    firstBrokenAt: timestamp("first_broken_at", { withTimezone: true }),
     lastRunDiffSummary: jsonb("last_run_diff_summary"),
     extractionStrategy: extractionStrategyEnum("extraction_strategy"),
     reviewStatus: dataSourceReviewEnum("review_status").default("pending").notNull(),
@@ -219,6 +234,12 @@ export const minyanRule = pgTable(
     // each rule) and for the critique pass's "did the model invent
     // this rule?" check.
     sourceQuote: text("source_quote"),
+    // Set true by admin manual-edit endpoints (/api/admin/rule/[id]/edit
+    // + .../delete). The weekly rule-replacement step in scrape-one-shul
+    // skips rows where this is true, so admin overrides survive across
+    // re-extractions. Cleared back to false when the admin explicitly
+    // resets the row via a "re-link to source" admin action.
+    isManualEdit: boolean("is_manual_edit").default(false).notNull(),
     lastSeenInScrapeAt: timestamp("last_seen_in_scrape_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

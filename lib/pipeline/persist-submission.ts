@@ -13,7 +13,7 @@
 // paths use insertRuleFromExtraction directly with their own data_source
 // update logic.
 
-import { sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../../db/client";
 import {
   dataSource,
@@ -129,9 +129,75 @@ export async function persistDataSourceWithRules(
     /** Email path: bump priority of special-schedule rules to 10. */
     bumpSpecialPriority?: boolean;
   },
-): Promise<{ dataSourceId: number; rulesInserted: number }> {
+): Promise<{ dataSourceId: number; rulesInserted: number; supersededDataSourceId: number | null }> {
   const lastSeen = args.lastSeenAt ?? args.lastRunAt;
   const builtAt = args.builtAt ?? args.lastRunAt;
+
+  // ─── Fix C — supersede existing same-(shul, identifier) source ──────
+  // Before creating a new data_source for this URL/email/identifier, see
+  // if one already exists for the same shul. If it does AND it's an
+  // approved+ok source, mark it rejected with a "superseded" note and
+  // soft-delete its minyan_rule rows so they don't double up with the
+  // new extraction's rules. Same transaction = atomic.
+  //
+  // This closes the supersede gap that produced the v2-canary duplicates
+  // (BAYT ds 41+99, Chabad 52+106) and the same-day-double-submit
+  // duplicates (Adath Israel, Shaarei Shomayim, etc.).
+  const existingSameIdentifier = await qr
+    .select({
+      id: dataSource.id,
+      reviewStatus: dataSource.reviewStatus,
+      lastRunStatus: dataSource.lastRunStatus,
+    })
+    .from(dataSource)
+    .where(
+      and(
+        eq(dataSource.shulId, args.shulId),
+        eq(dataSource.identifier, args.identifier),
+        sql`${dataSource.reviewStatus} <> 'rejected'`,
+      ),
+    );
+
+  let supersededDataSourceId: number | null = null;
+  for (const old of existingSameIdentifier) {
+    supersededDataSourceId = old.id;
+    await qr
+      .update(dataSource)
+      .set({
+        reviewStatus: "rejected",
+        reviewerNotes: `superseded by new extraction on ${args.lastRunAt.toISOString().slice(0, 10)}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(dataSource.id, old.id));
+    await qr
+      .update(minyanRule)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(minyanRule.dataSourceId, old.id),
+          isNull(minyanRule.deletedAt),
+        ),
+      );
+  }
+
+  // ─── Fix D — auto-reject failed extractions ─────────────────────────
+  // When the cascade gives up (strategy='failed') there's nothing for an
+  // admin to review. Auto-reject at insert so the queue stays clean and
+  // the shul-level "ANY-good source" reduction in admin-state.ts correctly
+  // ignores this row.
+  const isFailed = args.extractionStrategy === "failed";
+  const effectiveReviewStatus: ReviewStatus = isFailed
+    ? "rejected"
+    : (args.reviewStatus ?? "pending");
+  const effectiveReviewerNotes = isFailed
+    ? "auto-rejected: cascade returned no useful rules"
+    : null;
+
+  // ─── Fix Q' — first_broken_at writer ────────────────────────────────
+  // On insert, if lastRunStatus is broken/error, stamp first_broken_at
+  // so the weekly digest's NEW-vs-CHRONIC split works from day one.
+  const isBrokenAtInsert =
+    args.lastRunStatus === "broken" || args.lastRunStatus === "error";
 
   const [inserted] = await qr
     .insert(dataSource)
@@ -150,7 +216,9 @@ export async function persistDataSourceWithRules(
         ? { lastReceivedAt: args.lastReceivedAt }
         : {}),
       lastRunStatus: args.lastRunStatus,
-      reviewStatus: args.reviewStatus ?? "pending",
+      reviewStatus: effectiveReviewStatus,
+      ...(effectiveReviewerNotes ? { reviewerNotes: effectiveReviewerNotes } : {}),
+      ...(isBrokenAtInsert ? { firstBrokenAt: args.lastRunAt } : {}),
     })
     .returning({ id: dataSource.id });
 
@@ -168,7 +236,7 @@ export async function persistDataSourceWithRules(
     rulesInserted++;
   }
 
-  return { dataSourceId, rulesInserted };
+  return { dataSourceId, rulesInserted, supersededDataSourceId };
 }
 
 /**

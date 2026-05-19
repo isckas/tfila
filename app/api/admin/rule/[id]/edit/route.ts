@@ -119,6 +119,10 @@ export async function POST(
       specialScheduleKind: specialScheduleKind as never,
       nusach,
       notes,
+      // Fix EE: mark this row as a manual override so the weekly cron's
+      // rule-replacement step (in scrape-one-shul.ts) skips it. Admin edits
+      // become durable across re-extractions.
+      isManualEdit: true,
       updatedAt: new Date(),
     })
     .where(eq(minyanRule.id, ruleId));

@@ -95,12 +95,51 @@ export const weeklyRescrapeSummary = inngest.createFunction(
              SELECT 1 FROM data_source ds
               WHERE ds.shul_id = s.id
                 AND ds.last_run_status = 'ok'
+                AND ds.review_status = 'approved'
                 AND COALESCE(ds.last_received_at, ds.last_run_at) >=
                     NOW() - INTERVAL '14 days'
            )
       `),
     );
     const staleCount = Number(stale.rows[0]?.n ?? 0);
+
+    // Fix R: bucket currently-broken data_sources into NEW (first broken
+    // within 7d) vs CHRONIC (broken longer). Powered by first_broken_at
+    // which the scrape-one-shul mark-broken step now maintains via
+    // COALESCE(...) — first transition into the broken streak stamps it,
+    // recovery clears it.
+    const brokenSources = await step.run("list-broken-sources", async () =>
+      db.execute<{
+        ds_id: number;
+        shul_id: number;
+        slug: string;
+        name: string;
+        first_broken_at: Date;
+        days_broken: number;
+        extraction_strategy: string | null;
+      }>(sql`
+        SELECT
+          ds.id AS ds_id,
+          ds.shul_id,
+          s.slug,
+          s.name,
+          ds.first_broken_at,
+          EXTRACT(EPOCH FROM (NOW() - ds.first_broken_at))::int / 86400 AS days_broken,
+          ds.extraction_strategy::text AS extraction_strategy
+        FROM data_source ds
+        JOIN shul s ON s.id = ds.shul_id
+        WHERE ds.first_broken_at IS NOT NULL
+          AND ds.review_status <> 'rejected'
+          AND ds.last_run_status IN ('broken', 'error')
+        ORDER BY ds.first_broken_at DESC
+      `),
+    );
+    const newBroken = brokenSources.rows.filter(
+      (r) => Number(r.days_broken) < 7,
+    );
+    const chronicBroken = brokenSources.rows.filter(
+      (r) => Number(r.days_broken) >= 7,
+    );
 
     // ─── Format + send ────────────────────────────────────────
     const lines: string[] = [];
@@ -121,14 +160,42 @@ export const weeklyRescrapeSummary = inngest.createFunction(
       lines.push(`  ${label}: ${row.n}`);
     }
 
+    // Fix R: NEW broken (first_broken_at within last 7d). Most actionable.
+    if (newBroken.length > 0) {
+      lines.push("");
+      lines.push(`⚠ NEW broken (this week, ${newBroken.length}):`);
+      for (const r of newBroken) {
+        lines.push("");
+        lines.push(
+          `  [${r.extraction_strategy ?? "—"}] ${r.name} (broken ${Number(r.days_broken)}d)`,
+        );
+        lines.push(`    shul ${r.shul_id} · data_source ${r.ds_id}`);
+        lines.push(`    ${BASE_URL}/admin/shul/${r.slug}`);
+      }
+    }
+
+    // Fix R: CHRONIC broken (older than 7d). Lower priority but visible.
+    if (chronicBroken.length > 0) {
+      lines.push("");
+      lines.push(`· Chronic broken (>7d, ${chronicBroken.length}):`);
+      for (const r of chronicBroken) {
+        lines.push(
+          `  [${r.extraction_strategy ?? "—"}] ${r.name} (${Number(r.days_broken)}d) — ${BASE_URL}/admin/shul/${r.slug}`,
+        );
+      }
+    }
+
+    // Per-run broken/error detail from this week's scrape_run rows.
+    // Complements the per-data_source NEW/CHRONIC view above by surfacing
+    // the EXACT errors hit during this week's runs (e.g. fetch timeout vs
+    // guardrail rule-drop).
     if (issues.rows.length > 0) {
       lines.push("");
-      lines.push(`Broken / error (${issues.rows.length}):`);
+      lines.push(`Recent scrape errors (${issues.rows.length}):`);
       for (const r of issues.rows) {
         lines.push("");
         lines.push(`  [${r.run_status}] ${r.name}`);
         lines.push(`    shul ${r.shul_id} · data_source ${r.data_source_id}`);
-        // Full URLs so the link is clickable from the email client.
         lines.push(`    ${BASE_URL}/admin/shul/${r.slug}`);
         if (r.error) lines.push(`    ${r.error}`);
       }
@@ -149,9 +216,15 @@ export const weeklyRescrapeSummary = inngest.createFunction(
       "Lookback window: last 90 min. Inngest dashboard has full per-run traces.",
     );
 
+    const subjectParts = [`Weekly cron · ${total} scrapes`];
+    if (newBroken.length > 0) subjectParts.push(`${newBroken.length} NEW broken`);
+    if (chronicBroken.length > 0)
+      subjectParts.push(`${chronicBroken.length} chronic`);
+    if (staleCount > 0) subjectParts.push(`${staleCount} stale`);
+
     await step.run("send-email", async () => {
       await notifyAdmin({
-        subject: `Weekly cron · ${total} scrapes · ${issues.rows.length} issues${staleCount > 0 ? ` · ${staleCount} stale` : ""}`,
+        subject: subjectParts.join(" · "),
         text: lines.join("\n"),
       });
     });
@@ -160,6 +233,8 @@ export const weeklyRescrapeSummary = inngest.createFunction(
       total,
       counts: Object.fromEntries(counts.rows.map((r) => [r.status, Number(r.n)])),
       issueCount: issues.rows.length,
+      newBrokenCount: newBroken.length,
+      chronicBrokenCount: chronicBroken.length,
       staleCount,
     };
   },

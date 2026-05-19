@@ -116,6 +116,53 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
     .orderBy(desc(shulCandidate.reviewedAt))
     .limit(20);
 
+  // Fix Y: candidates approved in the last 7d whose extraction landed
+  // in a bad state — either shul.status='unsupported' or no approved+ok
+  // data_source exists. Closes the discovery → approval → outcome
+  // feedback loop. Without this, admin had to manually browse
+  // /admin/shuls to find approvals that didn't pan out.
+  const failedApprovals = await db.execute<{
+    candidate_id: number;
+    reviewed_at: Date;
+    shul_id: number;
+    shul_slug: string;
+    shul_name: string;
+    shul_status: string;
+    failure_reason: string;
+  }>(sql`
+    SELECT
+      sc.id AS candidate_id,
+      sc.reviewed_at,
+      s.id AS shul_id,
+      s.slug AS shul_slug,
+      s.name AS shul_name,
+      s.status::text AS shul_status,
+      CASE
+        WHEN s.status = 'unsupported' THEN 'cascade exhausted all tiers'
+        WHEN NOT EXISTS (
+          SELECT 1 FROM data_source ds2
+           WHERE ds2.shul_id = s.id
+             AND ds2.review_status = 'approved'
+             AND ds2.last_run_status = 'ok'
+        ) THEN 'no approved+ok data_source'
+      END AS failure_reason
+    FROM shul_candidate sc
+    INNER JOIN shul s ON s.id = sc.linked_shul_id
+    WHERE sc.review_status = 'approved'
+      AND sc.reviewed_at > NOW() - INTERVAL '7 days'
+      AND (
+        s.status = 'unsupported'
+        OR NOT EXISTS (
+          SELECT 1 FROM data_source ds2
+           WHERE ds2.shul_id = s.id
+             AND ds2.review_status = 'approved'
+             AND ds2.last_run_status = 'ok'
+        )
+      )
+    ORDER BY sc.reviewed_at DESC
+    LIMIT 20
+  `);
+
   return (
     <div className="mx-auto max-w-6xl px-5 py-8">
       <h1 className="text-2xl font-semibold">Discovery candidates</h1>
@@ -297,6 +344,50 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
             </Link>
           )}
         </form>
+      )}
+
+      {/* Fix Y: Recent approvals that landed in a bad state (last 7d).
+          Closes the discovery → approval → outcome feedback loop. */}
+      {failedApprovals.rows.length > 0 && (
+        <section className="mt-6 rounded-xl border border-rose-300 bg-rose-50 p-4">
+          <h2 className="text-sm font-semibold text-rose-900">
+            Approved but extraction landed broken · last 7d ({failedApprovals.rows.length})
+          </h2>
+          <p className="mt-1 text-xs text-rose-800">
+            Candidate was approved but the resulting shul has no working
+            extraction. Click through to triage — try a different URL,
+            re-extract, or archive.
+          </p>
+          <ul className="mt-3 space-y-1.5">
+            {failedApprovals.rows.map((r) => (
+              <li
+                key={r.candidate_id}
+                className="flex flex-wrap items-baseline gap-2 text-xs"
+              >
+                <Link
+                  href={`/admin/shul/${r.shul_slug}`}
+                  className="font-medium text-amber-800 underline-offset-2 hover:underline"
+                >
+                  {r.shul_name}
+                </Link>
+                <span
+                  className={`rounded px-1.5 py-0.5 ${STATUS_BADGE_SHUL[r.shul_status] ?? "bg-neutral-100 text-neutral-700"}`}
+                >
+                  {r.shul_status.replace(/_/g, " ")}
+                </span>
+                <span className="italic text-rose-700">{r.failure_reason}</span>
+                <span className="text-neutral-500">
+                  {r.reviewed_at
+                    ? new Date(r.reviewed_at).toLocaleString([], {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })
+                    : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {/* Recently approved (last 24h) */}
