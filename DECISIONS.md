@@ -15,6 +15,92 @@ to PROGRESS.md commits + FEATURES.md entries when relevant.
 
 ---
 
+## 2026-05-18 → 2026-05-19 — phase-1 launch prep + ops gates
+
+After running a full-project gap audit (three parallel Explore agents — public UX, ops/observability, security/testing/privacy), pivoted from "finish v2 rollout" to "make the site shareable to a 3-5 person test cohort in 1-2 weeks." Sequenced 17 tasks across productivity setup, implementation, and planning docs. Single commit `48aac17` (31 files) shipped + pushed + verified live.
+
+### Decision 1 — Flip v2 global flag now, don't wait for cron-cycle validation
+
+**Context:** Prior plan was to wait until Sat 2026-05-23 weekly cron + Sun morning summary email before flipping `EXTRACTION_PIPELINE_V2=true`. User wanted to test extraction by adding new shuls and observing in real-time, not by passive cron-watching.
+
+**Options:** (a) wait for cron, (b) flip flag now + add new shuls organically, (c) hybrid (flag on for new shuls, cron paused), (d) keep per-shul whitelist + re-extract manually after each add.
+
+**Chose (b).** Per-shul whitelist doesn't work for new submissions — `/submit` fires async ~30s after creation, can't add ID to env in time. Hybrid adds complexity for marginal safety; the canary already verified all 3 tiers. Single-env rollback (`vercel env rm EXTRACTION_PIPELINE_V2 production`) keeps risk bounded.
+
+**Implication:** All 51 active shuls flip to v2 on next weekly cron. New submissions auto-run v2. PDF + email tiers get tested when organic shuls arrive.
+
+### Decision 2 — Single commit for the launch-prep bundle, not split per-feature
+
+**Context:** 31 files spanned 6 thematic groups (UX bundle, analytics, errors, rate limits, PWA, features, planning docs). Cleaner history says split; lower-ceremony solo workflow says bundle.
+
+**Options:** (a) one comprehensive commit, (b) ~5 themed commits (UX, ops, features, infra, docs), (c) one PR per step.
+
+**Chose (a).** User said "commit everything" — singular phrasing matched intent. Many files overlapped multiple themes (`app/page.tsx` touched launch-prep + travel-mode + freshness badge; `MinyanList.tsx` got every UI change). Splitting cleanly would have required hunk-level staging. The trade-off (less granular revert) is acceptable for a solo build.
+
+**Implication:** Bisect would require unpicking sub-features manually. Acceptable cost.
+
+### Decision 3 — Rate limit + cost-gate fail OPEN, not closed
+
+**Context:** Both gates depend on external state — Upstash Redis env vars for rate limit, DB query for cost-gate cumulative-spend check. What if the external call fails mid-extraction?
+
+**Options:** (a) fail open (allow the request when gate fails), (b) fail closed (block when gate fails), (c) circuit-breaker with auto-recovery.
+
+**Chose (a).** Fail-closed means a DB hiccup or missing env var breaks the site / blocks all submissions / kills the weekly cron. Fail-open means a one-off check failure lets a request through that the gate would have caught — which is fine for both rate limit (next request still gets gated) and cost-gate (single LLM call past the cap is recoverable). Sentry catches the gate-internal failure for diagnosis.
+
+**Lesson:** For protective gates, the cost of a missed request is lower than the cost of false rejection. Cost-gate explicitly logs `[cost-gate] failed to compute today's cost; failing open` for traceability.
+
+### Decision 4 — Special-schedule badge uses amber, not rose
+
+**Context:** Existing shul-detail page used `bg-rose-100 text-rose-800` for Yom Tov / fast-day badges. STYLE.md allows rose for "error" state. New feed-side badge needed the same treatment.
+
+**Options:** (a) keep rose (consistent with existing), (b) unify to amber (caution, fits STYLE.md neutral-palette + one-accent), (c) use neutral-100 (no signal).
+
+**Chose (b).** A Yom Tov schedule is "different from regular," not "wrong." Amber communicates "pay attention" without alarm. Also unified rose → amber in the existing detail page badge for consistency.
+
+**Implication:** STYLE.md "neutral-palette + amber accent" pattern is upheld site-wide. Rose is now reserved for true error states (which we don't currently use).
+
+### Decision 5 — Single minimal service worker for installability, not a precaching SW
+
+**Context:** PWA installability needs a registered SW with a fetch handler. Offline caching is a separate concern.
+
+**Options:** (a) full offline-capable SW with route precache, (b) runtime-cache strategy via Workbox, (c) minimal no-op pass-through SW.
+
+**Chose (c).** The test-cohort goal is "site is installable," not "site works offline." Offline support adds cache-invalidation complexity (when does the shul page refresh?) that's out of scope for the first share-with-friends pass. A no-op SW exists, registers cleanly, makes the install prompt fire, and lets offline behavior be layered later without changing the registration shape.
+
+**Implication:** PWA install works; no offline support yet. `public/sw.js` is ~20 LOC and obvious to extend when offline becomes a real need.
+
+### Decision 6 — Vercel Analytics over Plausible / Umami / others
+
+**Context:** Need lightweight pageview tracking to measure "3-5 real daveners used it" Phase-1 success criterion.
+
+**Options:** (a) Vercel Analytics (built-in toggle), (b) Plausible (privacy-friendly third-party), (c) Umami (self-hosted), (d) custom.
+
+**Chose (a).** Project is already on Vercel; analytics is a one-toggle + one-import addition (`<Analytics />` in `app/layout.tsx`). Free tier covers 2.5k visitors/month — plenty for first-cohort phase. Privacy concerns deferred until traffic warrants (Vercel Analytics is itself reasonably privacy-respectful — no cookies, no user IDs).
+
+**Lesson:** Don't optimize for tools the platform already provides. Switching costs are zero now; would be expensive later if real instrumentation grows on top.
+
+### Decision 7 — Inferred Upstash REST URL from user-pasted `redis-cli` command instead of asking
+
+**Context:** User said the credentials were in `.env.local`. Grep found `UPSTASH_REDIS_REST_URL="redis-cli --tls -u redis://default:...@more-sheep-129736.upstash.io:6379"` — the native-protocol command, not the HTTPS REST URL that `@upstash/redis` SDK needs.
+
+**Options:** (a) ask user to grab the correct REST URL from the Upstash dashboard, (b) infer the REST URL from the hostname in the command, (c) refuse to proceed.
+
+**Chose (b).** Upstash REST URL pattern is `https://<hostname>` where hostname is the same as the native-protocol host. Inferred `https://more-sheep-129736.upstash.io`, verified via `curl -H "Authorization: Bearer <token>" /ping` which returned `{"result":"PONG"}`. Then fixed `.env.local` too so local dev matches prod.
+
+**Lesson:** When the user pastes credential-adjacent context with a clear shape, infer and verify — it's faster than a clarifying round-trip. Verification (ping) closes the safety gap.
+
+### Decision 8 — Build-phase deferral re-confirmed (no tests, no auth rework, no cred rotation)
+
+**Context:** Gap audit surfaced zero test coverage, single-admin auth, and credentials in `.env.local` as latent issues. User's standing rule: defer security cleanup during build phase.
+
+**Options:** (a) honor the deferral, (b) renegotiate per item, (c) start a minimal test scaffold despite the rule.
+
+**Chose (a).** Repo is private (confirmed via AskUserQuestion) — credentials in committed files are not externally exposed. Tests can be added once daily active users > 50 per the existing "build phase ends" definition. Auth rework needs a real second-admin trigger, which doesn't exist. Pushing back on the deferral would be solving a problem the user has explicitly decided to defer.
+
+**Implication:** Notes for revisit are captured in `feedback-security-cleanup-deferred` memory. Will resurface when build phase ends.
+
+---
+
 ## 2026-05-18 (afternoon) — `/save` + `/resume` skill design
 
 After the v2 canary expansion completed (all 3 tiers verified — see next section), built two user-level Claude Code skills to codify the session-continuity ritual that was being done manually. The skills + PreCompact hook are installed at user scope (`~/.claude/skills/`) so they work in every project.

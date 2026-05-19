@@ -4,6 +4,69 @@
 
 ---
 
+## 2026-05-18 → 2026-05-19 — Phase-1 launch prep shipped; v2 global; ops gates live
+
+### Briefing for next session (read first)
+
+- **Where we are:** Commit `48aac17` is live in prod (`tfila-s3zf4v3cj`). v2 extraction pipeline is the global default (`EXTRACTION_PIPELINE_V2=true`). The "shareable to friends" UX layer landed in one batch: travel-mode date picker, tefillah filter chips, in-progress live pill, freshness chip, special-schedule labels, OG metadata, sitemap, robots.txt, tap targets. Ops scaffolding active: Vercel Analytics + Sentry + `/api/health` + Upstash rate limits + LLM cost-gate. PWA shell installable. Working tree is clean; main is in sync with origin.
+- **Next concrete action:** Pick the 3-5 person test cohort + fill the table in `docs/FIRST-USERS-TEST-PLAN.md`. Sign up for UptimeRobot (free tier), point a monitor at `https://tfila.co/api/health`. After that the pre-test checklist is complete and you can send the share message.
+- **Constraints to preserve:** Cost-gate defaults to $25/day LLM spend — bump `LLM_DAILY_BUDGET_USD` env var before any planned bulk imports. Rate limits are LIVE (Upstash wired): 5/hr/IP on `/submit`, 3/hr/email + 10/hr/IP on `/admin/request-link`, 100/day total on `/inbound/email`. `EXTRACTION_DISABLED=true` is the kill switch. Build-phase deferrals still hold (no tests, no auth-model rework, no cred rotation while private repo).
+- **Critical data:** Commit `48aac17` (31 files, +2183/-77); prod deploy `tfila-s3zf4v3cj`; Sentry DSN exposed inline in chat (consider rotating); Upstash DB `more-sheep-129736.upstash.io`; Postgres MCP `pg-neon` installed at user scope (use `mcp__pg-neon__query` for ad-hoc SQL); plan file at `~/.claude/plans/i-want-you-to-fluttering-canyon.md` + durable copy at `docs/PHASE-1-LAUNCH-PREP-PLAN.md`.
+
+### Done this session
+
+| Step | What shipped | Where |
+|---|---|---|
+| 0a | Vercel CLI 54.1.0 installed globally | `npm i -g vercel` |
+| 0b | `fewer-permission-prompts` skill ran | Added `Bash(vercel ls *)` to `.claude/settings.json` |
+| 0c | Postgres MCP server added (user scope) | `pg-neon` → Neon read-only via `mcp__pg-neon__query` |
+| 1 | `EXTRACTION_PIPELINE_V2=true` flipped globally | Vercel prod env; redeploy `tfila-fjqyz9uqg` |
+| 2 | Launch-prep batch (6 sub-items) | MinyanList, FeedHeader, sitemap.ts, robots.txt, OG, special-schedule labels |
+| 3 | Vercel Analytics installed | `@vercel/analytics`, `<Analytics />` in `app/layout.tsx` |
+| 4 | Sentry DSN env vars + `/api/health` | `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN` set in Vercel prod |
+| 5 | Upstash rate limits live | `lib/rate-limit.ts`; env vars set; verified `{"result":"PONG"}` |
+| 6 | PWA shell | `app/manifest.ts`, `public/sw.js`, `ServiceWorkerRegister.tsx`, apple-touch-icon |
+| 7 | Travel mode UI | `?date=YYYY-MM-DD` accepted, date picker, full-day window |
+| 8 | Tefillah filter chips | `components/MinyanList.tsx` → client component with chip toggle |
+| 9 | In-progress live pill + ring | 30m window, emerald accent, 30s ticker |
+| 10 | Freshness badge | `lib/format.ts` helper, query extended, chip on cards + detail |
+| 11 | `docs/RUNBOOK.md` | 5 scenarios (down, cron, cost, leak, DB) |
+| 12 | Cost-tripwire | `lib/llm/cost-gate.ts` + `docs/COST-BUDGETS.md` |
+| 13 | `docs/FIRST-USERS-TEST-PLAN.md` | cohort template + decision criteria |
+| — | Commit `48aac17` (31 files, +2183/-77) pushed | `c22a29c..48aac17 main -> main` |
+| — | Verified live: `/api/health`, `/sitemap.xml`, `/robots.txt`, `/manifest`, `/sw.js` all 200 |
+
+### Decisions made
+
+See DECISIONS.md "2026-05-18 → 2026-05-19 — phase-1 launch prep + ops gates" (8 decisions: one-commit-not-split bundle, v2-global-before-cron-cycle, fail-open rate limit + cost-gate, amber-over-rose for special-schedule, single SW for installability, Vercel Analytics over Plausible, Upstash REST URL inference from redis-cli command, build-phase deferral re-confirmed).
+
+### In-flight tasks (recreate with TaskCreate on /resume)
+
+- #1 (now completable) — Verify `/save quick` + `/save` deep on daven-site. Both have been run successfully against this project this session; mark done.
+
+### Paused / blocked
+
+- **UptimeRobot signup** — needs user action (free tier, no card). Monitor target = `https://tfila.co/api/health`.
+- **First-users cohort selection** — fill the table in `docs/FIRST-USERS-TEST-PLAN.md` before sending share message.
+- **Sentry DSN rotation** — user pasted DSN inline in this chat; rotate if transcript may be shared.
+- **`.env.local` housekeeping** — duplicate `INNGEST_API_KEY` lines (9 + 35); user may want to clean. Non-urgent.
+
+### Code commits — 2026-05-18 → 2026-05-19
+
+| Hash | Type | Summary |
+|---|---|---|
+| `48aac17` | feat | phase-1 launch prep + ops gates + UX features (31 files, +2183/-77) |
+
+### Live infrastructure (current prod state)
+
+- **Vercel deploy**: `tfila-s3zf4v3cj` (commit `48aac17`), aliased to `https://tfila.co`
+- **Env vars set this session**: `EXTRACTION_PIPELINE_V2=true`, `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`
+- **Services wired**: Vercel Analytics, Sentry, Upstash Redis (rate-limit backing), Postmark inbound, Resend transactional, Anthropic API (Haiku + Sonnet), Jina Reader, Docling on HF Spaces, Cloudflare Worker fetch proxy
+- **Cost ceiling**: $25/day LLM spend (default) — adjust via `LLM_DAILY_BUDGET_USD`
+- **Kill switch**: `vercel env add EXTRACTION_DISABLED true production` halts all new LLM calls
+
+---
+
 ## 2026-05-18 (evening) — QUICK SAVE (pre-compaction or manual)
 
 - Branch: main; latest commit: c22a29c fix(extraction-v2): always try HTML tier, demote shouldRerenderJs to advisory

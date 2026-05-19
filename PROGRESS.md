@@ -13,31 +13,37 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-05-17 (full v2 build, 14 commits on extraction-v2 branch) + 2026-05-18 (deploy day: HF Spaces, Jina key, Vercel env, PR #1 merge, BAYT canary verified, 2 mid-canary bugs fixed).**
+**Last working session: 2026-05-18 → 2026-05-19 (phase-1 launch prep + ops gates shipped; v2 went global; everything in commit `48aac17`, deploy `tfila-s3zf4v3cj`).**
 
-See **[SESSION.md](./SESSION.md)** for the canonical pickup doc and **[DECISIONS.md](./DECISIONS.md)** for verbose rationale on both the v2 rewrite + the deploy decisions (HF Spaces over Fly.io, the 2 bugs, expanded canary plan).
+See **[SESSION.md](./SESSION.md)** for the canonical pickup doc and **[DECISIONS.md](./DECISIONS.md)** for verbose rationale.
 
-### Pickup: wait for Sat 2026-05-23 weekly cron, then conditionally flip global flag
+### Pickup: pick test cohort + send share message
 
-**Current prod state (as of 2026-05-18 afternoon — all 3 canary tiers verified):**
-- `main` has v2 code merged via PR #1 (commit `1cb6c9a` + 2 mid-canary fixes `7aa4c73` + `c22a29c`).
-- Vercel prod env: `EXTRACTION_V2_SHUL_IDS=41,56,67`, `EXTRACTION_PIPELINE_V2` unset, `DOCLING_URL` + `JINA_API_KEY` set.
-- All 3 canary shuls verified v2: BAYT (ds #99, html, 54 rules @ 0.92), The Shul (ds #102, vision, 8 rules @ 0.97), Chevra Ahavas Yisroel (ds #104, js_rendered, 5 rules @ 0.92). 100% sourceQuote coverage across all.
+**Current prod state (as of 2026-05-19):**
+- v2 extraction pipeline is the global default (`EXTRACTION_PIPELINE_V2=true`). New submissions and the next weekly cron run v2 across all 51 active shuls.
+- Launch-prep UX shipped: OG metadata on shul pages, sitemap.xml + robots.txt, special-schedule labels in feed, 44×44 tap targets, freshness chip, travel-mode date picker, tefillah filter chips, in-progress live pill.
+- Ops scaffolding active: Vercel Analytics + Sentry + `/api/health` + Upstash rate limits + LLM cost-gate ($25/day default).
+- PWA installable (manifest + service worker + apple-touch-icon).
+- Verified live: `/api/health`, `/sitemap.xml`, `/robots.txt`, `/manifest.webmanifest`, `/sw.js` all return 200.
 
-**To complete rollout:**
+**To complete pre-test checklist (per `docs/FIRST-USERS-TEST-PLAN.md`):**
 
-1. **Wait for Sat 2026-05-23 03:00 UTC weekly cron.** All 51 active shuls scrape — 3 via v2, 48 via v1.
-2. **Sun 2026-05-24 morning cron-summary email** will report per-shul status. Watch for any of the 3 canary shuls flipping to `broken` or `error`.
-3. **If all 3 canaries still `ok` Sunday morning** → flip `EXTRACTION_PIPELINE_V2=true` globally for all 51 active shuls. Remove `EXTRACTION_V2_SHUL_IDS` (now redundant).
-4. **If a canary fails** → don't flip global. Investigate the failure (likely a v2 edge case), fix, re-canary that shul, repeat until all clean.
+1. **UptimeRobot signup** (free tier, no card) → monitor `https://tfila.co/api/health`, 5-min interval, email alerts on failure.
+2. **Pick the 3-5 person test cohort** → fill the table in `docs/FIRST-USERS-TEST-PLAN.md`. Aim for diversity (weekday-only, traveler, non-local, iOS+Android mix).
+3. **PWA install sanity test** → one iPhone + one Android, "Add to Home Screen" works.
+4. **Trigger one deliberate test error** → verify Sentry receives it.
+5. **Send share message** → use the template in the test plan.
 
-**Untested tiers (will get exercised opportunistically post-global-flip):**
-- PDF tier — no PDF-bearing shul in active pool. Docling standalone smoke test passed but full cascade tier 4 hasn't run on a real PDF.
-- Email tier — needs a forwarded email to land in process-email.ts. Wait for next organic forward.
+**Cadence after share message:** 1 week before iterating. Resist tweaks on the first piece of feedback.
 
-**Rollback (any time):** unset `EXTRACTION_V2_SHUL_IDS` and `EXTRACTION_PIPELINE_V2` → everyone reverts to v1. No code revert needed.
+**Decision criteria after 2 weeks:** pre-written in `docs/FIRST-USERS-TEST-PLAN.md` (Iterate / Build feature X / Scrap-and-rethink).
 
-### `/save` + `/resume` skills now installed (user-wide)
+**Rollback (any time):**
+- `vercel env rm EXTRACTION_PIPELINE_V2 production` → all shuls back to v1
+- `vercel env add EXTRACTION_DISABLED true production` → halt all new LLM calls
+- `vercel rollback <prior-good-deployment>` → revert to a known-good build
+
+### `/save` + `/resume` skills installed (user-wide)
 
 Built afternoon of 2026-05-18. See `docs/SAVE-RESUME-SKILL-PLAN.md` for full design. Quick reference:
 
@@ -125,6 +131,50 @@ Working definition of "build phase ends" (per SESSION.md): daily active users > 
 ---
 
 ## Done
+
+### 2026-05-18 → 2026-05-19 — Phase-1 launch prep shipped; v2 global; ops gates live (commit `48aac17`) ✅
+
+One bundled commit + deploy that closed the implementation half of the gap audit. v2 extraction pipeline flipped to global default for all 51 shuls. Public-facing "shareable to friends" UX layer landed (travel mode + tefillah chips + in-progress live pill + freshness chip + special-schedule labels + OG metadata + sitemap + robots + tap targets). Operational scaffolding wired (Vercel Analytics + Sentry + `/api/health` + Upstash rate limits + LLM cost-gate). PWA shell installable. Three planning docs durable.
+
+**Commit:** `48aac17 feat: phase-1 launch prep + ops gates + UX features` — 31 files changed, +2183/-77. Pushed to `origin/main`. Deploy `tfila-s3zf4v3cj`.
+
+**Productivity setup (Step 0):**
+- Vercel CLI 54.1.0 installed globally
+- `fewer-permission-prompts` skill ran → added `Bash(vercel ls *)` to project allow-list (most heavy-hit commands were already auto-allowed; thin net gain confirmed honestly)
+- Postgres MCP server `pg-neon` registered at user scope (`~/.claude.json`) — pointed at Neon read-only, accessible via `mcp__pg-neon__query`
+
+**Implementation tracks (Steps 1-9 + parallel docs 10-12):**
+
+| Step | Track | What |
+|---|---|---|
+| 1 | Extraction | `EXTRACTION_PIPELINE_V2=true` in Vercel prod; redeployed |
+| 2 | UX bundle | dev-comment strip, OG/Twitter metadata, sitemap.ts, robots.txt, tap targets 28→44px, special-schedule labels in feed (was silent-wrong-data bug), rose→amber badge unification |
+| 3 | Analytics | `@vercel/analytics` + `<Analytics />` in layout |
+| 4 | Errors + Uptime | Sentry instrumentation (DSN env vars in Vercel); `/api/health` endpoint with DB latency |
+| 5 | Rate limits | `lib/rate-limit.ts` via Upstash on `/submit` (5/hr/IP), `/admin/request-link` (3/hr/email + 10/hr/IP), `/inbound/email` (100/day); fail-open before env vars |
+| 6 | PWA | `app/manifest.ts`, `public/sw.js`, `ServiceWorkerRegister.tsx`, apple-touch-icon metadata |
+| 7 | Travel mode | `?date=YYYY-MM-DD` re-anchors feed to full-day window; inline date picker form |
+| 8 | Filter chips | `components/MinyanList.tsx` became client component; Shacharis/Mincha/Maariv chips with live counts |
+| 9 | Live pill | Emerald ring + "● live" badge on in-progress minyanim (30m window); 30s ticking state |
+| 10 | Trust signal | Freshness `Verified Nd ago` chip — query extended, propagated through types, rendered on feed cards + shul detail header |
+| 11 | Ops doc | `docs/RUNBOOK.md` — 5 scenarios (down, cron, cost, leak, DB) |
+| 12 | Cost gate | `lib/llm/cost-gate.ts` — `EXTRACTION_DISABLED` kill switch + `LLM_DAILY_BUDGET_USD` soft cap (default $25/day); `docs/COST-BUDGETS.md` policy |
+| 13 | Cohort doc | `docs/FIRST-USERS-TEST-PLAN.md` — cohort template + 3-question script + decision criteria |
+
+**Service signups completed:**
+- Sentry project + DSN known (in `.env.local` + Vercel prod). User pasted DSN inline in chat — note for rotation policy.
+- Upstash Redis database `more-sheep-129736.upstash.io` created (free tier, no card). REST URL inferred from user-pasted `redis-cli` command; ping verified.
+
+**Live verification after push:**
+```
+/api/health         → 200 {ok:true,db:{ok:true,latencyMs:712}}
+/robots.txt         → 200
+/sitemap.xml        → 200 (34 active+fresh shul URLs)
+/manifest.webmanifest → 200
+/sw.js              → 200
+```
+
+**Remaining manual step:** UptimeRobot signup → point monitor at `/api/health`. That closes the pre-test checklist.
 
 ### 2026-05-18 (afternoon) — Canary expansion complete (3 tiers verified) + `/save` + `/resume` skills built ✅
 
