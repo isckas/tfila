@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { dataSource } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 export async function POST(
   req: Request,
@@ -28,5 +29,5 @@ export async function POST(
     })
     .where(eq(dataSource.id, dsId));
 
-  return NextResponse.redirect(new URL("/admin/queue", req.url), 303);
+  return safeRedirect(req, "/admin/queue");
 }

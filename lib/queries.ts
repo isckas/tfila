@@ -26,6 +26,7 @@ export async function listActiveShuls() {
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
             AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
         )`,
@@ -97,38 +98,87 @@ export async function getLiveRulesForShul(shulId: number) {
  * data_sources with `review_status='rejected'`. Rules from sources
  * with `review_status='pending'` are included — better to show low-
  * signal data than nothing, especially during pre-approval window.
+ *
+ * **Rule-level dedup**: when the same shul has multiple approved data_sources
+ * with identical (tefillah, time, days_of_week, special_schedule_kind,
+ * valid_from, valid_to) rows, only one wins. Winner: data_source.priority
+ * DESC, data_source.last_run_at DESC NULLS LAST, rule.id DESC. Unique rules
+ * from a loser source are preserved (no conflict → both shown). Matches
+ * SCOPE.md "Email > website priority, rule-level conflict resolution".
  */
 export async function getPublicRulesForShul(shulId: number) {
-  return db
-    .select({
-      id: minyanRule.id,
-      shulId: minyanRule.shulId,
-      dataSourceId: minyanRule.dataSourceId,
-      tefillah: minyanRule.tefillah,
-      tefillahLabel: minyanRule.tefillahLabel,
-      daysOfWeek: minyanRule.daysOfWeek,
-      time: minyanRule.time,
-      validFrom: minyanRule.validFrom,
-      validTo: minyanRule.validTo,
-      specialScheduleKind: minyanRule.specialScheduleKind,
-      priority: minyanRule.priority,
-      nusach: minyanRule.nusach,
-      notes: minyanRule.notes,
-    })
-    .from(minyanRule)
-    .leftJoin(dataSource, eq(dataSource.id, minyanRule.dataSourceId))
-    .where(
-      and(
-        eq(minyanRule.shulId, shulId),
-        isNull(minyanRule.deletedAt),
-        sql`(${dataSource.id} IS NULL OR ${dataSource.reviewStatus} <> 'rejected')`,
-      ),
+  const rows = await db.execute<{
+    id: number;
+    shul_id: number;
+    data_source_id: number | null;
+    tefillah: string;
+    tefillah_label: string | null;
+    days_of_week: number[] | null;
+    time: MinyanTime;
+    valid_from: string | null;
+    valid_to: string | null;
+    special_schedule_kind: string;
+    priority: number;
+    nusach: string | null;
+    notes: string | null;
+  }>(sql`
+    WITH ranked AS (
+      SELECT
+        mr.id, mr.shul_id, mr.data_source_id, mr.tefillah, mr.tefillah_label,
+        mr.days_of_week, mr.time, mr.valid_from, mr.valid_to,
+        mr.special_schedule_kind, mr.priority, mr.nusach, mr.notes,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            mr.shul_id, mr.tefillah, mr.time::text,
+            -- Normalize array order before stringifying — the LLM extractor
+            -- is non-deterministic across runs (cascade tier swaps, prompt
+            -- evolution), so [1,2,3] and [3,2,1] are semantically the same
+            -- minyan but would otherwise hash to different partitions and
+            -- defeat the dedup.
+            COALESCE(
+              (SELECT array_agg(d ORDER BY d)::text
+                 FROM unnest(mr.days_of_week) AS d), ''),
+            mr.special_schedule_kind,
+            COALESCE(mr.valid_from::text, ''),
+            COALESCE(mr.valid_to::text, '')
+          ORDER BY
+            -- Manual admin edits win over extraction-generated rows when
+            -- they collide on fingerprint. Admin override is durable.
+            mr.is_manual_edit DESC,
+            COALESCE(ds.priority, 0) DESC,
+            ds.last_run_at DESC NULLS LAST,
+            mr.data_source_id DESC NULLS LAST,
+            mr.id DESC
+        ) AS rn
+      FROM minyan_rule mr
+      LEFT JOIN data_source ds ON ds.id = mr.data_source_id
+      WHERE mr.shul_id = ${shulId}
+        AND mr.deleted_at IS NULL
+        AND (ds.id IS NULL OR ds.review_status <> 'rejected')
     )
-    .orderBy(
-      desc(minyanRule.priority),
-      asc(minyanRule.tefillah),
-      asc(minyanRule.validFrom),
-    );
+    SELECT id, shul_id, data_source_id, tefillah, tefillah_label, days_of_week,
+           time, valid_from, valid_to, special_schedule_kind, priority,
+           nusach, notes
+      FROM ranked
+     WHERE rn = 1
+     ORDER BY priority DESC, tefillah ASC, valid_from ASC NULLS LAST
+  `);
+
+  return rows.rows.map((r) => ({
+    id: r.id,
+    shulId: r.shul_id,
+    dataSourceId: r.data_source_id,
+    tefillah: r.tefillah,
+    tefillahLabel: r.tefillah_label,
+    daysOfWeek: r.days_of_week,
+    time: r.time,
+    validFrom: r.valid_from,
+    validTo: r.valid_to,
+    specialScheduleKind: r.special_schedule_kind,
+    priority: r.priority,
+    nusach: r.nusach,
+    notes: r.notes,
+  }));
 }
 
 // ─── Admin-facing reads ──────────────────────────────────────────────────
@@ -193,12 +243,14 @@ export async function getShulForAdmin(slug: string) {
       kind: dataSource.kind,
       identifier: dataSource.identifier,
       reviewStatus: dataSource.reviewStatus,
+      reviewerNotes: dataSource.reviewerNotes,
       confidenceScore: dataSource.confidenceScore,
       priority: dataSource.priority,
       builtAt: dataSource.builtAt,
       builtBy: dataSource.builtBy,
       lastRunAt: dataSource.lastRunAt,
       lastRunStatus: dataSource.lastRunStatus,
+      firstBrokenAt: dataSource.firstBrokenAt,
       extractionStrategy: dataSource.extractionStrategy,
       configJson: dataSource.configJson,
     })
@@ -239,6 +291,7 @@ export async function listShulsForLookup() {
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
             AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
         )`,
@@ -267,6 +320,7 @@ export async function searchActiveShuls(q: string, limit = 30) {
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
             AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
         )`,
@@ -368,6 +422,13 @@ export interface AdminShulRow {
    */
   lastFreshAt: Date | null;
   /**
+   * Earliest first_broken_at across this shul's broken/failed
+   * data_sources. NULL = no source is currently in a broken streak.
+   * Powers the admin Broken inbox "Broken since N days ago" badge
+   * (Fix S) and the weekly digest's NEW-vs-CHRONIC split.
+   */
+  firstBrokenAt: Date | null;
+  /**
    * Aggregate per-shul flags over its data_sources. Used by
    * deriveAdminShulState() to compute the next-action label.
    */
@@ -413,6 +474,7 @@ export async function listAdminShuls(opts: {
     primary_data_source_id: number | null;
     primary_data_source_review: string | null;
     last_fresh_at: Date | null;
+    first_broken_at: Date | null;
     has_pending_source: boolean | null;
     has_approved_source: boolean | null;
     has_rejected_source: boolean | null;
@@ -427,6 +489,7 @@ export async function listAdminShuls(opts: {
       ds_top.id AS primary_data_source_id,
       ds_top.review_status::text AS primary_data_source_review,
       fresh_agg.last_fresh_at,
+      ds_state.first_broken_at,
       ds_state.has_pending_source,
       ds_state.has_approved_source,
       ds_state.has_rejected_source,
@@ -449,15 +512,40 @@ export async function listAdminShuls(opts: {
     LEFT JOIN LATERAL (
       SELECT MAX(COALESCE(last_received_at, last_run_at)) AS last_fresh_at
         FROM data_source
-       WHERE shul_id = s.id AND last_run_status = 'ok'
+       WHERE shul_id = s.id
+         AND last_run_status = 'ok'
+         AND review_status = 'approved'
     ) fresh_agg ON true
     LEFT JOIN LATERAL (
       SELECT
-        bool_or(review_status = 'pending')  AS has_pending_source,
+        -- Fix T: pending flag ignores strategy='failed' zombies so the
+        -- queue doesn't show them (an admin can't approve a failed
+        -- extraction; that's now auto-rejected at persistence).
+        bool_or(review_status = 'pending' AND
+                (extraction_strategy IS NULL
+                 OR extraction_strategy <> 'failed')) AS has_pending_source,
         bool_or(review_status = 'approved') AS has_approved_source,
         bool_or(review_status = 'rejected') AS has_rejected_source,
-        bool_or(last_run_status = 'broken') AS has_broken_run,
-        COUNT(*) FILTER (WHERE review_status = 'pending') AS pending_source_count
+        -- Fix V/G: a shul is "broken" only when it has NO approved+ok+fresh
+        -- source. Per-source broken flags polluted the inbox with shuls
+        -- that had one healthy source + one stale broken source.
+        NOT bool_or(
+              review_status = 'approved'
+              AND last_run_status = 'ok'
+              AND COALESCE(last_received_at, last_run_at) >=
+                  NOW() - INTERVAL '14 days'
+            ) AS has_broken_run,
+        -- Fix S: earliest first_broken_at across currently-broken sources
+        -- (excludes auto-rejected zombies). Powers the "Broken since" badge.
+        MIN(first_broken_at) FILTER (
+          WHERE first_broken_at IS NOT NULL
+            AND review_status <> 'rejected'
+        ) AS first_broken_at,
+        COUNT(*) FILTER (
+          WHERE review_status = 'pending'
+            AND (extraction_strategy IS NULL
+                 OR extraction_strategy <> 'failed')
+        ) AS pending_source_count
       FROM data_source WHERE shul_id = s.id
     ) ds_state ON true
     WHERE ${where}
@@ -479,6 +567,7 @@ export async function listAdminShuls(opts: {
     primaryDataSourceId: r.primary_data_source_id,
     primaryDataSourceReview: r.primary_data_source_review,
     lastFreshAt: r.last_fresh_at,
+    firstBrokenAt: r.first_broken_at,
     hasPendingSource: r.has_pending_source ?? false,
     hasApprovedSource: r.has_approved_source ?? false,
     hasRejectedSource: r.has_rejected_source ?? false,
@@ -531,6 +620,15 @@ export async function getNearbyShulsWithRules(
 ): Promise<NearbyShulRule[]> {
   const point = sql`ST_SetSRID(ST_MakePoint(${centerLng}, ${centerLat}), 4326)::geography`;
 
+  // Rule-level dedup via ROW_NUMBER() CTE. When multiple approved
+  // data_sources for the same shul produce rules with the SAME fingerprint
+  // (tefillah + time + days_of_week + special_schedule_kind + valid_from +
+  // valid_to), only the winner is returned. Winner: data_source.priority
+  // DESC, last_run_at DESC NULLS LAST, rule.id DESC. Unique rules from a
+  // "loser" source are preserved (no conflict → both shown). This matches
+  // the SCOPE.md "Email > website priority, rule-level conflict resolution"
+  // design. Manually-edited rules (is_manual_edit=true) bypass dedup
+  // entirely — they're treated as durable admin overrides.
   const rows = await db.execute<{
     shul_id: number;
     slug: string;
@@ -554,48 +652,74 @@ export async function getNearbyShulsWithRules(
     notes: string | null;
     last_verified_at: string | null;
   }>(sql`
+    WITH eligible_shuls AS (
+      SELECT
+        s.id, s.slug, s.name, s.address, s.timezone, s.nusach,
+        ST_Y(s.location::geometry) AS lat,
+        ST_X(s.location::geometry) AS lng,
+        ST_Distance(s.location, ${point}) AS distance_meters
+      FROM shul s
+      WHERE s.status = 'active'
+        AND s.location IS NOT NULL
+        AND ST_DWithin(s.location, ${point}, ${radiusMeters})
+        AND EXISTS (
+          SELECT 1 FROM data_source ds_fresh
+          WHERE ds_fresh.shul_id = s.id
+            AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.review_status = 'approved'
+            AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
+                NOW() - INTERVAL '14 days'
+        )
+    ),
+    ranked_rules AS (
+      SELECT
+        es.id AS shul_id, es.slug, es.name, es.address, es.timezone,
+        es.nusach, es.lat, es.lng, es.distance_meters,
+        mr.id AS rule_id, mr.tefillah, mr.tefillah_label, mr.days_of_week,
+        mr.time, mr.special_schedule_kind, mr.priority,
+        mr.valid_from, mr.valid_to, mr.nusach AS rule_nusach, mr.notes,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            mr.shul_id, mr.tefillah, mr.time::text,
+            -- Normalize days_of_week array order — [1,2,3] vs [3,2,1] is
+            -- the same minyan but otherwise hashes to different partitions.
+            COALESCE(
+              (SELECT array_agg(d ORDER BY d)::text
+                 FROM unnest(mr.days_of_week) AS d), ''),
+            mr.special_schedule_kind,
+            COALESCE(mr.valid_from::text, ''),
+            COALESCE(mr.valid_to::text, '')
+          ORDER BY
+            -- Manual admin edits win over extraction-generated rows when
+            -- they collide on fingerprint.
+            mr.is_manual_edit DESC,
+            COALESCE(ds.priority, 0) DESC,
+            ds.last_run_at DESC NULLS LAST,
+            mr.data_source_id DESC NULLS LAST,
+            mr.id DESC
+        ) AS rn
+      FROM eligible_shuls es
+      JOIN minyan_rule mr ON mr.shul_id = es.id
+      LEFT JOIN data_source ds ON ds.id = mr.data_source_id
+      WHERE mr.deleted_at IS NULL
+        AND (ds.id IS NULL OR ds.review_status <> 'rejected')
+    )
     SELECT
-      s.id AS shul_id,
-      s.slug,
-      s.name,
-      s.address,
-      s.timezone,
-      s.nusach,
-      ST_Y(s.location::geometry) AS lat,
-      ST_X(s.location::geometry) AS lng,
-      ST_Distance(s.location, ${point}) AS distance_meters,
-      mr.id AS rule_id,
-      mr.tefillah,
-      mr.tefillah_label,
-      mr.days_of_week,
-      mr.time,
-      mr.special_schedule_kind,
-      mr.priority,
-      mr.valid_from,
-      mr.valid_to,
-      mr.nusach AS rule_nusach,
-      mr.notes,
+      rr.shul_id, rr.slug, rr.name, rr.address, rr.timezone, rr.nusach,
+      rr.lat, rr.lng, rr.distance_meters,
+      rr.rule_id, rr.tefillah, rr.tefillah_label, rr.days_of_week, rr.time,
+      rr.special_schedule_kind, rr.priority,
+      rr.valid_from, rr.valid_to, rr.rule_nusach, rr.notes,
       (
         SELECT MAX(COALESCE(ds2.last_received_at, ds2.last_run_at))
         FROM data_source ds2
-        WHERE ds2.shul_id = s.id AND ds2.last_run_status = 'ok'
+        WHERE ds2.shul_id = rr.shul_id
+          AND ds2.last_run_status = 'ok'
+          AND ds2.review_status = 'approved'
       ) AS last_verified_at
-    FROM shul s
-    JOIN minyan_rule mr ON mr.shul_id = s.id
-    LEFT JOIN data_source ds ON ds.id = mr.data_source_id
-    WHERE s.status = 'active'
-      AND s.location IS NOT NULL
-      AND mr.deleted_at IS NULL
-      AND (ds.id IS NULL OR ds.review_status <> 'rejected')
-      AND ST_DWithin(s.location, ${point}, ${radiusMeters})
-      AND EXISTS (
-        SELECT 1 FROM data_source ds_fresh
-        WHERE ds_fresh.shul_id = s.id
-          AND ds_fresh.last_run_status = 'ok'
-          AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
-              NOW() - INTERVAL '14 days'
-      )
-    ORDER BY distance_meters ASC, mr.priority DESC, mr.id ASC
+    FROM ranked_rules rr
+    WHERE rr.rn = 1
+    ORDER BY rr.distance_meters ASC, rr.priority DESC, rr.rule_id ASC
   `);
 
   return rows.rows.map((r) => ({

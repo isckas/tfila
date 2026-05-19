@@ -7,14 +7,17 @@
 //               scrape_run row marked `broken`, flip data_source.review_status
 //               back to `pending`, leave rules untouched
 //
-// Always writes exactly one scrape_run row.
+// Writes one scrape_run row per attempt, EXCEPT on the early-bail
+// skip path (Fix F) where the source is already `strategy='failed'`
+// or the shul is `unsupported` — those skip writes entirely so they
+// don't pollute the cron-summary's no_change/error tallies.
 
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { dataSource, minyanRule, scrapeRun, shul } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
-import { extractFromHtml, hashSanitizedHtml } from "../../llm/extract";
+import { hashSanitizedHtml } from "../../llm/extract";
 import { runCascade } from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
@@ -57,6 +60,7 @@ export const scrapeOneShul = inngest.createFunction(
           kind: dataSource.kind,
           configJson: dataSource.configJson,
           extractionStrategy: dataSource.extractionStrategy,
+          lastRunStatus: dataSource.lastRunStatus,
           shulStatus: shul.status,
         })
         .from(dataSource)
@@ -71,21 +75,17 @@ export const scrapeOneShul = inngest.createFunction(
     // If the previous extraction couldn't get rules out of this site
     // through any tier of the cascade, don't waste resources retrying.
     // Admin must manually re-trigger.
+    //
+    // Fix F: don't write a scrape_run row at all. The previous design
+    // wrote status='no_change' with an error message, which corrupted
+    // cron-summary stats by counting skips as healthy no-changes. The
+    // data_source row already records its failed state on its own
+    // columns (extraction_strategy='failed', last_run_status='broken'),
+    // so no audit row is needed for the skip itself.
     if (
       loaded.extractionStrategy === "failed" ||
       loaded.shulStatus === "unsupported"
     ) {
-      await db.insert(scrapeRun).values({
-        shulId,
-        dataSourceId,
-        startedAt: new Date(),
-        finishedAt: new Date(),
-        status: "no_change",
-        rulesAdded: 0,
-        rulesRemoved: 0,
-        rulesChanged: 0,
-        error: "skipped: data_source marked failed / shul unsupported",
-      });
       return { skipped: true, reason: "unsupported" };
     }
 
@@ -139,7 +139,14 @@ export const scrapeOneShul = inngest.createFunction(
       return hashSanitizedHtml(fetched.html);
     });
 
-    if (previousHash && newHashOnly === previousHash) {
+    // Fix I — hash-match short-circuit ONLY when the prior extraction was
+    // known-good. If the previous run was broken/error, the hash optimization
+    // would lock us into the broken state forever. Force re-extraction so the
+    // cascade has a chance to recover (especially important now that Fix H
+    // routes HTML rescrape through runCascade with tier fallback).
+    const priorWasOk =
+      loaded.lastRunStatus === "ok" || loaded.lastRunStatus === "no_change";
+    if (previousHash && newHashOnly === previousHash && priorWasOk) {
       // No change since last scrape — write the audit row and stop.
       await step.run("write-scrape-run-no-change", async () => {
         await db.insert(scrapeRun).values({
@@ -193,9 +200,19 @@ export const scrapeOneShul = inngest.createFunction(
       return { changed: false, reason: "cost-gated", gateReason: gate.reason };
     }
 
-    // ─── 4. Hash differs — re-extract ────────────────────────────
-    const extracted = await step.run("llm-extract", async () => {
-      return extractFromHtml(fetched.html);
+    // ─── 4. Hash differs — re-extract via full cascade ──────────
+    // Fix H: route HTML rescrapes through runCascade (not extractFromHtml
+    // directly). If the page shape changed and HTML tier now returns 0
+    // rules, the cascade falls through to JS-rendered / vision_image /
+    // pdf_document. This is the single highest-impact cascade-adaptation
+    // fix: it lets the weekly cron recover from shul-page-shape changes
+    // without admin intervention.
+    const cascade = await step.run("llm-extract", async () => {
+      return runCascade(url, {
+        preferredStrategy: "html",
+        shulId,
+        timeoutMs: 25_000,
+      });
     });
 
     // ─── 5. Decide: auto-apply, or flag as broken? ──────────────
@@ -209,58 +226,99 @@ export const scrapeOneShul = inngest.createFunction(
       return rows[0]?.n ?? 0;
     });
 
-    const newCount = extracted.extraction.rules.length;
-    const verdict = evaluateExtractionGuardrails({
-      prevRuleCount: prevCount,
-      newRuleCount: newCount,
-      newConfidence: extracted.extraction.confidence,
-    });
+    // Cascade may return strategy='failed' (no tier yielded useful rules).
+    // Treat as a broken extraction — same handling as guardrail failure.
+    const cascadeFailed = cascade.strategy === "failed" || !cascade.extraction;
+    const newCount = cascade.extraction?.rules.length ?? 0;
+    const newConfidence = cascade.extraction?.confidence ?? 0;
+    const verdict = cascadeFailed
+      ? { shouldFlagBroken: true, reason: "cascade exhausted all tiers" }
+      : evaluateExtractionGuardrails({
+          prevRuleCount: prevCount,
+          newRuleCount: newCount,
+          newConfidence,
+        });
 
     if (verdict.shouldFlagBroken) {
       // Don't auto-apply. Mark broken, flag for review, keep old rules
       // in place so daveners see the previous schedule until reviewed.
+      //
+      // Fix Q'/CC: stamp first_broken_at on first broken in streak; demote
+      // shul.status from active→pending_review when no other approved+ok
+      // source remains for the shul.
+      // Wrapped in db.transaction so Inngest retry on partial failure
+      // doesn't double-insert the scrape_run audit row. All three writes
+      // (run audit, data_source mark-broken, parent-shul demote) are now
+      // atomic; on retry, the whole step replays cleanly.
       await step.run("mark-broken", async () => {
-        await db.insert(scrapeRun).values({
-          shulId,
-          dataSourceId,
-          startedAt: new Date(),
-          finishedAt: new Date(),
-          status: "broken",
-          rulesAdded: 0,
-          rulesRemoved: 0,
-          rulesChanged: 0,
-          error: verdict.reason ?? "broken",
-        });
-        await db
-          .update(dataSource)
-          .set({
-            lastRunAt: new Date(),
-            lastRunStatus: "broken",
-            reviewStatus: "pending",
-            confidenceScore: extracted.extraction.confidence,
-            updatedAt: new Date(),
-            // store the rejected proposal in config_json for the reviewer to inspect
-            configJson: {
-              ...(loaded.configJson as object | null ?? {}),
-              last_rejected_extraction: {
-                at: new Date().toISOString(),
-                model: extracted.model,
-                page_content_hash: extracted.pageContentHash,
-                confidence: extracted.extraction.confidence,
-                reasoning: extracted.extraction.reasoning,
-                rules_count: newCount,
-                previous_rules_count: prevCount,
+        const now = new Date();
+        await db.transaction(async (tx) => {
+          await tx.insert(scrapeRun).values({
+            shulId,
+            dataSourceId,
+            startedAt: now,
+            finishedAt: now,
+            status: "broken",
+            rulesAdded: 0,
+            rulesRemoved: 0,
+            rulesChanged: 0,
+            error: verdict.reason ?? "broken",
+          });
+          await tx
+            .update(dataSource)
+            .set({
+              lastRunAt: now,
+              lastRunStatus: "broken",
+              reviewStatus: "pending",
+              confidenceScore: cascade.extraction?.confidence ?? null,
+              updatedAt: now,
+              // first_broken_at: only set if not already in a broken streak.
+              // raw SQL so we can COALESCE the existing value.
+              firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
+              // store the rejected proposal in config_json for the reviewer to inspect
+              configJson: {
+                ...(loaded.configJson as object | null ?? {}),
+                last_rejected_extraction: {
+                  at: now.toISOString(),
+                  model: cascade.model,
+                  page_content_hash: cascade.pageContentHash,
+                  confidence: cascade.extraction?.confidence ?? null,
+                  reasoning: cascade.extraction?.reasoning ?? null,
+                  cascade_attempts: cascade.attempts,
+                  rules_count: newCount,
+                  previous_rules_count: prevCount,
+                },
               },
-            },
-          })
-          .where(eq(dataSource.id, dataSourceId));
+            })
+            .where(eq(dataSource.id, dataSourceId));
+
+          // Fix CC: active→pending_review demotion. If the parent shul has
+          // no other approved+ok+fresh data_source after this run, demote
+          // shul.status so admin gets prompted instead of leaving stale
+          // rules visible on a "still active" shul.
+          await tx.execute(sql`
+            UPDATE shul
+               SET status = 'pending_review', updated_at = NOW()
+             WHERE id = ${shulId}
+               AND status = 'active'
+               AND NOT EXISTS (
+                 SELECT 1 FROM data_source ds2
+                  WHERE ds2.shul_id = shul.id
+                    AND ds2.id <> ${dataSourceId}
+                    AND ds2.review_status = 'approved'
+                    AND ds2.last_run_status = 'ok'
+                    AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
+                        NOW() - INTERVAL '14 days'
+               )
+          `);
+        });
       });
       return {
         changed: false,
         broken: true,
         prevCount,
         newCount,
-        confidence: extracted.extraction.confidence,
+        confidence: cascade.extraction?.confidence ?? 0,
       };
     }
 
@@ -269,6 +327,15 @@ export const scrapeOneShul = inngest.createFunction(
     // db.transaction so a partial failure mid-loop doesn't leave
     // duplicate rules on Inngest retry (the soft-delete would be a
     // no-op the second time, then the loop would re-insert).
+    //
+    // Fix EE: soft-delete skips rules with is_manual_edit=true so admin
+    // overrides survive across re-extractions.
+    // Fix Q': clear firstBrokenAt on transition back to ok.
+    // Fix H (continuation): persist the winning cascade.strategy on
+    // data_source.extractionStrategy so the next weekly cron routes
+    // through the correct tier (e.g. if HTML failed but vision_image
+    // succeeded, future cron uses rescrapeNonHtml path).
+    const extraction = cascade.extraction!; // guaranteed non-null past the broken-branch above
     const applied = await step.run("apply-changes", async () => {
       const now = new Date();
       return db.transaction(async (tx) => {
@@ -276,12 +343,16 @@ export const scrapeOneShul = inngest.createFunction(
           .update(minyanRule)
           .set({ deletedAt: now, updatedAt: now })
           .where(
-            and(eq(minyanRule.dataSourceId, dataSourceId), isNull(minyanRule.deletedAt)),
+            and(
+              eq(minyanRule.dataSourceId, dataSourceId),
+              isNull(minyanRule.deletedAt),
+              eq(minyanRule.isManualEdit, false),
+            ),
           )
           .returning({ id: minyanRule.id });
 
         let inserted = 0;
-        for (const r of extracted.extraction.rules) {
+        for (const r of extraction.rules) {
           await insertRuleFromExtraction(tx, {
             shulId,
             dataSourceId,
@@ -296,21 +367,35 @@ export const scrapeOneShul = inngest.createFunction(
           .set({
             lastRunAt: now,
             lastRunStatus: "ok",
-            confidenceScore: extracted.extraction.confidence,
+            // Recovery from a broken streak: mark-broken flipped this to
+            // 'pending' (lines 269 area). Now that the extraction recovered,
+            // restore 'approved' so the source re-qualifies for the public
+            // freshness gate (lib/freshness.ts hasFreshDataSourceForShul +
+            // the EXISTS clauses in lib/queries.ts), all of which now
+            // require review_status='approved' per Fix P. Without this
+            // restore, broken→recovered cycles would permanently hide the
+            // shul from public surfaces.
+            reviewStatus: "approved",
+            confidenceScore: extraction.confidence,
+            extractionStrategy: cascade.strategy,
+            firstBrokenAt: null,
             builtAt: now,
             builtBy: "llm",
             configJson: {
               ...(loaded.configJson as object | null ?? {}),
-              version: 1,
+              version: 2,
               page_url: url,
               final_url: fetched.finalUrl,
               fetched_status: fetched.status,
-              page_content_hash: extracted.pageContentHash,
-              model: extracted.model,
+              page_content_hash: cascade.pageContentHash,
+              extraction_strategy: cascade.strategy,
+              winning_url: cascade.winningUrl,
+              cascade_attempts: cascade.attempts,
+              model: cascade.model,
               prompt_version: "tfila-v1",
               extracted_at: now.toISOString(),
-              reasoning: extracted.extraction.reasoning,
-              usage: extracted.usage,
+              reasoning: extraction.reasoning,
+              usage: cascade.usage,
               last_rejected_extraction: undefined,
             },
             updatedAt: now,
@@ -335,9 +420,10 @@ export const scrapeOneShul = inngest.createFunction(
     return {
       changed: true,
       reason,
-      hash: extracted.pageContentHash,
-      confidence: extracted.extraction.confidence,
-      model: extracted.model,
+      hash: cascade.pageContentHash,
+      confidence: extraction.confidence,
+      model: cascade.model,
+      strategy: cascade.strategy,
       ...applied,
     };
   },
@@ -385,16 +471,49 @@ async function rescrapeNonHtml(
 
   if (cascade.strategy === "failed" || !cascade.extraction) {
     await step.run("mark-broken-cascade-failed", async () => {
-      await db.insert(scrapeRun).values({
-        shulId: args.shulId,
-        dataSourceId: args.dataSourceId,
-        startedAt: new Date(),
-        finishedAt: new Date(),
-        status: "broken",
-        rulesAdded: 0,
-        rulesRemoved: 0,
-        rulesChanged: 0,
-        error: `cascade re-run failed for strategy ${args.strategy}`,
+      const now = new Date();
+      await db.transaction(async (tx) => {
+        await tx.insert(scrapeRun).values({
+          shulId: args.shulId,
+          dataSourceId: args.dataSourceId,
+          startedAt: now,
+          finishedAt: now,
+          status: "broken",
+          rulesAdded: 0,
+          rulesRemoved: 0,
+          rulesChanged: 0,
+          error: `cascade re-run failed for strategy ${args.strategy}`,
+        });
+        await tx
+          .update(dataSource)
+          .set({
+            lastRunAt: now,
+            lastRunStatus: "broken",
+            // Match the other two mark-broken sites: bump back to pending
+            // review so this row appears in the admin Broken inbox. Without
+            // this, the source stays approved+broken and only Fix G/V's
+            // "no approved+ok+fresh source" reduction picks it up — but it
+            // still pollutes the apparent "approved" count.
+            reviewStatus: "pending",
+            firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
+            updatedAt: now,
+          })
+          .where(eq(dataSource.id, args.dataSourceId));
+        await tx.execute(sql`
+          UPDATE shul
+             SET status = 'pending_review', updated_at = NOW()
+           WHERE id = ${args.shulId}
+             AND status = 'active'
+             AND NOT EXISTS (
+               SELECT 1 FROM data_source ds2
+                WHERE ds2.shul_id = shul.id
+                  AND ds2.id <> ${args.dataSourceId}
+                  AND ds2.review_status = 'approved'
+                  AND ds2.last_run_status = 'ok'
+                  AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
+                      NOW() - INTERVAL '14 days'
+             )
+        `);
       });
     });
     return { changed: false, broken: true, strategy: args.strategy };
@@ -422,12 +541,15 @@ async function rescrapeNonHtml(
 
   if (verdict.shouldFlagBroken) {
     await step.run("mark-broken-guardrail", async () => {
+      const now = new Date();
+      // All three writes in one transaction so Inngest retries don't
+      // double-insert scrape_run audit rows.
       await db.transaction(async (tx) => {
         await tx.insert(scrapeRun).values({
           shulId: args.shulId,
           dataSourceId: args.dataSourceId,
-          startedAt: new Date(),
-          finishedAt: new Date(),
+          startedAt: now,
+          finishedAt: now,
           status: "broken",
           rulesAdded: 0,
           rulesRemoved: 0,
@@ -437,13 +559,29 @@ async function rescrapeNonHtml(
         await tx
           .update(dataSource)
           .set({
-            lastRunAt: new Date(),
+            lastRunAt: now,
             lastRunStatus: "broken",
             reviewStatus: "pending",
             confidenceScore: cascade.extraction!.confidence,
-            updatedAt: new Date(),
+            firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
+            updatedAt: now,
           })
           .where(eq(dataSource.id, args.dataSourceId));
+        await tx.execute(sql`
+          UPDATE shul
+             SET status = 'pending_review', updated_at = NOW()
+           WHERE id = ${args.shulId}
+             AND status = 'active'
+             AND NOT EXISTS (
+               SELECT 1 FROM data_source ds2
+                WHERE ds2.shul_id = shul.id
+                  AND ds2.id <> ${args.dataSourceId}
+                  AND ds2.review_status = 'approved'
+                  AND ds2.last_run_status = 'ok'
+                  AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
+                      NOW() - INTERVAL '14 days'
+             )
+        `);
       });
     });
     return {
@@ -457,6 +595,10 @@ async function rescrapeNonHtml(
   // Apply atomically: soft-delete + insert + data_source update + audit.
   // The whole block is one transaction so a partial failure mid-loop
   // doesn't leave duplicate rules on Inngest retry.
+  //
+  // Fix EE: soft-delete skips rules with is_manual_edit=true so admin
+  // overrides survive across re-extractions.
+  // Fix Q': clear firstBrokenAt on transition back to ok.
   const applied = await step.run("apply-changes", async () => {
     const now = new Date();
     return db.transaction(async (tx) => {
@@ -467,6 +609,7 @@ async function rescrapeNonHtml(
           and(
             eq(minyanRule.dataSourceId, args.dataSourceId),
             isNull(minyanRule.deletedAt),
+            eq(minyanRule.isManualEdit, false),
           ),
         )
         .returning({ id: minyanRule.id });
@@ -488,7 +631,14 @@ async function rescrapeNonHtml(
           identifier: submittedUrl,
           lastRunAt: now,
           lastRunStatus: "ok",
+          // Recovery: restore reviewStatus='approved' if mark-broken
+          // had flipped it to 'pending'. See the matching block in the
+          // main scrapeOneShul apply-changes for the rationale (Fix P
+          // requires approved for public freshness).
+          reviewStatus: "approved",
           confidenceScore: cascade.extraction!.confidence,
+          extractionStrategy: cascade.strategy,
+          firstBrokenAt: null,
           builtAt: now,
           builtBy: "llm",
           configJson: {

@@ -30,13 +30,26 @@ export default async function AdminHomePage() {
   }));
   const counts = bucketByState(withState.map((x) => x.state));
 
-  // Inbox = needs-attention rows, sorted urgent-first then by oldest pending
+  // Inbox = needs-attention rows, sorted urgent-first.
+  // Fix S: within the "broken" tier, sort by first_broken_at DESC so the
+  // most-recent breakage floats to the top — admin sees this week's
+  // fails first, chronic ones drop below.
   const inbox = withState
     .filter((x) => isInboxState(x.state))
     .sort((a, b) => {
       const dk = adminShulStateSortKey(a.state) - adminShulStateSortKey(b.state);
       if (dk !== 0) return dk;
-      // Within state: prefer oldest signal (lowest lastFreshAt or oldest submittedAt)
+      // Within "broken" / "no_good_source" / "stale" tier, newer broken first.
+      if (a.row.firstBrokenAt || b.row.firstBrokenAt) {
+        const aT = a.row.firstBrokenAt
+          ? new Date(a.row.firstBrokenAt).valueOf()
+          : 0;
+        const bT = b.row.firstBrokenAt
+          ? new Date(b.row.firstBrokenAt).valueOf()
+          : 0;
+        if (aT !== bT) return bT - aT;
+      }
+      // Other tiers: prefer oldest signal (lowest lastFreshAt or oldest submittedAt)
       const at = (a.row.lastFreshAt ?? a.row.submittedAt).valueOf();
       const bt = (b.row.lastFreshAt ?? b.row.submittedAt).valueOf();
       return at - bt;

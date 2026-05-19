@@ -437,6 +437,9 @@ export default async function AdminShulDetailPage({
       </section>
 
       {/* ─── Data sources ───────────────────────────────────── */}
+      {/* Active sources first; failed extractions and rejected/superseded
+          sources are kept for audit but visually demoted into the
+          collapsed section below the main list. */}
       <section className="mt-6">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
           Data sources ({dataSources.length})
@@ -447,7 +450,13 @@ export default async function AdminShulDetailPage({
           </p>
         ) : (
           <ul className="space-y-2">
-            {dataSources.map((ds) => (
+            {dataSources
+              .filter(
+                (ds) =>
+                  ds.extractionStrategy !== "failed" &&
+                  ds.reviewStatus !== "rejected",
+              )
+              .map((ds) => (
               <li
                 key={ds.id}
                 className="rounded-xl border border-neutral-200 bg-white p-3"
@@ -536,6 +545,64 @@ export default async function AdminShulDetailPage({
             on any data source above.
           </p>
         )}
+
+        {/* Fix X: demoted sources — failed extractions + rejected/superseded
+            data_sources. Kept here so admin can audit history without them
+            cluttering the primary source list. */}
+        {(() => {
+          const demoted = dataSources.filter(
+            (ds) =>
+              ds.extractionStrategy === "failed" ||
+              ds.reviewStatus === "rejected",
+          );
+          if (demoted.length === 0) return null;
+          return (
+            <details className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium text-neutral-500 hover:text-neutral-700">
+                Failed / superseded ({demoted.length})
+              </summary>
+              <ul className="mt-2 space-y-1.5">
+                {demoted.map((ds) => (
+                  <li
+                    key={ds.id}
+                    className="rounded border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-600 opacity-75"
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <div className="min-w-0">
+                        <Link
+                          href={`/admin/data-source/${ds.id}`}
+                          className="font-mono text-amber-800 underline-offset-2 hover:underline"
+                        >
+                          ds {ds.id} · {ds.kind}
+                        </Link>
+                        <div className="mt-0.5 truncate text-neutral-500">
+                          {ds.identifier}
+                        </div>
+                        {ds.reviewerNotes && (
+                          <div className="mt-0.5 italic text-neutral-500">
+                            {ds.reviewerNotes}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`rounded px-1.5 py-0.5 ${reviewBadge(ds.reviewStatus)}`}
+                        >
+                          {ds.reviewStatus}
+                        </span>
+                        {ds.extractionStrategy && (
+                          <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-neutral-600">
+                            {ds.extractionStrategy.replace(/_/g, " ")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          );
+        })()}
       </section>
 
       {/* ─── Recent scrape runs ─────────────────────────────── */}

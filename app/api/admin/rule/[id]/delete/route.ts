@@ -19,9 +19,17 @@ export async function POST(
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
 
+  // Fix EE: mark as manual edit AND soft-delete. The is_manual_edit flag
+  // prevents the weekly cron from re-creating this rule via the rule-
+  // replacement step. Without the flag, an admin "delete" would silently
+  // come back on the next extraction.
   await db
     .update(minyanRule)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .set({
+      deletedAt: new Date(),
+      isManualEdit: true,
+      updatedAt: new Date(),
+    })
     .where(eq(minyanRule.id, ruleId));
 
   // Redirect back to whichever data_source page this came from
