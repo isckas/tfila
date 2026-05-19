@@ -52,3 +52,21 @@ export function formatDistanceMiles(miles: number): string {
   if (miles < 10) return `${miles.toFixed(1)} mi`;
   return `${Math.round(miles)} mi`;
 }
+
+/**
+ * Human-readable "freshness" relative to now. Used by the verified-N-days-ago
+ * badge on shul cards and detail pages. <1h shows "just now", <24h shows
+ * "Nh ago", otherwise "Nd ago" or "N weeks ago" for older entries.
+ */
+export function formatRelativeDays(when: Date, now: Date = new Date()): string {
+  const diffMs = now.getTime() - when.getTime();
+  if (diffMs < 60 * 60_000) return "just now";
+  if (diffMs < 24 * 60 * 60_000) {
+    const h = Math.floor(diffMs / (60 * 60_000));
+    return h <= 1 ? "1h ago" : `${h}h ago`;
+  }
+  const d = Math.floor(diffMs / (24 * 60 * 60_000));
+  if (d < 14) return d === 1 ? "1d ago" : `${d}d ago`;
+  const weeks = Math.floor(d / 7);
+  return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
+}

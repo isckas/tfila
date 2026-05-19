@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api
+
+User-agent: Tfila-Bot
+Allow: /
+Disallow: /admin
+
+# About Tfila-Bot: https://tfila.co/bot
+Sitemap: https://tfila.co/sitemap.xml

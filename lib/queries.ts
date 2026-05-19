@@ -510,6 +510,8 @@ export interface NearbyShulRule {
   validTo: string | null;
   ruleNusach: string | null;
   notes: string | null;
+  /** Most-recent successful scrape across all data_sources for this shul. */
+  lastVerifiedAt: Date | null;
 }
 
 /**
@@ -550,6 +552,7 @@ export async function getNearbyShulsWithRules(
     valid_to: string | null;
     rule_nusach: string | null;
     notes: string | null;
+    last_verified_at: string | null;
   }>(sql`
     SELECT
       s.id AS shul_id,
@@ -571,7 +574,12 @@ export async function getNearbyShulsWithRules(
       mr.valid_from,
       mr.valid_to,
       mr.nusach AS rule_nusach,
-      mr.notes
+      mr.notes,
+      (
+        SELECT MAX(COALESCE(ds2.last_received_at, ds2.last_run_at))
+        FROM data_source ds2
+        WHERE ds2.shul_id = s.id AND ds2.last_run_status = 'ok'
+      ) AS last_verified_at
     FROM shul s
     JOIN minyan_rule mr ON mr.shul_id = s.id
     LEFT JOIN data_source ds ON ds.id = mr.data_source_id
@@ -611,5 +619,6 @@ export async function getNearbyShulsWithRules(
     validTo: r.valid_to,
     ruleNusach: r.rule_nusach,
     notes: r.notes,
+    lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at) : null,
   }));
 }

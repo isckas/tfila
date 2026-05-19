@@ -20,6 +20,7 @@ import {
   isoDateInTz,
   parseDateOnly,
 } from "@/lib/shul-schedule";
+import { formatRelativeDays } from "@/lib/format";
 import type { MinyanTime } from "@/db/schema";
 
 interface PageProps {
@@ -33,11 +34,25 @@ export async function generateMetadata({ params }: PageProps) {
   const { slug } = await params;
   const shul = await getShulBySlug(slug);
   if (!shul) return { title: "Shul not found" };
+  const description = shul.address
+    ? `Minyan times for ${shul.name}. ${shul.address}. Kept fresh automatically.`
+    : `Minyan times for ${shul.name}. Kept fresh automatically.`;
+  const ogTitle = `${shul.name} · tfila.co`;
   return {
     title: shul.name,
-    description: shul.address
-      ? `${shul.name} — minyan times. ${shul.address}.`
-      : `${shul.name} minyan times`,
+    description,
+    openGraph: {
+      title: ogTitle,
+      description,
+      type: "website",
+      siteName: "tfila.co",
+      url: `https://tfila.co/shul/${slug}`,
+    },
+    twitter: {
+      card: "summary",
+      title: ogTitle,
+      description,
+    },
   };
 }
 
@@ -178,6 +193,14 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
               {shul.nusach}
             </span>
           )}
+          {lastScrapedAt && (
+            <span
+              className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-800"
+              title={`Last verified ${lastScrapedAt.toLocaleString(undefined, { timeZone: tz })}`}
+            >
+              Verified {formatRelativeDays(lastScrapedAt, now)}
+            </span>
+          )}
           {distance != null && (
             <span className="rounded bg-neutral-100 px-1.5 py-0.5 tabular-nums text-neutral-700">
               {formatDistance(distance)} from your location
@@ -238,7 +261,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
                       it.tefillahLabel ??
                       it.tefillah}
                     {it.specialScheduleKind !== "regular" && (
-                      <span className="ml-2 rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-800">
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">
                         {it.specialScheduleKind.replace(/_/g, " ")}
                       </span>
                     )}

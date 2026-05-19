@@ -15,6 +15,214 @@ to PROGRESS.md commits + FEATURES.md entries when relevant.
 
 ---
 
+## 2026-05-18 (afternoon) — `/save` + `/resume` skill design
+
+After the v2 canary expansion completed (all 3 tiers verified — see next section), built two user-level Claude Code skills to codify the session-continuity ritual that was being done manually. The skills + PreCompact hook are installed at user scope (`~/.claude/skills/`) so they work in every project.
+
+### Decision 1 — Build skills, not slash commands
+
+**Options:** (a) slash commands at `.claude/commands/`, (b) skills at `.claude/skills/`, (c) hooks-only auto-capture.
+
+**Chose (b).** Slash commands are deprecated in favor of skills. Skills support `$ARGUMENTS`, rich frontmatter, supporting files, and are the modern equivalent. Pure prompt-injection is the right pattern for "ritual codification" — Claude executes the skill body using normal tools.
+
+### Decision 2 — User scope, not project scope
+
+**Options:** user-wide (`~/.claude/skills/`), project-only (`.claude/skills/`), or both.
+
+**Chose user-wide.** Drift prevention is universal — every project benefits from `/save` + `/resume`. If a specific project later needs custom save behavior, drop a project-level `.claude/skills/save/SKILL.md` and Claude Code's resolver picks project over user (project wins on name conflict).
+
+### Decision 3 — Pair `/save` with `/resume` (vs. /save only or auto-load)
+
+**Options:** (a) `/save` only, (b) `/save` + `/resume` pair, (c) `/save` + auto-load on session start via CLAUDE.md instruction.
+
+**Chose (b).** Auto-load (c) creates 5-10s overhead on every session start, including trivial questions where you just want to ask one thing. Manual `/resume` is opt-in: type 7 characters when you actually need state reconstruction. Pairs reinforce each other: `/save` at end, `/resume` at start.
+
+### Decision 4 — Update existing docs, don't introduce a new SESSION-STATE.md type
+
+**Options:** (a) update SESSION.md/PROGRESS.md/DECISIONS.md/auto-memory (existing pattern), (b) write a new SESSION-STATE.md per project, (c) both.
+
+**Chose (a).** Reuses what's already maintained. SESSION.md gets the pickup snapshot (briefing format); DECISIONS.md gets new decisions; auto-memory gets durable user/feedback/project memories. No new file types to learn or maintain.
+
+### Decision 5 — Quick mode + deep mode split (`/save quick` vs `/save`)
+
+**Context:** sometimes you want a 2-line "stepping away from keyboard" save vs a full session checkpoint. v1 of the design was binary.
+
+**Chose:** two modes. `/save quick` = ~10s, single block prepended to SESSION.md with branch/tasks/intent/next-action. `/save` (deep) = ~30s, full categorization + 4 files touched.
+
+**Why it matters:** the PreCompact hook (Decision 7) uses `quick` mode so the auto-save doesn't take longer than the compaction itself. Forces a clean separation between defensive snapshots and intentional checkpoints.
+
+### Decision 6 — Briefing-format SESSION.md sections (not just a free-form log)
+
+Per Active Context Compression research (arxiv 2601.07190) and LangChain's deep-agents context-management guide, the highest-value format for cross-session handoff is a "briefing for the next LLM" with explicit fields:
+
+- Where we are (2-3 sentences)
+- Next concrete action (one sentence)
+- Constraints to preserve
+- Critical data (links, IDs, commits)
+
+**Chose:** make this the FIRST sub-section of every new SESSION.md entry. Past sections were implicitly briefing-like; v2 makes the structure explicit so `/resume` can parse predictable headings.
+
+### Decision 7 — PreCompact hook auto-fires `/save quick`
+
+**Context:** user's original ask was "when the rag window is compressed... nothing is lost." Manual `/save` doesn't help if the user steps away or forgets — auto-compaction fires silently and replaces context with a lossy summary.
+
+**Chose:** register a `PreCompact` hook in `~/.claude/settings.json` that runs `claude /save quick` before compaction. Catches the failure mode in the original ask. Per Claude Code's hook system, `PreCompact` fires reliably before compression happens.
+
+**Implication:** even if user has zero `/save` discipline, the durable doc captures critical state before any compaction. Quick mode keeps the auto-save lightweight enough not to disrupt flow.
+
+### Decision 8 — Goal-drift check in `/resume`
+
+Per research (Active Context Compression paper): "2% misalignment → 40% failure rate" when drift compounds across sessions. v1 of the design had no drift detection — `/resume` just reported state.
+
+**Chose:** add an explicit goal-drift step. `/resume` compares SESSION.md's "next concrete action" to the user's current intent in this new conversation. If they diverge, ask one explicit confirmation question ("Last session pointed at X. Your current message looks like Y. Continue X or pivot to Y?") rather than silently routing into the wrong work.
+
+**Implication:** prevents the subtle failure where a user types "continue" but means something different from the prior session's stated next action.
+
+### Out of scope (deliberate)
+
+- **Multi-scope memory tagging** (mem0/agentmemory pattern with user_id/agent_id/session_id) — our auto-memory file types are working; defer.
+- **Vector retrieval over historical sessions** — needs vector DB / MCP; over-engineered for v1.
+- **Git tag at save point** — clever but adds friction.
+- **CLAUDE.md pattern codification** ("decision recurred 3+ times → suggest codifying") — needs retroactive scan; defer.
+- **Full agentmemory-style silent tool-use capture** — much bigger architectural change. PreCompact hook is the minimum-viable version.
+
+### Sources
+
+- [LangChain — Context Management for Deep Agents](https://blog.langchain.com/context-management-for-deepagents/)
+- [Zylos — AI Agent Context Compression](https://zylos.ai/research/2026-02-28-ai-agent-context-compression-strategies)
+- [Active Context Compression: Autonomous Memory Management in LLM Agents](https://arxiv.org/pdf/2601.07190)
+- [Persistent Memory for AI Coding Agents — Sourabh Sharma (Medium)](https://medium.com/@sourabh.node/persistent-memory-for-ai-coding-agents-an-engineering-blueprint-for-cross-session-continuity-999136960877)
+- [State of AI Agent Memory 2026 — mem0](https://mem0.ai/blog/state-of-ai-agent-memory-2026)
+- [Continuous-Claude-v3 — context management via hooks + ledgers (GitHub)](https://github.com/parcadei/Continuous-Claude-v3)
+- [Mastering Claude Code Sessions: --continue & --resume — AiOps School](https://aiopsschool.com/blog/mastering-claude-code-sessions-continue-resume/)
+- [agentmemory — persistent memory for AI coding agents (GitHub)](https://github.com/rohitg00/agentmemory)
+
+---
+
+## 2026-05-18 (morning) — Extraction Pipeline v2 deployment + canary
+
+Deploy day for the v2 rewrite built on 2026-05-17. Five concrete decisions captured below — the host-pivot, the canary shape, the two bugs found mid-canary, and the expanded-canary rollout plan. The build-side decisions are in the next section ("2026-05-17 — Extraction Pipeline v2 (one-shot rewrite)").
+
+### Decision 1 — Docling host: Hugging Face Spaces over Fly.io
+
+**Context:** the original plan in DECISIONS.md "2026-05-17" specified Fly.io as the deployment target for Docling because it's the Docker hosting sweet spot — fast deploys, sane defaults, auto-stop billing. We tried it first.
+
+**The blocker:** Fly required a valid credit card for signup verification. The user's only payment instrument is a Wise prepaid card, which Fly rejected. Quote from the user: *"Docling on Fly.io wants a cc i only have a prepaid wise account and it does not work - what are my options?"*
+
+**Options considered (no-CC required):**
+- (a) Hugging Face Spaces — free CPU Basic tier (2 vCPU, 16 GB RAM), Docker SDK
+- (b) Self-host on user's PC + Cloudflare Tunnel — only works when PC is on
+- (c) Koyeb free tier — 512 MB RAM, tight for Docling
+
+**Chose (a) Hugging Face Spaces.** Free forever, no CC EVER, 16 GB RAM (>>>Docling's 1 GB minimum), official-ish (HF has a partnership with IBM Research on Docling). 30s cold-start after 48h idle is acceptable for our weekly cron workload — one cold start across the whole batch. For ad-hoc admin "Extract now" actions, the 30s extra wait is rare.
+
+**Implications:**
+- Created HF account `IsKa123`, generated write token, saved to `.env.local` as `HF_TOKEN`
+- Created Space `IsKa123/tfila-docling-serve` via HF API (no UI clicks needed)
+- Pushed minimal Dockerfile wrapping `quay.io/docling-project/docling-serve-cpu:latest` (had to override entrypoint with explicit `--host 0.0.0.0 --port 7860` because HF requires port 7860 and the base image's `DOCLING_SERVE_PORT` env var override was silently ignored)
+- Two build hiccups fixed mid-flight: `CORS_ORIGINS=["*"]` env var broke pydantic-settings JSON parser (removed; CORS doesn't matter for server-to-server); port env var ignored (overrode via CLI flag)
+- Endpoint live at `https://iska123-tfila-docling-serve.hf.space`. Saved to `.env.local` + Vercel prod env as `DOCLING_URL`
+- Smoke-tested against arxiv 9-page PDF: HTTP 200, 1.6 MB markdown, status=success, 89s processing
+
+**New standing rule:** see [[feedback-no-credit-card-services]] memory file. Default to no-CC services first (HF, Koyeb, Cloudflare, Vercel hobby, Neon free, Resend free, Render free); only mention CC-required options when no-CC equivalent can't meet the need.
+
+### Decision 2 — Single-shul canary first, NOT global flip
+
+**Context:** rollout plan supported two patterns: (a) flip `EXTRACTION_PIPELINE_V2=true` globally and watch what happens, or (b) start with `EXTRACTION_V2_SHUL_IDS=<one shul>` and verify before widening.
+
+**Chose (b) per-shul canary first, even though the feature is fully flag-gated.** Reasoning:
+
+- Per-shul canary lets us pick a HIGH-CONFIDENCE v1 baseline (BAYT, 48 rules at 0.92) and detect regression vs that specific baseline. With global flip we'd be averaging across 51 shuls of varying quality and a regression on one shul could be masked.
+- Per-shul canary also makes "rollback" trivial: just remove the ID from the env var. Global rollback needs `EXTRACTION_PIPELINE_V2` to be unset, which is the same action but applies to everyone — bigger blast radius for a typo.
+- **Crucially:** the per-shul approach is the ONLY way to detect a silent "flag has no effect" bug. Which is exactly what happened — see Decision 4 below.
+
+**Picked BAYT (id=41, html tier) as the first canary** out of 4 candidates:
+- id=41 BAYT — 48 rules HTML 0.92 ← chosen, biggest sample = most regression surface
+- id=7 Shaarei Tefillah — 29 rules HTML 0.92 — alternative
+- id=56 The Shul — 8 rules vision 0.95 — saved for round 2
+- id=10 Bris Avrohom Fair Lawn — 16 rules HTML 0.92 — fastest iteration if things go wrong
+
+### Decision 3 — Merge `extraction-v2` to main + flag-gate vs preview-only
+
+**Options:**
+- (a) Merge extraction-v2 → main, flag gates rollout
+- (b) Keep branch separate, deploy via Vercel preview URL first
+
+**Chose (a).** Reasoning: v2 is feature-flag-gated at the dispatcher layer. With `EXTRACTION_V2_SHUL_IDS` unset and `EXTRACTION_PIPELINE_V2` unset, the dispatcher's `shouldUseV2()` returns false for every shul — main behaves IDENTICALLY to before merge. There's no risk in merging.
+
+(b) would have added a layer (preview URL with different env scope) that doesn't catch anything (a) doesn't, while complicating the rollback story.
+
+PR #1 opened with full diff summary + rollback playbook + test plan checklist. Merged via `gh pr merge 1 --merge --delete-branch=false` to preserve the branch for safety.
+
+### Decision 4 — Mid-canary bug: `shulId` never threaded to dispatcher
+
+**Symptom:** BAYT's first Extract Now after env var set + branch merged produced a data_source whose `config_json.usage` had no `v2Meta` and whose rules had no `sourceQuote`. The cascade clearly ran but it ran v1, not v2.
+
+**Root cause:** the `runCascade()` dispatcher in `cascade.ts` reads `opts.shulId` to decide v1 vs v2. But the three call sites — `app/api/admin/shul/[id]/extract/route.ts`, `lib/inngest/functions/build-data-source.ts`, `lib/inngest/functions/scrape-one-shul.ts` — were all calling `runCascade(url, { timeoutMs: 25_000 })` without `shulId`. Without it, `shouldUseV2(undefined)` always returned false.
+
+**This was a build-time bug I introduced when adding the dispatcher** in commit `4f9e9e9`. I added `shulId` to `CascadeOpts` but forgot to update the call sites. Typecheck didn't catch it because `shulId` is optional in `CascadeOpts`.
+
+**Fix:** commit `7aa4c73` — threaded `shulId` from all three callers (each already had it in scope: `s.id` in the admin route, `shulId` param in build-data-source, `args.shulId` in scrape-one-shul).
+
+**Lesson worth remembering:** if a feature flag depends on a value being passed through multiple layers, **make the type non-optional everywhere it can be non-null at the call site**, or add a runtime warning when the flag is set but the input is missing. We DO have a `console.warn` in `shouldUseV2` for "v2 enabled but no shulId provided; falling back to v1" — but it only fires when `EXTRACTION_PIPELINE_V2=true` AND shulId is null. The per-shul case (`EXTRACTION_V2_SHUL_IDS=41` AND shulId is null) silently fell to v1 with no warning. Should add a similar warn for that branch in a follow-up.
+
+### Decision 5 — Mid-canary bug: router skipped HTML tier on legitimate calendar pages
+
+**Symptom:** after fix #1, BAYT's second Extract Now still failed — but differently. The cascade attempts showed:
+1. `html` tier `skipped` with errorMessage `"router: calendar_widget — jumping to JS render"`
+2. `js_rendered` extracted 0 rules at 0.05 confidence (only 992 chars of markdown back from Browserless + sanitize)
+3. `vision_image` extracted 0 rules from an unrelated FORWEBSITE.png banner
+4. `pdf_document` skipped — no .pdf links on page
+
+Result: cascade exhausted, shul marked `unsupported`. I had to manually restore `status='active'` in the DB.
+
+**Root cause:** my router classified `bayt.ca/calendar` as `calendar_widget` (probably because the page DOES embed a JS widget) and the cascade had a branch (in `cascade-v2.ts`) that skipped the HTML tier on that hint, jumping straight to JS-render. But v1 had successfully extracted **48 rules from the SAME URL via raw HTML** — proving the schedule IS in static HTML, just alongside a calendar widget. The router was being too clever.
+
+**Options considered:**
+- (a) Keep the `shouldRerenderJs` branch but tune the router's classification to be more conservative — only `calendar_widget` when the page CLEARLY has no static schedule content
+- (b) Remove the `shouldRerenderJs` branch entirely; always attempt HTML tier; let the cascade fall through to JS-render if HTML returns 0 rules
+- (c) Run HTML AND JS-render in parallel, take the better result
+
+**Chose (b).** Cleanest. The router's job is to ADVISE the cascade, not REPLACE the cascade's fall-through logic. The cascade was designed to fall through tiers; the router shouldn't short-circuit that. Cost is minimal — one extra Haiku call when HTML returns 0 (vs the entire failure we just saw).
+
+**Fix:** commit `c22a29c` — removed the `shouldRerenderJs` branch in `cascade-v2.ts`. Router is now advisory only; HTML tier always attempts unless `shouldSkipExtraction` flags the page as non-schedule (about/blog/error). `shouldRerenderJs` is still exported from `router.ts` but unused — left for potential future use or removal.
+
+**Result:** after deploy, BAYT's third Extract Now succeeded — 54 rules at 0.92 confidence, html tier, 100% sourceQuote coverage, single Haiku call. Matched v1's quality baseline.
+
+**Lesson worth remembering:** ML-classifier-driven routing is risky when the classifier's wrong answer is "do nothing." Prefer "advise + still try" over "advise + skip" unless skipping is provably safe.
+
+### Decision 6 — Expanded canary plan + global flip criteria
+
+**Context:** BAYT canary success validated HTML tier + the agent loop. Still untested in prod: js_rendered, vision_image, pdf_document tiers, AND the email path.
+
+**Plan (drafted in scratch file, saved to project as `docs/EXTRACTION-V2-ROLLOUT-PLAN.md`):**
+
+- **Phase A — expand canary set:** add id=67 (Chevra Ahavas Yisroel, js_rendered) + id=56 (The Shul, vision_image) to `EXTRACTION_V2_SHUL_IDS`. Set becomes `41,56,67`.
+- **Phase B — manually trigger** both new canaries; verify v2Meta + sourceQuotes vs v1 baselines.
+- **Phase C — wait for weekly cron** (Sat 2026-05-23 03:00 UTC → Sun 2026-05-24 morning cron-summary email). Three canary shuls run through scrape-one-shul → cascade dispatcher → v2 path. Other 48 keep running v1.
+- **Phase D — global flip (conditional):** if all 3 canaries `ok` Sunday morning, set `EXTRACTION_PIPELINE_V2=true`, remove `EXTRACTION_V2_SHUL_IDS`, all 51 active shuls run v2.
+
+**PDF tier remains untested.** No PDF-bearing shuls in the active pool. Docling standalone smoke test passed; the integration is exercised end-to-end (HF Space + lib/scrapers/docling.ts + cascade-v2's tier 4) but no live shul has triggered it. **Decision: accept the gap, document it, defer real-world PDF canary until a PDF shul arrives organically.**
+
+**Pass criteria per canary:**
+- `last_run_status = ok`
+- `confidence_score >= v1 baseline - 0.1`
+- `rules_count >= v1 baseline * 0.8`
+- `with_quote = total` (every v2 rule has sourceQuote)
+- Cost within 3× v1 baseline
+
+**Fail criteria (any of):**
+- `last_run_status != ok`
+- Rules dropped by >50% vs v1
+- Cost exceeds 5× v1
+- Confidence < 0.5 (was previously > 0.8)
+
+A single canary failure pauses Phase D and triggers code-side investigation; doesn't roll back the others.
+
+**Paused state at end of session:** Phase A NOT executed — user clicked Extract Now on 56 + 67 before env var update, so both routed to v1 (data_sources #100, #101 with no v2Meta). Resume by updating env var to `41,56,67` first, then re-trigger.
+
+---
+
 ## 2026-05-17 — Extraction Pipeline v2 (one-shot rewrite)
 
 The deepest decision thread of the entire build so far. Spans **two

@@ -7,6 +7,7 @@ import {
 } from "@/lib/queries";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
+import { isoDateInTz, parseDateOnly } from "@/lib/shul-schedule";
 import { reverseGeocode } from "@/lib/geocoding";
 import { FindCard } from "@/components/FindCard";
 import { LookupCard } from "@/components/LookupCard";
@@ -132,26 +133,56 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   // ─── Feed view (with location) ──────────────────────────────
   const now = new Date();
-  const todayDow = now.getDay();
+  // Travel mode: `?date=YYYY-MM-DD` anchors the schedule to that day
+  // instead of "now". Use a wide full-day window so users see the full
+  // day's services. Without `?date`, fall back to the "next ~24h"
+  // behavior the feed has always had.
+  const travelDate = sp.date ? parseDateOnly(sp.date) : null;
+  const referenceDate = travelDate ?? now;
+  const referenceDow = referenceDate.getDay();
   const rows = await getNearbyShulsWithRules(lat, lng, radiusMeters);
 
-  const earliest = now.getTime() - PAST_WINDOW_MIN * 60_000;
-  const latest = now.getTime() + FUTURE_WINDOW_MIN * 60_000;
+  const earliest = travelDate
+    ? Date.UTC(
+        travelDate.getUTCFullYear(),
+        travelDate.getUTCMonth(),
+        travelDate.getUTCDate(),
+      ) -
+      12 * 60 * 60_000
+    : now.getTime() - PAST_WINDOW_MIN * 60_000;
+  const latest = travelDate
+    ? Date.UTC(
+        travelDate.getUTCFullYear(),
+        travelDate.getUTCMonth(),
+        travelDate.getUTCDate(),
+      ) +
+      36 * 60 * 60_000
+    : now.getTime() + FUTURE_WINDOW_MIN * 60_000;
 
   const resolved: ResolvedMinyan[] = [];
   for (const r of rows) {
-    if (r.specialScheduleKind !== "regular") continue;
-    if (
+    // Special-schedule rules (Yom Tov, fasts, etc.) are included when their
+    // valid_from/valid_to bracket today in the shul's timezone — these are
+    // exactly the days where regular rules don't apply and users need to
+    // see the override. Without this branch, days like Tisha B'Av silently
+    // showed nothing for the feed because the only applicable rules were
+    // special. Mirrors the shul detail page's resolution logic.
+    if (r.specialScheduleKind && r.specialScheduleKind !== "regular") {
+      const refIso = isoDateInTz(referenceDate, r.timezone ?? "UTC");
+      if (r.validFrom && refIso < r.validFrom) continue;
+      if (r.validTo && refIso > r.validTo) continue;
+    } else if (
       r.daysOfWeek &&
       r.daysOfWeek.length > 0 &&
-      !r.daysOfWeek.includes(todayDow)
-    )
+      !r.daysOfWeek.includes(referenceDow)
+    ) {
       continue;
+    }
 
     const startDate = resolveRuleTime(
       r.time,
       { lat: r.lat, lng: r.lng, timezone: r.timezone },
-      now,
+      referenceDate,
     );
     if (!startDate) continue;
     const startMs = startDate.getTime();
@@ -171,6 +202,8 @@ export default async function HomePage({ searchParams }: PageProps) {
       startIso: startDate.toISOString(),
       timezone: r.timezone,
       notes: r.notes,
+      specialScheduleKind: r.specialScheduleKind ?? "regular",
+      lastVerifiedIso: r.lastVerifiedAt ? r.lastVerifiedAt.toISOString() : null,
     });
   }
   // Sort by start time first — for address-search, this also gives each
@@ -212,9 +245,18 @@ export default async function HomePage({ searchParams }: PageProps) {
   // geo-tz maps any lat/lng to its IANA tz; defensive fallback to ET
   // for the rare unmapped point.
   const userTz = findTz(lat, lng)[0] ?? "America/New_York";
-  const stripSnapshot = computeZmanimStrip({ lat, lng, timezone: userTz }, now);
+  const stripSnapshot = computeZmanimStrip(
+    { lat, lng, timezone: userTz },
+    referenceDate,
+  );
   const placeName = await reverseGeocode(lat, lng).catch(() => null);
   const addressLabel = sp.q?.trim() || placeName;
+  // Travel-mode date for the picker UI (always rendered, defaults to today).
+  const dateInputValue = sp.date && parseDateOnly(sp.date)
+    ? sp.date
+    : isoDateInTz(now, userTz);
+  const todayIsoInUserTz = isoDateInTz(now, userTz);
+  const isTravelMode = !!travelDate && dateInputValue !== todayIsoInUserTz;
 
   return (
     <main className="mx-auto max-w-2xl px-4 pb-8">
@@ -224,6 +266,44 @@ export default async function HomePage({ searchParams }: PageProps) {
         lng={lng}
         radiusMiles={radiusMiles}
       />
+
+      {/* Travel-mode date picker — GET form so each pick is a clean
+          server-rendered navigation. Defaults to today; switching to a
+          future or past date flips the feed into travel-planning shape
+          (full-day window instead of "next 24h"). */}
+      <form
+        method="get"
+        action="/"
+        className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-600"
+      >
+        <input type="hidden" name="lat" value={lat} />
+        <input type="hidden" name="lng" value={lng} />
+        {sp.radius && <input type="hidden" name="radius" value={sp.radius} />}
+        {sp.via && <input type="hidden" name="via" value={sp.via} />}
+        <label className="flex items-center gap-1.5">
+          <span className="text-neutral-500">Date:</span>
+          <input
+            type="date"
+            name="date"
+            defaultValue={dateInputValue}
+            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs focus-visible:border-neutral-500 focus-visible:outline-none"
+          />
+        </label>
+        <button
+          type="submit"
+          className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+        >
+          Update
+        </button>
+        {isTravelMode && (
+          <Link
+            href={`/?lat=${lat}&lng=${lng}${sp.radius ? `&radius=${sp.radius}` : ""}`}
+            className="text-xs text-neutral-500 underline-offset-2 hover:underline"
+          >
+            back to today
+          </Link>
+        )}
+      </form>
 
       {/* Zmanim */}
       <ZmanimStrip snapshot={stripSnapshot} timezone={userTz} />

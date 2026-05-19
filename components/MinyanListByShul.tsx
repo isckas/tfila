@@ -59,6 +59,11 @@ export function MinyanListByShul({ groups, serverNowMs }: Props) {
                 >
                   <span className="truncate text-neutral-700">
                     {TEFILLAH_LABEL[m.tefillah] ?? m.tefillahLabel ?? m.tefillah}
+                    {m.specialScheduleKind !== "regular" && (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">
+                        {m.specialScheduleKind.replace(/_/g, " ")}
+                      </span>
+                    )}
                     {m.ruleNusach && (
                       <span className="ml-2 text-xs uppercase tracking-wide text-neutral-500">
                         {m.ruleNusach}

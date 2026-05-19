@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { inngest } from "@/lib/inngest/client";
 import { extractOriginalSender } from "@/lib/inbound/extract-original-sender";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // Postmark Inbound webhook handler.
 //
@@ -67,6 +68,13 @@ function safeStringEq(a: string, b: string): boolean {
 export async function POST(req: Request): Promise<NextResponse> {
   if (!checkAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  // Global cap (not per-sender) — bounds total LLM cost in a runaway-
+  // forwarder scenario. Identifier is the constant key "global".
+  const cap = await checkRateLimit("inboundEmail", "global");
+  if (!cap.success) {
+    return NextResponse.json({ error: "rate-limited" }, { status: 429 });
   }
 
   let payload: PostmarkInboundPayload;

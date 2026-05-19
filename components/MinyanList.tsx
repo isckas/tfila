@@ -1,6 +1,20 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { RelativeTime } from "./RelativeTime";
-import { formatClockFromIso, formatDistanceMeters } from "@/lib/format";
+import {
+  formatClockFromIso,
+  formatDistanceMeters,
+  formatRelativeDays,
+} from "@/lib/format";
+
+/**
+ * Minutes after start during which a minyan is still considered "live."
+ * Loose heuristic — covers the typical tefillah duration on most days.
+ * Shabbos Shacharis can exceed this but the visual cue is still useful.
+ */
+const LIVE_WINDOW_MS = 30 * 60_000;
 
 export interface ResolvedMinyan {
   ruleId: number;
@@ -23,6 +37,12 @@ export interface ResolvedMinyan {
    */
   timezone: string | null;
   notes: string | null;
+  /** "regular" or a special kind like "yom_tov", "fast_day", etc. */
+  specialScheduleKind: string;
+  /** Most-recent successful scrape time as ISO string. Powers the
+   * "Verified Nd ago" trust chip. Null if no successful scrape (rare —
+   * the stale-gate query already excludes those). */
+  lastVerifiedIso: string | null;
 }
 
 interface Props {
@@ -40,63 +60,162 @@ const TEFILLAH_LABEL: Record<string, string> = {
   other: "Other",
 };
 
+type ChipFilter = "all" | "shacharis" | "mincha" | "maariv";
+
+const CHIP_ORDER: ChipFilter[] = ["all", "shacharis", "mincha", "maariv"];
+
+const CHIP_LABEL: Record<ChipFilter, string> = {
+  all: "All",
+  shacharis: "Shacharis",
+  mincha: "Mincha",
+  maariv: "Maariv",
+};
+
 export function MinyanList({ items, serverNowMs }: Props) {
-  if (items.length === 0) {
-    return (
-      <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-6 text-sm text-neutral-600">
-        Nothing in the next few hours within walking distance.
-        <span className="block mt-2 text-xs text-neutral-500">
-          (Most sprint-1 shuls don&apos;t have addresses yet, so this is expected
-          for now. The address-backfill pass lands next.)
-        </span>
-      </div>
-    );
-  }
+  const [active, setActive] = useState<ChipFilter>("all");
+
+  // Ticking clock — drives the "live" badge transitions and keeps the
+  // SSR-server-now match on first paint (no hydration flicker).
+  const [nowMs, setNowMs] = useState(serverNowMs);
+  useEffect(() => {
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Count per tefillah so we can hide empty chips (Maariv at 8am makes
+  // little sense as a chip). Always show "All" + whatever is present.
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const m of items) c[m.tefillah] = (c[m.tefillah] ?? 0) + 1;
+    return c;
+  }, [items]);
+
+  const visibleChips = CHIP_ORDER.filter(
+    (chip) => chip === "all" || (counts[chip] ?? 0) > 0,
+  );
+
+  const filtered = useMemo(() => {
+    if (active === "all") return items;
+    return items.filter((m) => m.tefillah === active);
+  }, [items, active]);
 
   return (
-    <ul className="space-y-2">
-      {items.map((m) => (
-        <li key={m.ruleId}>
-          <Link
-            href={`/shul/${m.shulSlug}`}
-            className="block rounded-xl border border-neutral-200 bg-white px-4 py-3 hover:border-neutral-300 hover:bg-neutral-50"
-          >
-            <div className="flex items-baseline justify-between gap-3">
-              <div className="min-w-0">
-                <div className="truncate font-medium text-neutral-900">
-                  {TEFILLAH_LABEL[m.tefillah] ?? m.tefillahLabel ?? m.tefillah}
-                  {m.ruleNusach && (
-                    <span className="ml-2 text-xs uppercase tracking-wide text-neutral-500">
-                      {m.ruleNusach}
-                    </span>
+    <>
+      {/* Filter chip row — only renders when there are at least 2 tefillah
+          buckets present (otherwise it's noise). */}
+      {visibleChips.length >= 3 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {visibleChips.map((chip) => {
+            const isActive = active === chip;
+            return (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => setActive(chip)}
+                className={
+                  "rounded-full border px-3 py-1 text-xs transition-colors " +
+                  (isActive
+                    ? "border-neutral-900 bg-neutral-900 text-white"
+                    : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
+                }
+              >
+                {CHIP_LABEL[chip]}
+                {chip !== "all" && (
+                  <span className="ml-1 text-neutral-400">
+                    {counts[chip] ?? 0}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-6 text-sm text-neutral-600">
+          {active === "all"
+            ? "Nothing in the next few hours within walking distance."
+            : `No ${CHIP_LABEL[active]} in the next few hours within walking distance.`}
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {filtered.map((m) => {
+            const startMs = new Date(m.startIso).getTime();
+            const isLive =
+              nowMs > startMs && nowMs - startMs < LIVE_WINDOW_MS;
+            return (
+              <li key={m.ruleId}>
+                <Link
+                  href={`/shul/${m.shulSlug}`}
+                  className={
+                    "block rounded-xl border bg-white px-4 py-3 hover:bg-neutral-50 " +
+                    (isLive
+                      ? "border-emerald-300 ring-1 ring-emerald-100"
+                      : "border-neutral-200 hover:border-neutral-300")
+                  }
+                >
+                  <div className="flex items-baseline justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2 font-medium text-neutral-900">
+                        <span className="truncate">
+                          {TEFILLAH_LABEL[m.tefillah] ?? m.tefillahLabel ?? m.tefillah}
+                        </span>
+                        {isLive && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                            live
+                          </span>
+                        )}
+                        {m.specialScheduleKind !== "regular" && (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-normal text-amber-800">
+                            {m.specialScheduleKind.replace(/_/g, " ")}
+                          </span>
+                        )}
+                        {m.ruleNusach && (
+                          <span className="text-xs uppercase tracking-wide text-neutral-500">
+                            {m.ruleNusach}
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="truncate text-sm font-normal text-neutral-600">
+                        {m.shulName}
+                        {m.address && (
+                          <span className="ml-2 text-neutral-400">· {m.address}</span>
+                        )}
+                      </h3>
+                      {m.lastVerifiedIso && (
+                        <div className="mt-0.5 text-xs text-emerald-700">
+                          Verified{" "}
+                          {formatRelativeDays(
+                            new Date(m.lastVerifiedIso),
+                            new Date(nowMs),
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-semibold tabular-nums text-neutral-900">
+                        {formatClockFromIso(m.startIso, m.timezone)}
+                      </div>
+                      <div className="text-xs">
+                        <RelativeTime iso={m.startIso} serverNowMs={serverNowMs} />
+                      </div>
+                      <div className="text-xs text-neutral-500 tabular-nums">
+                        {formatDistanceMeters(m.distanceMeters)}
+                      </div>
+                    </div>
+                  </div>
+                  {m.notes && (
+                    <div className="mt-1 text-xs text-neutral-500">{m.notes}</div>
                   )}
-                </div>
-                <h3 className="truncate text-sm font-normal text-neutral-600">
-                  {m.shulName}
-                  {m.address && (
-                    <span className="ml-2 text-neutral-400">· {m.address}</span>
-                  )}
-                </h3>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="font-semibold tabular-nums text-neutral-900">
-                  {formatClockFromIso(m.startIso, m.timezone)}
-                </div>
-                <div className="text-xs">
-                  <RelativeTime iso={m.startIso} />
-                </div>
-                <div className="text-xs text-neutral-500 tabular-nums">
-                  {formatDistanceMeters(m.distanceMeters)}
-                </div>
-              </div>
-            </div>
-            {m.notes && (
-              <div className="mt-1 text-xs text-neutral-500">{m.notes}</div>
-            )}
-          </Link>
-        </li>
-      ))}
-    </ul>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
   );
 }
 

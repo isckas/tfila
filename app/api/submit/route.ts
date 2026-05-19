@@ -8,6 +8,7 @@ import { notifyAdmin } from "@/lib/email";
 import { matchDomainOf } from "@/lib/dedup";
 import { resolveScheduleUrl } from "@/lib/discovery/find-schedule-page";
 import { assertPublicHttpUrl, UnsafeHostError } from "@/lib/ssrf";
+import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 
 /** Don't re-fire extraction for the same domain more than once per this. */
 const DOMAIN_REFIRE_COOLDOWN_MIN = 30;
@@ -32,6 +33,11 @@ function fail(req: Request, code: string): NextResponse {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
+  const ipCheck = await checkRateLimit("submitIp", clientIp(req));
+  if (!ipCheck.success) {
+    return fail(req, "rate-limited");
+  }
+
   const form = await req.formData();
   const url = (form.get("url") as string | null)?.trim() ?? "";
   const email = (form.get("email") as string | null)?.trim() || null;

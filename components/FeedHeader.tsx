@@ -33,20 +33,20 @@ export function FeedHeader({ placeName, lat, lng, radiusMiles }: Props) {
             href="/find"
             aria-label="Look up a shul"
             title="Look up a shul by name"
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
           >
             🔍
           </Link>
           <Link
             href="/submit"
-            className="hidden h-7 items-center rounded-full border border-neutral-300 px-2.5 text-neutral-700 hover:bg-neutral-100 sm:flex"
+            className="hidden h-11 items-center rounded-full border border-neutral-300 px-3 text-neutral-700 hover:bg-neutral-100 sm:flex"
           >
             + Add shul
           </Link>
           <Link
             href="/submit"
             aria-label="Add a shul"
-            className="flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:bg-neutral-100 sm:hidden"
+            className="flex h-11 w-11 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:bg-neutral-100 sm:hidden"
           >
             +
           </Link>

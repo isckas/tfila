@@ -1,9 +1,18 @@
 import { NextResponse } from "next/server";
 import { isAllowedAdmin, signMagicLinkToken } from "@/lib/auth";
 import { sendTransactional } from "@/lib/email";
+import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
   try {
+    const ipCheck = await checkRateLimit("adminLinkIp", clientIp(req));
+    if (!ipCheck.success) {
+      return NextResponse.redirect(
+        new URL("/signin?err=rate-limited", req.url),
+        303,
+      );
+    }
+
     const form = await req.formData();
     const emailRaw = form.get("email");
     const email =
@@ -14,6 +23,13 @@ export async function POST(req: Request) {
         { error: "Valid email required" },
         { status: 400 },
       );
+    }
+
+    const emailCheck = await checkRateLimit("adminLinkEmail", email);
+    if (!emailCheck.success) {
+      // Still redirect to the success page — don't reveal the rate-limit
+      // state to a probing attacker. Just silently drop the send.
+      return NextResponse.redirect(new URL("/signin?sent=1", req.url), 303);
     }
 
     // Defensive: don't reveal whether an email is on the allow-list. Always

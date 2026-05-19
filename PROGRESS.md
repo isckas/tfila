@@ -13,11 +13,48 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-05-16 (observability + extraction research) + 2026-05-17 (full v2 extraction-pipeline rewrite on `extraction-v2` branch).**
+**Last working session: 2026-05-17 (full v2 build, 14 commits on extraction-v2 branch) + 2026-05-18 (deploy day: HF Spaces, Jina key, Vercel env, PR #1 merge, BAYT canary verified, 2 mid-canary bugs fixed).**
 
-See **[SESSION.md](./SESSION.md)** for the canonical pickup doc and **[DECISIONS.md](./DECISIONS.md)** for the verbose rationale behind the v2 rewrite (16 step-by-step decisions covering branch isolation, feature flag, free-tier tech, agent loop, tools, source quoting, router, critique, model strategy, etc.).
+See **[SESSION.md](./SESSION.md)** for the canonical pickup doc and **[DECISIONS.md](./DECISIONS.md)** for verbose rationale on both the v2 rewrite + the deploy decisions (HF Spaces over Fly.io, the 2 bugs, expanded canary plan).
 
-### Pickup: deploy `extraction-v2` canary
+### Pickup: wait for Sat 2026-05-23 weekly cron, then conditionally flip global flag
+
+**Current prod state (as of 2026-05-18 afternoon — all 3 canary tiers verified):**
+- `main` has v2 code merged via PR #1 (commit `1cb6c9a` + 2 mid-canary fixes `7aa4c73` + `c22a29c`).
+- Vercel prod env: `EXTRACTION_V2_SHUL_IDS=41,56,67`, `EXTRACTION_PIPELINE_V2` unset, `DOCLING_URL` + `JINA_API_KEY` set.
+- All 3 canary shuls verified v2: BAYT (ds #99, html, 54 rules @ 0.92), The Shul (ds #102, vision, 8 rules @ 0.97), Chevra Ahavas Yisroel (ds #104, js_rendered, 5 rules @ 0.92). 100% sourceQuote coverage across all.
+
+**To complete rollout:**
+
+1. **Wait for Sat 2026-05-23 03:00 UTC weekly cron.** All 51 active shuls scrape — 3 via v2, 48 via v1.
+2. **Sun 2026-05-24 morning cron-summary email** will report per-shul status. Watch for any of the 3 canary shuls flipping to `broken` or `error`.
+3. **If all 3 canaries still `ok` Sunday morning** → flip `EXTRACTION_PIPELINE_V2=true` globally for all 51 active shuls. Remove `EXTRACTION_V2_SHUL_IDS` (now redundant).
+4. **If a canary fails** → don't flip global. Investigate the failure (likely a v2 edge case), fix, re-canary that shul, repeat until all clean.
+
+**Untested tiers (will get exercised opportunistically post-global-flip):**
+- PDF tier — no PDF-bearing shul in active pool. Docling standalone smoke test passed but full cascade tier 4 hasn't run on a real PDF.
+- Email tier — needs a forwarded email to land in process-email.ts. Wait for next organic forward.
+
+**Rollback (any time):** unset `EXTRACTION_V2_SHUL_IDS` and `EXTRACTION_PIPELINE_V2` → everyone reverts to v1. No code revert needed.
+
+### `/save` + `/resume` skills now installed (user-wide)
+
+Built afternoon of 2026-05-18. See `docs/SAVE-RESUME-SKILL-PLAN.md` for full design. Quick reference:
+
+- `/save` (deep) — end of session: SESSION.md briefing + PROGRESS.md update + DECISIONS.md prepend + auto-memory write
+- `/save quick` (lightweight) — stepping away briefly OR auto-fired by PreCompact hook before context compaction
+- `/resume` — start of new session: 8-line state block, recreates in-flight tasks, goal-drift check
+- Pair with `claude --rename "<workstream>"` for native session-level continuity
+
+**Test status (in_progress task #63):** skills are installed but functional test requires typing `/save` in a fresh session — the building Claude can't invoke its own skills. Test on next session start.
+
+**PDF tier remains untested.** No PDF-bearing shuls in active pool. Docling standalone smoke test passed (arxiv PDF → 1.6 MB markdown in 89s). Defer real-world PDF canary until a PDF shul arrives organically.
+
+**Rollback at any time:** unset `EXTRACTION_V2_SHUL_IDS` → BAYT reverts to v1. Unset `EXTRACTION_PIPELINE_V2` if it gets flipped → all 51 shuls revert. No code revert needed. See `docs/EXTRACTION-V2-ROLLOUT-PLAN.md` for the full rollout doc.
+
+### Historical pickup notes from prior session (kept for reference)
+
+The `extraction-v2` branch (14 commits ahead of main) is built end-to-end and typecheck-clean. v1 is untouched in main. Rollout plan (verbatim from DECISIONS.md "Rollout plan"):
 
 The `extraction-v2` branch (14 commits ahead of main) is built end-to-end and typecheck-clean. v1 is untouched in main. Rollout plan (verbatim from DECISIONS.md "Rollout plan"):
 
@@ -88,6 +125,69 @@ Working definition of "build phase ends" (per SESSION.md): daily active users > 
 ---
 
 ## Done
+
+### 2026-05-18 (afternoon) — Canary expansion complete (3 tiers verified) + `/save` + `/resume` skills built ✅
+
+Two parallel wins in one session segment. **Canary expansion**: env var widened to `EXTRACTION_V2_SHUL_IDS=41,56,67`, redeployed (deployment `tfila-28l4n7f0c`), user re-triggered Extract Now on the new two. **Tools build**: drafted plan → web research → 12 best-practice gaps surfaced → 7 incorporated → built skills end-to-end.
+
+**v2 canary results across 3 tiers:**
+
+| Shul | Tier | v1 baseline | v2 result | v2Meta | sourceQuotes |
+|---|---|---|---|---|---|
+| #41 BAYT | html | 48 @ 0.92 | 54 @ 0.92 | ✅ | 54/54 |
+| #56 The Shul | vision_image | 8 @ 0.95 | **8 @ 0.97** ↑ | ✅ | 8/8 |
+| #67 Chevra Ahavas Yisroel | js_rendered | 5 @ 0.92 | 5 @ 0.92 | ✅ | 5/5 |
+
+Vision-tier confidence actually IMPROVED on v2 (Sonnet + extended thinking + context preamble). Cascade fall-through worked correctly on The Shul (router → about_marketing → skipped HTML → JS-render 0 rules → vision 8 rules). HTML-tier-always-attempt fix from earlier (commit `c22a29c`) means router can't short-circuit valid HTML extractions.
+
+**`/save` + `/resume` skills built:**
+
+- `~/.claude/skills/save/SKILL.md` — deep + quick modes; 7 steps from discover → write → report; never overwrites; pure prompt-injection
+- `~/.claude/skills/resume/SKILL.md` — 6 steps from gather → recreate tasks → report → drift-check → wait; includes failsafe sanity check for goal drift
+- `~/.claude/skills/save/README.md` — user-facing doc
+- `~/.claude/settings.json` — merged `PreCompact` hook that auto-fires `/save quick` before context compaction (so even if user forgets, the durable doc gets the critical state before the lossy compression)
+- `docs/SAVE-RESUME-SKILL-PLAN.md` — full design (12 best-practice gaps researched, 7 incorporated, 5 deferred). Sources from LangChain, mem0, agentmemory, Zylos, Active Context Compression paper.
+
+Skill design rationale + 8 specific decisions in DECISIONS.md "2026-05-18 (afternoon) — `/save` + `/resume` skill design".
+
+**Test status:** skills are statically verified (YAML frontmatter valid, settings.json valid JSON, PreCompact hook syntax correct per Claude Code spec). Functional test requires typing `/save` in a new session (the building Claude can't invoke its own skills mid-conversation). Task #63 tracks this.
+
+### 2026-05-18 — Extraction Pipeline v2 deployed to prod + BAYT canary verified (4 commits + 1 PR merge) ✅
+
+Deploy day. The `extraction-v2` branch built on 2026-05-17 went live in production behind a per-shul canary flag. BAYT (id=41, HTML tier) is the first verified shul running v2 in prod. **Two real bugs found + fixed mid-canary — exactly the case for per-shul canary over global flip.** Full verbose rationale + the verify-and-rollback playbook in [DECISIONS.md](./DECISIONS.md) "2026-05-17 → 2026-05-18 — Extraction Pipeline v2 deployment + canary".
+
+**Service infrastructure deployed:**
+
+- **Docling on HF Spaces** — pivoted from Fly.io (Wise prepaid card rejected for CC verification) to Hugging Face Spaces in ~5 min. Space `IsKa123/tfila-docling-serve` running `quay.io/docling-project/docling-serve-cpu:latest` on free CPU Basic tier (2 vCPU, 16 GB RAM, ~30s cold start after 48h idle). Smoke-tested end-to-end against arxiv PDF: 1.6 MB clean markdown in 89s. Saved to `.env.local` + Vercel prod env as `DOCLING_URL`.
+- **Jina API key** — signed up at jina.ai (free tier, 1M tokens/mo). Authed vs anonymous = 20542 vs 427 bytes on BMNMB test (48× improvement). `JINA_API_KEY` in `.env.local` + Vercel prod.
+- **Anthropic billing caps** — user verified cap + spend alert in console.anthropic.com before flipping any traffic to v2.
+- **Vercel CLI** — installed globally (v54.1.0), already logged in. Project linked to `prj_zetR9agnTaROAo3sm49AY3oYzUEW`.
+
+**PR + merges:**
+
+- `1cb6c9a` PR #1 — extraction-v2 → main (merged 2026-05-18 14:00 UTC, 16 squashed commits)
+- `3c6ab71` fix(docling) — `lib/scrapers/docling.ts` matched to real docling-serve API contract (`/v1/convert/source`, `sources:[{kind:"http",url}]`, response `document.md_content`). Discovered during HF Space smoke-test that my v2 code had guessed at a `/parse` endpoint that doesn't exist. Bumped timeout 60s → 180s.
+- `7aa4c73` fix — pass `shulId` to `runCascade()` from all 3 callers (admin extract route, build-data-source Inngest, scrape-one-shul Inngest). **Without this, `EXTRACTION_V2_SHUL_IDS` was a silent no-op** — `shouldUseV2(undefined)` always returned false. Caught immediately because BAYT's first Extract Now showed no v2 markers.
+- `c22a29c` fix(cascade-v2) — always try HTML tier; demote `shouldRerenderJs` to advisory only. The router had been classifying `bayt.ca/calendar` as `calendar_widget` and skipping HTML tier, but v1 had successfully extracted 48 rules from that same URL via raw HTML — the schedule IS in static HTML, the router was being too clever. Removed the `shouldRerenderJs` branch entirely.
+
+**Canary results — BAYT (data_source #99):**
+
+| Metric | v1 baseline (ds #41) | v2 result (ds #99) |
+|---|---|---|
+| Strategy | html | html ✅ |
+| Confidence | 0.92 | 0.92 ✅ |
+| Rules | 48 | 54 (+6, more granular) |
+| Rules with sourceQuote | 0 | 54/54 ✅ |
+| Tokens | ~30k | 60k in / 3.6k out |
+| Cost | ~$0.05 | ~$0.07 |
+| Sonnet fallback | n/a | not needed (Haiku alone hit 0.92) |
+| Critique pass | n/a | not triggered |
+
+Sample source quotes: `"6:45am Shacharis"`, `"6:40pm Mincha/Maariv"`. Admin UI shows these as collapsible disclosures under each rule.
+
+**Paused state (immediate pickup item):**
+
+User clicked Extract Now on id=56 (The Shul) + id=67 (Chevra Ahavas Yisroel) AFTER the BAYT canary success expecting v2 to run on those too — but `EXTRACTION_V2_SHUL_IDS` was still `41` only, so both routed to v1 (data_sources #100 + #101 created with v1 output: zero sourceQuotes, no `v2Meta`). Next session: update env var to `41,56,67`, re-trigger Extract Now on those two, then proceed with the rollout plan in `docs/EXTRACTION-V2-ROLLOUT-PLAN.md`.
 
 ### 2026-05-17 — Extraction Pipeline v2 — full one-shot rewrite on `extraction-v2` branch (14 commits) ✅
 

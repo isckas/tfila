@@ -250,6 +250,38 @@ export async function runCascade(
   submittedUrl: string,
   opts: CascadeOpts = {},
 ): Promise<CascadeResult> {
+  // Cost circuit-breaker. Two short-circuit conditions:
+  //   - EXTRACTION_DISABLED=true (kill switch for an incident)
+  //   - Today's LLM spend exceeds LLM_DAILY_BUDGET_USD (soft cap)
+  // Either returns a failed cascade result with a marker error message so
+  // the data source row records the bail rather than silently 200ing.
+  const { checkCostGate } = await import("./cost-gate");
+  const gate = await checkCostGate();
+  if (!gate.allowed) {
+    const msg =
+      gate.reason === "kill_switch"
+        ? "extraction disabled via EXTRACTION_DISABLED kill switch"
+        : `daily LLM budget exceeded (today $${gate.todayUsd?.toFixed(2)} / cap $${gate.budgetUsd?.toFixed(2)})`;
+    console.warn("[cascade] cost-gated:", msg);
+    return {
+      strategy: "failed",
+      extraction: null,
+      model: null,
+      pageContentHash: null,
+      usage: {},
+      winningUrl: submittedUrl,
+      attempts: [
+        {
+          strategy: "failed",
+          status: "skipped",
+          rulesCount: 0,
+          confidence: null,
+          errorMessage: msg,
+        },
+      ],
+    };
+  }
+
   if (shouldUseV2(opts.shulId)) {
     if (opts.shulId == null) {
       console.warn(
