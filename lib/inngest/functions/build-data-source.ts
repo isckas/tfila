@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { shul } from "../../../db/schema";
@@ -198,6 +198,16 @@ async function persistCascade(args: PersistArgs): Promise<{
       shulId: args.shulId,
       extraction,
     });
+    // If the shul was previously marked `unsupported` (cascade failed),
+    // restore to `pending_review` so admin can re-approve the new
+    // data_source. Conditional on the current status — `active` shuls
+    // stay active. Replaces the indiscriminate `UPDATE shul SET
+    // status='pending_review'` that lived in the old inline admin
+    // Extract Now route before it went async via this worker.
+    await tx
+      .update(shul)
+      .set({ status: "pending_review", updatedAt: now })
+      .where(and(eq(shul.id, args.shulId), eq(shul.status, "unsupported")));
     return persisted;
   });
 }
