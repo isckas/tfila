@@ -25,7 +25,7 @@ export async function listActiveShuls() {
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
-            AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.last_run_status IN ('ok', 'no_change')
             AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
@@ -290,7 +290,7 @@ export async function listShulsForLookup() {
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
-            AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.last_run_status IN ('ok', 'no_change')
             AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
@@ -319,7 +319,7 @@ export async function searchActiveShuls(q: string, limit = 30) {
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
-            AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.last_run_status IN ('ok', 'no_change')
             AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
@@ -513,7 +513,7 @@ export async function listAdminShuls(opts: {
       SELECT MAX(COALESCE(last_received_at, last_run_at)) AS last_fresh_at
         FROM data_source
        WHERE shul_id = s.id
-         AND last_run_status = 'ok'
+         AND last_run_status IN ('ok', 'no_change')
          AND review_status = 'approved'
     ) fresh_agg ON true
     LEFT JOIN LATERAL (
@@ -531,7 +531,7 @@ export async function listAdminShuls(opts: {
         -- that had one healthy source + one stale broken source.
         NOT bool_or(
               review_status = 'approved'
-              AND last_run_status = 'ok'
+              AND last_run_status IN ('ok', 'no_change')
               AND COALESCE(last_received_at, last_run_at) >=
                   NOW() - INTERVAL '14 days'
             ) AS has_broken_run,
@@ -665,7 +665,7 @@ export async function getNearbyShulsWithRules(
         AND EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = s.id
-            AND ds_fresh.last_run_status = 'ok'
+            AND ds_fresh.last_run_status IN ('ok', 'no_change')
             AND ds_fresh.review_status = 'approved'
             AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
                 NOW() - INTERVAL '14 days'
@@ -714,7 +714,7 @@ export async function getNearbyShulsWithRules(
         SELECT MAX(COALESCE(ds2.last_received_at, ds2.last_run_at))
         FROM data_source ds2
         WHERE ds2.shul_id = rr.shul_id
-          AND ds2.last_run_status = 'ok'
+          AND ds2.last_run_status IN ('ok', 'no_change')
           AND ds2.review_status = 'approved'
       ) AS last_verified_at
     FROM ranked_rules rr

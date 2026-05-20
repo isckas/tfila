@@ -94,7 +94,7 @@ export const weeklyRescrapeSummary = inngest.createFunction(
            AND NOT EXISTS (
              SELECT 1 FROM data_source ds
               WHERE ds.shul_id = s.id
-                AND ds.last_run_status = 'ok'
+                AND ds.last_run_status IN ('ok', 'no_change')
                 AND ds.review_status = 'approved'
                 AND COALESCE(ds.last_received_at, ds.last_run_at) >=
                     NOW() - INTERVAL '14 days'

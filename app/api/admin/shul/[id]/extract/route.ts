@@ -3,28 +3,25 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
-import { runCascade } from "@/lib/llm/cascade";
-import {
-  backfillShulLocation,
-  geocodeAddressIfMissingLocation,
-} from "@/lib/geocoding";
-import {
-  persistDataSourceWithRules,
-  applyShulNameAndAddressFromExtraction,
-} from "@/lib/pipeline/persist-submission";
+import { inngest } from "@/lib/inngest/client";
 
 /**
- * Trigger an immediate (inline, synchronous) extraction cascade for
- * a shul. The cascade runs HTML → JS-rendered → Vision → PDF → failed.
- * Whatever strategy succeeds gets persisted on the data_source so
- * weekly rescrapes skip the earlier tiers.
+ * Trigger an extraction cascade for a shul. Dispatches the
+ * `data-source.requested` event to the existing `buildDataSource` Inngest
+ * worker (lib/inngest/functions/build-data-source.ts), which runs the
+ * cascade and persists results in the background.
  *
- * Caps at 300s (Vercel platform default since 2026-Q1). Worst case is
- * all four tiers — HTML ~10s + JS render ~30s + Vision ~20s + PDF
- * ~60s for a large multi-page bulletin = ~120s.
+ * Mirrors the per-data_source "Re-extract from source" route at
+ * app/api/admin/data-source/[id]/rebuild/route.ts so both admin buttons
+ * behave the same way: immediate redirect with a "queued" banner; new
+ * data_source appears once the worker finishes (~30-120s).
+ *
+ * Force-extract semantics: the build path always re-runs the cascade
+ * (no hash-match short-circuit; that optimization lives in scrapeOneShul).
+ * Combined with persistDataSourceWithRules' supersede-on-insert, the new
+ * data_source atomically replaces any prior approved+ok one for the same
+ * (shul_id, identifier).
  */
-export const maxDuration = 300;
-
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -39,12 +36,10 @@ export async function POST(
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
 
-  // Look up the shul + its URL
   const rows = await db
     .select({
       id: shul.id,
       slug: shul.slug,
-      name: shul.name,
       submittedUrl: shul.submittedUrl,
     })
     .from(shul)
@@ -59,172 +54,21 @@ export async function POST(
     );
   }
 
-  // Run the cascade. Cascade itself doesn't throw on missing rules —
-  // it returns strategy='failed' instead. It only throws on Anthropic
-  // hard errors (credit balance, rate limit).
-  let cascade;
   try {
-    cascade = await runCascade(s.submittedUrl, {
-      timeoutMs: 25_000,
-      shulId: s.id,
+    await inngest.send({
+      name: "data-source.requested",
+      data: {
+        shulId: s.id,
+        url: s.submittedUrl,
+        sourceKind: "website_llm",
+      },
     });
   } catch (err) {
-    const msg = (err as Error)?.message ?? "";
-    const tag =
-      msg.includes("credit balance") || msg.includes("invalid_request_error")
-        ? "no-credits"
-        : msg.includes("rate_limit")
-          ? "rate-limited"
-          : "llm-error";
-    return NextResponse.redirect(
-      new URL(
-        `/admin/shul/${s.slug}?err=${encodeURIComponent(tag + ": " + msg.slice(0, 80))}`,
-        req.url,
-      ),
-      303,
-    );
+    console.error("[shul/extract] inngest.send failed:", (err as Error).message);
   }
 
-  // ─── Failed cascade: record + mark shul unsupported ────────────────
-  if (cascade.strategy === "failed" || !cascade.extraction) {
-    await db.transaction(async (tx) => {
-      const now = new Date();
-      await persistDataSourceWithRules(tx, {
-        shulId: s.id,
-        kind: "website_llm",
-        identifier: s.submittedUrl!,
-        configJson: {
-          version: 2,
-          submitted_url: s.submittedUrl,
-          cascade_attempts: cascade.attempts,
-          usage: cascade.usage,
-          extracted_at: now.toISOString(),
-          trigger: "admin_manual_extract",
-        },
-        confidenceScore: null,
-        extractionStrategy: "failed",
-        priority: 40,
-        lastRunAt: now,
-        lastRunStatus: "broken",
-        rules: [],
-      });
-      await tx
-        .update(shul)
-        .set({ status: "unsupported", updatedAt: now })
-        .where(eq(shul.id, s.id));
-    });
-    return NextResponse.redirect(
-      new URL(
-        `/admin/shul/${s.slug}?err=${encodeURIComponent(
-          "Extraction failed across all tiers. See the per-tier breakdown below for what each strategy tried and why it didn't produce rules.",
-        )}`,
-        req.url,
-      ),
-      303,
-    );
-  }
-
-  // ─── Success: persist ──────────────────────────────────────────────
-  const { extraction, model, winningUrl, strategy, attempts } = cascade;
-
-  // For non-HTML strategies (vision_image, pdf_document), the winning URL
-  // is a specific resource (this week's schedule image / bulletin PDF)
-  // whose filename will change next week — e.g. Times-Bamidbar5786.png
-  // becomes Times-Naso5786.png. Storing it as the identifier would make
-  // weekly rescrapes 404. Instead we keep the submitted page URL as the
-  // identifier so rescrapes re-discover the current week's resource;
-  // the actual resource URL goes to configJson.last_extracted_resource
-  // as an informational audit trail.
-  const isResourceStrategy =
-    strategy === "vision_image" || strategy === "pdf_document";
-  const identifier = isResourceStrategy ? s.submittedUrl! : winningUrl;
-
-  await db.transaction(async (tx) => {
-    const now = new Date();
-    await persistDataSourceWithRules(tx, {
-      shulId: s.id,
-      kind: "website_llm",
-      identifier,
-      configJson: {
-        version: 2,
-        page_url: isResourceStrategy ? s.submittedUrl : winningUrl,
-        submitted_url: s.submittedUrl,
-        extraction_strategy: strategy,
-        last_extracted_resource: isResourceStrategy ? winningUrl : undefined,
-        cascade_attempts: attempts,
-        page_content_hash: cascade.pageContentHash,
-        model,
-        prompt_version: "tfila-v1",
-        extracted_at: now.toISOString(),
-        reasoning: extraction.reasoning,
-        usage: cascade.usage,
-        trigger: "admin_manual_extract",
-      },
-      confidenceScore: extraction.confidence,
-      extractionStrategy: strategy,
-      priority: 40,
-      lastRunAt: now,
-      lastRunStatus: "ok",
-      rules: extraction.rules,
-    });
-    await applyShulNameAndAddressFromExtraction(tx, {
-      shulId: s.id,
-      extraction,
-    });
-    // If shul was previously marked unsupported, restore to pending_review.
-    await tx
-      .update(shul)
-      .set({ status: "pending_review", updatedAt: now })
-      .where(eq(shul.id, s.id))
-      .execute()
-      .catch(() => {});
-  });
-
-  // ─── Address fallback: Google Places search if shul has no address
-  // Shared with URL + email submission paths via lib/geocoding.ts.
-  let addressFromPlaces = false;
-  try {
-    const post = await db
-      .select({ name: shul.name })
-      .from(shul)
-      .where(eq(shul.id, s.id))
-      .limit(1);
-    if (post[0]) {
-      const result = await backfillShulLocation({
-        shulId: s.id,
-        name: extraction.shulName ?? post[0].name,
-        urlHint: s.submittedUrl,
-      });
-      addressFromPlaces = result.applied;
-    }
-  } catch {
-    // Non-fatal — address backfill failure shouldn't block extraction success.
-  }
-
-  // ─── Location fallback: geocode the address string into a point if one
-  // didn't get set (most email-derived shuls land here). Without it, the
-  // shul is invisible to home-feed distance queries.
-  try {
-    await geocodeAddressIfMissingLocation({ shulId: s.id });
-  } catch {
-    // Non-fatal — same rationale as above.
-  }
-
-  const qs = new URLSearchParams({ extracted: "1", strategy });
-  if (addressFromPlaces) qs.set("address", "places");
-  // The "from" param triggers the "you should update your source URL"
-  // banner. That advice only applies for the HTML same-origin fallback
-  // (e.g. submitted /calendar but rules came from /worship/shabbat).
-  // For vision/PDF, the winning URL is a per-week resource — admin
-  // shouldn't change the source URL to chase a weekly-rotating filename.
-  if (!isResourceStrategy && winningUrl !== s.submittedUrl) {
-    qs.set("from", winningUrl);
-  }
-  if (isResourceStrategy) {
-    qs.set("resource", winningUrl);
-  }
   return NextResponse.redirect(
-    new URL(`/admin/shul/${s.slug}?${qs.toString()}`, req.url),
+    new URL(`/admin/shul/${s.slug}?rebuilt=1`, req.url),
     303,
   );
 }
