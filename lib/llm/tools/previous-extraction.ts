@@ -7,7 +7,7 @@
 // "Last week had 8 rules, this extraction would emit 2 — am I
 // missing sections?"
 
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { db } from "../../../db/client";
 import { minyanRule, dataSource } from "../../../db/schema";
@@ -64,12 +64,17 @@ export async function getPreviousExtraction(
     )
     .orderBy(desc(minyanRule.priority), minyanRule.tefillah);
 
-  // Most recent ok data_source for the shul (for the timestamp)
+  // Most recent successful data_source for the shul (for the timestamp).
+  // 'ok' = re-extracted; 'no_change' = cron ran successfully but URL hash
+  // matched. Both indicate the source has recent verification.
   const dsRows = await db
     .select({ lastRunAt: dataSource.lastRunAt })
     .from(dataSource)
     .where(
-      and(eq(dataSource.shulId, args.shulId), eq(dataSource.lastRunStatus, "ok")),
+      and(
+        eq(dataSource.shulId, args.shulId),
+        inArray(dataSource.lastRunStatus, ["ok", "no_change"]),
+      ),
     )
     .orderBy(desc(dataSource.lastRunAt))
     .limit(1);

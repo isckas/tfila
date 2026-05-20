@@ -7,7 +7,7 @@
 // Architecture: query-time filtering (vs a stored "stale" status). Easier
 // to undo, no migration needed, threshold tunable in one place.
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { dataSource } from "../db/schema";
 
@@ -24,7 +24,7 @@ export const STALE_WARNING_DAYS = 10;
  *   AND EXISTS (
  *     SELECT 1 FROM data_source ds_fresh
  *     WHERE ds_fresh.shul_id = <shul-id-ref>
- *       AND ds_fresh.last_run_status = 'ok'
+ *       AND ds_fresh.last_run_status IN ('ok', 'no_change')
  *       AND COALESCE(ds_fresh.last_received_at, ds_fresh.last_run_at) >=
  *           NOW() - INTERVAL '14 days'
  *   )
@@ -42,8 +42,11 @@ export const STALE_WARNING_DAYS = 10;
  * source whose `last_run_status='broken'` was previously treated as
  * fresh (because last_run_at was recent), which displayed stale rules
  * publicly while the re-extraction sat waiting for admin review.
- * Constraining to approved+ok closes that gap — the public feed only
- * shows shuls whose CURRENT canonical extraction succeeded.
+ *
+ * `no_change` counts as healthy (PR #4): the weekly cron ran successfully
+ * but the URL content hash matched the prior run, so it short-circuited
+ * without re-extracting. Both 'ok' and 'no_change' represent successful
+ * recent verifications.
  */
 export async function hasFreshDataSourceForShul(
   shulId: number,
@@ -54,7 +57,7 @@ export async function hasFreshDataSourceForShul(
     .where(
       and(
         eq(dataSource.shulId, shulId),
-        eq(dataSource.lastRunStatus, "ok"),
+        inArray(dataSource.lastRunStatus, ["ok", "no_change"]),
         eq(dataSource.reviewStatus, "approved"),
         sql`COALESCE(${dataSource.lastReceivedAt}, ${dataSource.lastRunAt}) >=
             NOW() - (${STALE_THRESHOLD_DAYS} || ' days')::interval`,

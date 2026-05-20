@@ -306,7 +306,7 @@ export const scrapeOneShul = inngest.createFunction(
                   WHERE ds2.shul_id = shul.id
                     AND ds2.id <> ${dataSourceId}
                     AND ds2.review_status = 'approved'
-                    AND ds2.last_run_status = 'ok'
+                    AND ds2.last_run_status IN ('ok', 'no_change')
                     AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
                         NOW() - INTERVAL '14 days'
                )
@@ -509,7 +509,7 @@ async function rescrapeNonHtml(
                 WHERE ds2.shul_id = shul.id
                   AND ds2.id <> ${args.dataSourceId}
                   AND ds2.review_status = 'approved'
-                  AND ds2.last_run_status = 'ok'
+                  AND ds2.last_run_status IN ('ok', 'no_change')
                   AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
                       NOW() - INTERVAL '14 days'
              )
@@ -577,7 +577,7 @@ async function rescrapeNonHtml(
                 WHERE ds2.shul_id = shul.id
                   AND ds2.id <> ${args.dataSourceId}
                   AND ds2.review_status = 'approved'
-                  AND ds2.last_run_status = 'ok'
+                  AND ds2.last_run_status IN ('ok', 'no_change')
                   AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
                       NOW() - INTERVAL '14 days'
              )
