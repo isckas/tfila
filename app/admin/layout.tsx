@@ -25,18 +25,8 @@ export default async function AdminLayout({
             >
               Admin
             </Link>
-            <Link
-              href="/admin/queue"
-              className="text-neutral-600 hover:text-neutral-900"
-            >
-              Queue
-            </Link>
-            <Link
-              href="/admin/rejected"
-              className="text-neutral-600 hover:text-neutral-900"
-            >
-              No good source
-            </Link>
+            {/* Queue + "No good source" removed — absorbed into the /admin
+                inbox filter chips (UI-5). The routes still exist. */}
             <Link
               href="/admin/shuls"
               className="text-neutral-600 hover:text-neutral-900"

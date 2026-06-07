@@ -19,7 +19,12 @@ export const dynamic = "force-dynamic";
  * same data; /admin/shuls remains the catalog of every shul (active or
  * not).
  */
-export default async function AdminHomePage() {
+export default async function AdminHomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ state?: string }>;
+}) {
+  const { state: stateParam } = await searchParams;
   // Pull a generous slice — most projects have a few hundred shuls at most.
   const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
   const openReports = await countOpenTimeReports();
@@ -35,7 +40,7 @@ export default async function AdminHomePage() {
   // Fix S: within the "broken" tier, sort by first_broken_at DESC so the
   // most-recent breakage floats to the top — admin sees this week's
   // fails first, chronic ones drop below.
-  const inbox = withState
+  const inboxWithState = withState
     .filter((x) => isInboxState(x.state))
     .sort((a, b) => {
       const dk = adminShulStateSortKey(a.state) - adminShulStateSortKey(b.state);
@@ -54,12 +59,21 @@ export default async function AdminHomePage() {
       const at = (a.row.lastFreshAt ?? a.row.submittedAt).valueOf();
       const bt = (b.row.lastFreshAt ?? b.row.submittedAt).valueOf();
       return at - bt;
-    })
-    .map((x) => x.row);
+    });
 
   const totalActive = counts.active;
   const totalArchived = counts.archived;
-  const inboxTotal = inbox.length;
+  const inboxTotal = inboxWithState.length;
+
+  // UI-5: filter chips filter the inbox on THIS page (absorbing the old
+  // /queue + /rejected routes + the 8-tile wall) rather than linking out.
+  const activeChip =
+    stateParam && stateParam !== "all" ? stateParam : "all";
+  const displayedRows = (
+    activeChip === "all"
+      ? inboxWithState
+      : inboxWithState.filter((x) => x.state === activeChip)
+  ).map((x) => x.row);
 
   return (
     <div className="mx-auto max-w-4xl px-5 py-8">
@@ -80,71 +94,53 @@ export default async function AdminHomePage() {
         </Link>
       )}
 
-      {/* ─── Tile counts by state (clickable filters) ────────── */}
-      <section className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Tile
-          label="Broken"
-          n={counts.broken}
-          href="/admin/shuls?state=broken"
-          tone="rose"
-        />
-        <Tile
-          label="No good source"
-          n={counts.no_good_source}
-          href="/admin/rejected"
-          tone="rose"
-        />
-        <Tile
-          label="Pending review"
-          n={counts.pending_review}
-          href="/admin/queue"
-          tone="amber"
-        />
-        <Tile
-          label="Stale"
-          n={counts.stale}
-          href="/admin/shuls?state=stale"
-          tone="rose"
-        />
-        <Tile
-          label="Awaiting extraction"
-          n={counts.awaiting_extraction}
-          href="/admin/shuls?state=awaiting_extraction"
-          tone="amber"
-        />
-        <Tile
-          label="Unsupported"
-          n={counts.unsupported}
-          href="/admin/shuls?status=unsupported"
-          tone="neutral"
-        />
-        <Tile
-          label="Active (fresh)"
-          n={counts.active}
-          href="/admin/shuls?status=active"
-          tone="emerald"
-        />
-        <Tile
-          label="All shuls"
-          n={shuls.length}
-          href="/admin/shuls"
-          tone="neutral"
-        />
+      {/* ─── Inbox filter chips (UI-5) ───────────────────────── */}
+      {/* Collapses the old 8-tile wall + the /queue + /rejected routes into
+          one chip row that filters the inbox in place via ?state=. Only chips
+          with rows are shown. "All shuls" / Active live in the shortcuts. */}
+      <section className="mt-6 flex flex-wrap gap-1.5">
+        <InboxChip label="All" count={inboxTotal} state="all" active={activeChip} />
+        {INBOX_CHIPS.filter((c) => counts[c.state] > 0).map((c) => (
+          <InboxChip
+            key={c.state}
+            label={c.label}
+            count={counts[c.state]}
+            state={c.state}
+            active={activeChip}
+          />
+        ))}
       </section>
 
       {/* ─── Inbox ───────────────────────────────────────────── */}
-      <section className="mt-8">
+      <section className="mt-6">
         <h2 className="mb-3 text-sm font-semibold text-neutral-700">
-          Inbox — shuls needing attention
+          {activeChip === "all"
+            ? "Inbox — shuls needing attention"
+            : `Filtered — ${displayedRows.length} shul${displayedRows.length === 1 ? "" : "s"}`}
         </h2>
         <AdminInbox
-          rows={inbox}
-          emptyMessage="✓ All clear. No shuls currently need attention."
+          rows={displayedRows}
+          emptyMessage={
+            activeChip === "all"
+              ? "✓ All clear. No shuls currently need attention."
+              : "Nothing in this filter."
+          }
         />
       </section>
 
       {/* ─── Other shortcuts ─────────────────────────────────── */}
       <section className="mt-8 text-xs text-neutral-500">
+        <Link href="/admin/shuls" className="underline-offset-2 hover:underline">
+          All shuls ({shuls.length}) →
+        </Link>
+        {" · "}
+        <Link
+          href="/admin/shuls?status=active"
+          className="underline-offset-2 hover:underline"
+        >
+          Active ({totalActive}) →
+        </Link>
+        {" · "}
         <Link href="/admin/reports" className="underline-offset-2 hover:underline">
           Wrong-time reports →
         </Link>
@@ -180,31 +176,44 @@ function bucketByState(states: AdminShulState[]): Record<AdminShulState, number>
   return init;
 }
 
-function Tile({
+// Inbox states surfaced as filter chips (UI-5), in triage order. Only chips
+// with a non-zero count render. 'active'/'archived' aren't inbox states.
+const INBOX_CHIPS: { state: AdminShulState; label: string }[] = [
+  { state: "pending_review", label: "Review" },
+  { state: "broken", label: "Broken" },
+  { state: "no_good_source", label: "No source" },
+  { state: "stale", label: "Stale" },
+  { state: "awaiting_extraction", label: "Awaiting" },
+  { state: "unsupported", label: "Unsupported" },
+];
+
+function InboxChip({
   label,
-  n,
-  href,
-  tone,
+  count,
+  state,
+  active,
 }: {
   label: string;
-  n: number;
-  href: string;
-  tone: "rose" | "amber" | "emerald" | "neutral";
+  count: number;
+  state: string;
+  active: string;
 }) {
-  const styles: Record<string, string> = {
-    rose: "border-rose-200 bg-rose-50 text-rose-900",
-    amber: "border-amber-200 bg-amber-50 text-amber-900",
-    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
-    neutral: "border-neutral-200 bg-white text-neutral-900",
-  };
-  const dim = n === 0 ? "opacity-60" : "";
+  const isActive = active === state;
   return (
     <Link
-      href={href}
-      className={`block rounded-xl border px-3 py-3 hover:shadow-sm ${styles[tone]} ${dim}`}
+      href={state === "all" ? "/admin" : `/admin?state=${state}`}
+      className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 ${
+        isActive
+          ? "border-neutral-900 bg-neutral-900 text-white"
+          : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
+      }`}
     >
-      <div className="text-xs uppercase tracking-wide opacity-80">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{n}</div>
+      {label}
+      <span
+        className={`tabular-nums ${isActive ? "text-neutral-300" : "text-neutral-400"}`}
+      >
+        {count}
+      </span>
     </Link>
   );
 }
