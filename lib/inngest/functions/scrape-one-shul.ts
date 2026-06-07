@@ -367,14 +367,18 @@ export const scrapeOneShul = inngest.createFunction(
           .set({
             lastRunAt: now,
             lastRunStatus: "ok",
-            // Recovery from a broken streak: mark-broken flipped this to
-            // 'pending' (lines 269 area). Now that the extraction recovered,
-            // restore 'approved' so the source re-qualifies for the public
-            // freshness gate (lib/freshness.ts hasFreshDataSourceForShul +
-            // the EXISTS clauses in lib/queries.ts), all of which now
-            // require review_status='approved' per Fix P. Without this
-            // restore, broken→recovered cycles would permanently hide the
-            // shul from public surfaces.
+            // Re-approve on recovery. Under the E-A4 sticky-review model
+            // mark-broken no longer demotes review_status, so on the normal
+            // weekly-cron path this is a no-op (the source is already
+            // 'approved'). It's load-bearing for the RECOVERY path:
+            // scripts/recover-stranded.mjs re-fans shul.scrape.requested at
+            // sources the pre-P1 code demoted to 'pending' during the 429
+            // storm; this restores them to 'approved' so they re-qualify for
+            // the public freshness gate (lib/freshness.ts + the EXISTS clauses
+            // in lib/queries.ts, all of which require review_status='approved').
+            // Intentionally asymmetric with process-email.ts, which does NOT
+            // auto-approve — a never-reviewed source must not auto-approve
+            // (those enter via data-source.requested/buildDataSource, not here).
             reviewStatus: "approved",
             confidenceScore: extraction.confidence,
             extractionStrategy: cascade.strategy,

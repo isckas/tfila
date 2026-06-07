@@ -248,7 +248,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
               : `/shul/${shul.slug}`
           }
           className={
-            "rounded-full border px-3 py-1 text-xs transition-colors " +
+            "inline-flex min-h-9 items-center justify-center rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 " +
             (selectedIso === todayIso
               ? "border-neutral-900 bg-neutral-900 text-white"
               : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
@@ -259,7 +259,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         <Link
           href={`/shul/${shul.slug}?date=${tomorrowIso}${userLocSuffix}`}
           className={
-            "rounded-full border px-3 py-1 text-xs transition-colors " +
+            "inline-flex min-h-9 items-center justify-center rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 " +
             (selectedIso === tomorrowIso
               ? "border-neutral-900 bg-neutral-900 text-white"
               : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")

@@ -59,11 +59,21 @@ export async function checkRateLimit(
 }
 
 /**
- * Best-effort client IP extraction. Vercel sets `x-forwarded-for`. Falls
- * back to a constant string so the rate-limit doesn't divide-by-undefined.
+ * Best-effort client IP for rate-limit / dedupe keys.
+ *
+ * Prefer the platform-provided client IP. On Vercel, `x-vercel-forwarded-for`
+ * (and `x-real-ip`) are set by the edge to the REAL client IP and are not
+ * client-spoofable. The leftmost `x-forwarded-for` token is NOT trustworthy —
+ * a client can prepend its own value (Vercel appends the real IP rightmost),
+ * so keying off `xff.split(",")[0]` lets an abuser rotate the key to bypass
+ * both the rate-limit and the per-IP dedupe. Use XFF only as a last resort.
  */
 export function clientIp(req: Request): string {
+  const vercelIp = req.headers.get("x-vercel-forwarded-for")?.trim();
+  if (vercelIp) return vercelIp;
+  const realIp = req.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip")?.trim() || "unknown";
+  if (xff) return xff.split(",")[0]?.trim() || "unknown";
+  return "unknown";
 }

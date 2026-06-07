@@ -621,9 +621,13 @@ export interface NearbyShulRule {
 
 /**
  * Returns every (shul, live minyan_rule) within `radiusMeters` of the given
- * point. Only shuls with status='active' and rules with deleted_at IS NULL
- * are returned. Rules from data_sources whose review_status is 'rejected'
- * are excluded; 'pending' rules are still shown (low signal vs. blank).
+ * point. Visibility is DERIVED, not driven by shul.status: a shul appears only
+ * if it is non-archived AND has a fresh (<=14d) approved + ok/no_change
+ * data_source (the E-A1 trapdoor fix — mirrors listActiveShuls; do NOT
+ * "restore" a status='active' filter or you re-introduce the visibility
+ * trapdoor this branch exists to kill). Live rules only (deleted_at IS NULL);
+ * rules from 'rejected' data_sources are excluded ('pending' rules on an
+ * otherwise-eligible shul are still shown, low signal vs. blank).
  *
  * Filtering by date/time and special-schedule resolution happens in app
  * code after this query — keeps the SQL stable and the rule-resolution

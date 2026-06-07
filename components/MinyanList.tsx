@@ -116,7 +116,7 @@ export function MinyanList({ items, serverNowMs }: Props) {
                 type="button"
                 onClick={() => setActive(chip)}
                 className={
-                  "rounded-full border px-3 py-1 text-xs transition-colors " +
+                  "inline-flex min-h-9 items-center justify-center rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 " +
                   (isActive
                     ? "border-neutral-900 bg-neutral-900 text-white"
                     : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
