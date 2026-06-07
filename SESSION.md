@@ -4,6 +4,152 @@
 
 ---
 
+## 2026-06-07 (evening) — P3 + P4 complete + 2 adversarial reviews; PR #5 open, ready to merge
+
+### Briefing for next session (read first)
+- **Where we are:** The full holistic remediation **P0–P4 is done and on PR #5** (`fix/holistic-remediation` → `main`). P3 = report-wrong-time feature (ShulCloud adapter **descoped** — research showed P0 already storm-proofed the cascade + the LLM handles ShulCloud's static HTML at 0.75–0.92; the deterministic parser would be equal-at-best, worse on generic "Evening Minyan" naming). P4 = the full UI pass (UI-1..8 + E-F1). **Two adversarial-review workflows** (21 agents) over the whole diff + the admin-UI delta found ONLY low-severity items; all fixed. typecheck + full build green.
+- **Next concrete action:** **Merge PR #5 to `main` to deploy** (see [[reference_deploy_mechanism]] — prod deploys are MANUAL, not git-push; Production env has DATABASE_URL so the merge builds clean; if the prod alias is pinned to a manual `vercel deploy --prod`, run that after merge). Then smoke-check prod pages. After that, **P5** is the only remaining plan phase (security/observability/cleanup — not started).
+- **Constraints to preserve:** Bulk "re-extract all broken" (UI-5 stretch) deliberately NOT shipped — re-triggers the 429 storm, needs a confirm + the P0 rate gate. Migration 0013 (time_report) is additive + already applied to prod. AdminInbox + deriveAdminShulState are server-only (import db) — can't be used in client components. gate LLM spend + destructive migrations.
+- **Critical data:** PR #5 = https://github.com/isckas/tfila/pull/5. Commits this session: `e15f580` (P3), `d6144a1`+`6dd6ae4` (P4), `094251a` (review-1 fixes), `5448116` (UI-5/UI-7), `cf7112c` (review-2 fixes). New: `app/api/report-time`, `app/admin/reports`, `components/{ReportWrongTime,FeedDatePicker}.tsx`, `scripts/apply-migration.mjs`. Active count = 24.
+
+### Done this session
+- **P3** `e15f580`: time_report table (migration 0013, applied to prod) + anonymous report-wrong-time tap + admin triage `/admin/reports`; moat-doc reframe [E-B5/E-B3]. ShulCloud adapter descoped (user decision).
+- **P4** `d6144a1`/`6dd6ae4`/`5448116`: UI-8 tokens (Geist font fix — app was all-Arial; blue→neutral; tap/focus floors; amber dots), UI-1 landing, UI-2 feed (onChange picker, upcoming-first ordering), UI-3 shul (Today/Tomorrow tabs, map cut), UI-4 (/signin+/bot rescue), UI-6 (admin source-quotes default), E-F1 (review-queue fix), UI-5 (cockpit filter chips), UI-7 (candidate tabs).
+- **Reviews** `094251a`/`cf7112c`: applied all confirmed low-sev findings (tap floors, spoofable-XFF in clientIp, ?state= validation, redirect repointing, stale docstrings, color consistency).
+
+---
+
+## 2026-06-07 17:57 UTC — QUICK SAVE (pre-compaction)
+- Branch: `fix/holistic-remediation`; latest commit: `b89767a` reextract-active + re-run 19 active shuls under new prompt
+- Working tree: 4 modified (DECISIONS.md, FEATURES.md, PROGRESS.md, SESSION.md) + untracked `docs/HOLISTIC-REMEDIATION-PLAN.md`
+- In-flight: E-C2 (Hebcal gating, needs user input); P3 ShulCloud adapter (research-then-build); verify the 19-shul re-extract landed
+- Last user intent: continuing holistic remediation — recovery + P2 evening-times work just shipped; P3 is next
+- Next action: P3 — research real ShulCloud minyan widgets before building a tier-0 deterministic parser (see latest deep-save entry below for full detail)
+
+---
+
+## 2026-06-07 (cont.) — Recovery complete (9→24 active) + P2 evening-times shipped; P3 = next
+
+### Briefing for next session (read first)
+
+- **Where we are:** Continued the holistic remediation (the entry below has the P0/P1/P2-start detail). Since then: **ran the full stranded-shul recovery → directory restored 9→24 active** (14 recovered + re-activated; ~11 hard-tail broken need P3/admin); **backfilled `shul.timezone` for 32 shuls**; shipped **E-C1** (prompt now emits `zmanim` for evening times the source describes relative to a zman) + **E-C4** (feed flags fixed evening times "may shift seasonally"); **deployed** (`tfila-8o4kv51e4`) and **re-extracted 19 active shuls** under the new prompt. Branch `fix/holistic-remediation` = 13 commits, all live; site fully functional.
+- **Next concrete action:** **P3 — ShulCloud adapter.** RESEARCH FIRST (don't guess — that sank v2's Docling): fetch real ShulCloud minyan widgets across a few sites (the path varies — `/minyanim` 404'd; try the site's "Minyan Times"/zmanim nav link), confirm the DOM/feed structure (likely JS-rendered → use the Browserless render path), THEN build a deterministic tier-0 parser keyed on `lib/scrapers/fingerprint.ts` platform, mapping ShulCloud's internal fixed/zmanim/holiday rules → `minyan_rule`. Fixes BAYT-style frozen evening times + recovers most of the 11 hard-tail broken ShulCloud shuls.
+- **Constraints to preserve:** Same as below — prod aliases the BRANCH deploy (don't push `main` until merge); deploy straight to prod (Preview env lacks `DATABASE_URL`); gate LLM spend + destructive migrations; E-DECISION-1 = v1 base. This session locked: **E-C1 = "option 2"** (zmanim only when the source describes it relatively — never auto-guess a bare clock; the ShulCloud pre-computed-clock case is P3's job); re-extract scope = all-active-with-fixed-evening; freshness = keep "Verified N ago" + the seasonal note (done).
+- **Critical data:** Tools added: `scripts/recover-stranded.mjs`, `reactivate-recovered.mjs`, `reextract-active.mjs` (all idempotent, throttled by the global concurrency cap). Active count = **24** (was 9). The re-extract of 19 was draining at save time — verify it landed (zmanim count should rise; ShulCloud ones stay fixed). E-C2 (Hebcal gating) still open + wants user input. Plan: `docs/HOLISTIC-REMEDIATION-PLAN.md`.
+
+### Done since the entry below
+- Full recovery: `recover-stranded.mjs` over 28 sources → 14 recovered + re-activated → **9→24 active** (`2664948`, `c4c65c5`).
+- `shul.timezone` backfill: 32 shuls via `backfill-timezones.ts` (E-C3 data part).
+- E-C1 + E-C4 evening-times prompt + seasonal note (`4e9d2d6`); re-extracted 19 active shuls (`b89767a`).
+- tz-correct day-of-week + zmanim on shul page (`0648bb0`, H3/E-C3).
+
+### In-flight tasks (recreate with TaskCreate on /resume)
+- **E-C2** Hebcal special-day gating — nuanced; wants user input (which kinds gate on the calendar vs date-brackets).
+- **P3** ShulCloud adapter — next; research-then-build. **P4** UI redesign (8 screens, wireframes in plan Appendix C). **P5** security/observability/cleanup.
+- Deferred from P1: cosmetic enum-collapse migration + M1 + `applyExtractionResult` DRY refactor.
+
+### Paused / blocked
+- Re-extract of 19 active shuls was draining at save — verify the zmanim conversion landed.
+- P3 needs ShulCloud-widget research before building.
+
+### Code commits — 2026-06-07 (cont.)
+| Hash | Type | Summary |
+|---|---|---|
+| `b89767a` | chore(p2) | reextract-active + re-run 19 active shuls |
+| `4e9d2d6` | fix(p2) | evening→zmanim prompt + seasonal note [E-C1/E-C4] |
+| `2664948` | chore(p0.5) | full recovery 9→24 + reactivate + tz backfill |
+| `c4c65c5` | chore(p0.5) | recover-stranded + v1 verify in prod |
+| `0648bb0` | fix(p2) | tz day-of-week + zmanim tz [H3/E-C3] |
+
+---
+
+## 2026-06-07 — Holistic remediation: 3 reviews → unified plan → P0+P1+P2 shipped to prod
+
+### Briefing for next session (read first)
+
+- **Where we are:** Ran 3 exhaustive multi-agent reviews (error/log audit, effectiveness, UI) → one unified one-branch plan at `~/.claude/plans/reveiw-all-logs-and-reactive-locket.md` (copied to `docs/HOLISTIC-REMEDIATION-PLAN.md`). Then EXECUTED it on branch `fix/holistic-remediation`: **P0 (outage fix) + P1 (pipeline consolidation + self-healing status) + P2-start (timezone correctness)** are committed (8 commits) and **deployed to prod** (deploy `tfila-bph0uab11`, aliased to tfila.co, smoke-green). The new **v1-only** pipeline is **verified in prod** (shul 1 re-extracted 5 rules @0.75 and self-healed to approved+ok).
+- **Next concrete action:** Run the full stranded-shul recovery — `node scripts/recover-stranded.mjs 50` — to re-extract the ~29 remaining `pending_review`+`broken` shuls (≈$2–3 LLM spend, throttled to 3-concurrent). User was about to approve when /save fired. After it drains: set recovered shuls' `shul.status='active'` and report the new active count (was 9, target ~30+).
+- **Constraints to preserve:** (1) **Prod is aliased to the BRANCH deployment, NOT main** — do NOT push `main` until the branch merges, or the next main deploy reverts everything. (2) Vercel **PREVIEW env lacks `DATABASE_URL`** → preview builds fail; deploy straight to prod (`vercel deploy --prod`). (3) Gate the two destructive/costly steps: the LLM-spend recovery and any enum/column migration. (4) The unified plan is the single source of truth — **P0–P5 are build-order, NOT waves**; everything ships on the one branch except the 2 refuted findings + the "keep as-is" list. (5) **E-DECISION-1 LOCKED: v1 base + v2's 2 wins** (tool-schema output + `sourceQuote`; the latter not yet folded in — `tools/extraction-output.ts` kept for it).
+- **Critical data:** Branch `fix/holistic-remediation` (pushed to origin/isckas/tfila). Prod deploy `tfila-bph0uab11`. Plan: `~/.claude/plans/reveiw-all-logs-and-reactive-locket.md`. Recovery tool: `scripts/recover-stranded.mjs`. **Root cause of the 41→9 active-shul drop: the 2026-05-24 weekly cron (first under global v2) hit an Anthropic 429 storm — transient, NOT a clean v2 canary; verified from `config_json.cascade_attempts`.** `EXTRACTION_PIPELINE_V2` in Vercel prod is now a no-op (safe to unset). Read-only prod DB via `mcp__pg-neon__query`.
+
+### Done this session
+- **3 multi-agent review workflows** (read-only, adversarially verified): bug audit (44 findings, 2 refuted), effectiveness (66 recs, 0 dropped by the skeptic), UI (53 problems + 8 360px ASCII redesigns) → one unified branch plan.
+- **P0** `30f71b9` — geo-tz 500 fixed (next.config `serverExternalPackages`+`outputFileTracingIncludes` + try/catch at page.tsx); no-recovery trapdoor killed (public visibility now derived from freshness, cron drives off `review_status='approved' AND shul.status<>'archived'`); global Inngest concurrency cap (3) = 429-storm-proof; Biome + Vitest + HTTP smoke safety net + `typecheck`/`lint`/`test`/`smoke` scripts. Deployed + smoke-verified (incl. Jerusalem geo-tz case).
+- **P1** `a52ec67`/`00fbd7b`/`dd16f89`/`46ae688`/`e910a25` — H5 unreject unique-index guard + M13 candidates reader; **v2 retired** (one pipeline, −2643 LOC, H2 resolved); transient 429s retry instead of demote; sticky `review_status` + no `shul.status` demotion (shuls self-heal); email-channel parity (H4/M3).
+- **P2** `0648bb0` — H3 tz-correct day-of-week in feed; E-C3 code (zmanim render in shul tz on the detail page).
+- **Deploy + verify** `c4c65c5` — deployed P1+P2 batch to prod; `recover-stranded.mjs`; verified the v1 pipeline recovers shul 1 end-to-end.
+
+### Decisions made
+See DECISIONS.md "2026-06-07 — holistic remediation" (plan structure & one-branch/no-waves; E-DECISION-1 = v1 base; code-only status-model behavior with deferred cosmetic migration; prod-fastest execution + the two gates).
+
+### In-flight tasks (recreate with TaskCreate on /resume)
+- **P0.5** (pending) — full stranded recovery; 1/30 done as the verify. Run `node scripts/recover-stranded.mjs 50`; awaiting user "go" (LLM spend). Then re-activate recovered shuls.
+- **P2** (in_progress) — done: H3, E-C3 code. Remaining: `shul.timezone` backfill + non-null migration (gated), E-C1 seasonal mincha/maariv prompt rework, E-C2 Hebcal special-day gating, E-C4 freshness=time-validity.
+- **P1 deferred** — cosmetic enum-collapse migration (shul.status→{live,archived}, review_status→{approved,rejected}) + drop `first_broken_at`; M1 confidence dead-band; `applyExtractionResult` DRY refactor.
+- **P3 / P4 / P5** (pending) — acquisition portfolio (ShulCloud adapter), UI redesign (8 screens, wireframes in plan Appendix C), security/observability/cleanup.
+
+### Paused / blocked
+- Full recovery — awaiting user "go" (≈$2–3 LLM spend).
+- Destructive migrations (P1 enum collapse, P2 timezone non-null) — gated on user.
+- Branch → main merge — deferred; prod tracks the branch deploy meanwhile.
+
+### Code commits — 2026-06-07
+| Hash | Type | Summary |
+|---|---|---|
+| `c4c65c5` | chore | recover-stranded script + v1 verify in prod |
+| `0648bb0` | fix(p2) | tz-correct day-of-week + zmanim tz [H3/E-C3] |
+| `e910a25` | fix(p1) | email-channel parity [H4/M3] |
+| `46ae688` | fix(p1) | sticky review_status + no shul.status demotion [E-A2/A4] |
+| `dd16f89` | fix(p1) | transient retry instead of demote [C1/M2] |
+| `00fbd7b` | refactor(p1) | retire v2, one pipeline (−2643 LOC) [E-DECISION-1] |
+| `a52ec67` | fix(p1) | unreject guard + candidates reader [H5/M13] |
+| `30f71b9` | fix(p0) | stop the outage — geo-tz/trapdoor/429/safety net |
+
+---
+
+## 2026-05-19 → 2026-06-03 — PR #4 shipped; home-feed 500 diagnosed; geo-tz fix held for batch
+
+### Briefing for next session (read first)
+
+- **Where we are:** PR #4 shipped (`1283563`) — `no_change`-as-healthy fix + async admin Extract Now + seeded `docs/OPEN-ISSUES.md`. Then investigated a production home-feed 500 reported at `?lat=43.8030364&lng=-79.4429928&radius=2`. Root cause **verified via Sentry API**: `geo-tz` reads its `.geo.dat` timezone-boundary data files via `fs.openSync`; bundling it into a Turbopack SSR chunk breaks `__dirname`-relative resolution → `ENOENT` on coords whose tile needs polygon precision. Fix is fully designed and held in the plan file `~/.claude/plans/i-want-you-to-fluttering-canyon.md`. **User chose to accumulate more issues and code as one batch** (same pattern as OPEN-ISSUES bundle for PR #4).
+- **Next concrete action:** Surface the next issue(s) the user wants to add to the batch. When the batch is ready, implement all at once: (a) `next.config.ts` add `serverExternalPackages:["geo-tz"]` + `outputFileTracingIncludes: { "/": ["./node_modules/geo-tz/data/**/*"] }`; (b) `app/page.tsx:247` wrap `findTz` in try/catch with America/New_York fallback; (c) any other batched fixes; (d) typecheck + branch + PR.
+- **Constraints to preserve:** Batch-then-code pattern is locked — DON'T jump to coding when a new issue comes up; add it to the plan file and ask what else. No route-level `error.tsx` (user chose targeted defense only). When investigating prod errors with no obvious static cause, **pull stack trace from Sentry API first** rather than over-investigating statically.
+- **Critical data:** PR #4 = commit `1283563` (squash-merged). Sentry: org slug `ik-c7`, project `javascript-nextjs-tfila`, US region (`us.sentry.io`), token in `.env.local` as `SENTRY_AUTH_TOKEN` (works for `/projects/` + `/events/`, lacks `org:read`). The verified Sentry event id `e685e66e093a4d7091c2bd22cbbb7799`. The 500 is purely a geo-tz/Vercel bundling bug — query, resolver, components are all defensive.
+
+### Done this session
+
+| Item | Where |
+|---|---|
+| PR #4 shipped (no_change-as-healthy + async admin Extract Now + OPEN-ISSUES.md seed) | `1283563` squash-merge |
+| PR #4 code review found + fixed regression: `unsupported → pending_review` restore on success | Added inside `lib/inngest/functions/build-data-source.ts` success transaction. All 4 callers benefit (Extract Now, rebuild, /submit, /inbound/email) |
+| `docs/OPEN-ISSUES.md` created with 12 seed entries | repo root; 2 ✅ resolved this PR + 10 🔍 deferred (multi-calendar + Discovery pipeline) |
+| Home-feed 500 root cause verified via Sentry API stack trace | event `e685e66e093a4d7091c2bd22cbbb7799` — `c.find` (geo-tz) → `fs.openSync` ENOENT |
+| Fix recipe designed, held in plan file (not coded) | `~/.claude/plans/i-want-you-to-fluttering-canyon.md` |
+| HebCal-grounded LLM context exploration entry added to FEATURES.md | uncommitted; intentionally out of PR #4 scope |
+
+### Decisions made
+
+See DECISIONS.md "2026-06-03 — home-feed 500 + batch-then-code workflow" (3 decisions: pull stack trace from Sentry API not static reading; bundle the fix as `serverExternalPackages` + `outputFileTracingIncludes` + try/catch; hold designed fixes in plan file and code multiple together).
+
+### In-flight tasks
+
+None on the task list — the geo-tz fix is held in the plan file, will be implemented as part of the next batch.
+
+### Paused / blocked
+
+- **Geo-tz home-feed 500 fix** — designed, awaiting batch. Holds: `next.config.ts` change + `app/page.tsx` try/catch.
+- **HebCal-grounded LLM context** — exploration entry in FEATURES.md; not committed; awaiting decision on test-set work.
+- **UptimeRobot signup + test cohort** — still on the phase-1 launch checklist.
+- **PDF tier real-world test** — still waiting on organic PDF-bearing submission.
+
+### Code commits — 2026-05-20 → 2026-06-03
+
+| Hash | Type | Summary |
+|---|---|---|
+| `1283563` | fix | no_change-as-healthy + async admin Extract Now + seed OPEN-ISSUES.md (PR #4, includes review-fix for status restore) |
+
+---
+
 ## 2026-05-19 — UNIQUE INDEX shipped; dedup workstream closed
 
 ### Briefing for next session (read first)

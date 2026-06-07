@@ -13,11 +13,39 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-05-19 (UNIQUE INDEX + cross-status dedup closed via PR #3 `0aba418`; PR #2 `aca0de9` shipped 29-fix bundle earlier in same compacted session).**
+**Last working session: 2026-06-07 evening (holistic remediation — P0–P4 ALL complete + adversarially reviewed; on PR #5, ready to merge to prod).**
 
-### Pickup: phase-1 launch checklist (no new code work)
+### Pickup: merge PR #5 → deploy; then P5 (only remaining phase)
 
-The dedup + state-machine workstream is fully closed. Resume the launch-prep checklist:
+**P0–P4 are done** on `fix/holistic-remediation` (PR #5: https://github.com/isckas/tfila/pull/5). P3 = report-wrong-time feature (ShulCloud adapter descoped per research). P4 = full UI pass (UI-1..8 + E-F1). Two adversarial-review workflows (21 agents) over the diff found only low-severity items — all fixed. typecheck + full build green.
+
+**Next concrete action:** **merge PR #5 to `main` to deploy.** Prod deploys are MANUAL, not git-push (see memory `reference_deploy_mechanism` — Production env has DATABASE_URL so the merge builds clean; branch Preview builds fail by design; if the prod alias is pinned to a manual deploy, run `vercel deploy --prod` after merge). Then smoke-check prod. **After deploy, P5 is the only remaining plan phase** (security: SSRF at fetch boundary H6/M9/M10; observability: dead-man's switch H8, /api/health probes the feed H9, M4–M17; the delete-list + L-items; cost-gate counts cron spend E-D2). Bulk "re-extract all broken" (UI-5 stretch) deferred — needs confirm + the P0 rate gate. The P3 ShulCloud-adapter pickup below is now historical (descoped).
+
+### (historical — descoped) Pickup: P3 — ShulCloud adapter
+
+Was: research the widget structure then build a tier-0 deterministic parser. **Descoped 2026-06-07**: research showed P0 already storm-proofed the cascade and the LLM extracts ShulCloud's static HTML at 0.75–0.92, so the adapter would be equal-at-best (worse on generic "Evening Minyan" naming). Shipped E-B5 (report-wrong-time) + E-B3 (moat reframe) instead.
+
+### (historical) Pickup: run the full stranded-shul recovery, then continue P2
+
+Recovering from the 41→9 active-shul regression. P0 (outage fix) + P1 (pipeline consolidation + self-healing status) + P2-start (timezone correctness) are committed (8 commits) and **deployed to prod** (`tfila-bph0uab11`, smoke-green); the new v1-only pipeline is verified (shul 1 re-extracted 5 rules @0.75 + self-healed). **Next concrete action:** `node scripts/recover-stranded.mjs 50` — re-extract the ~29 remaining stranded shuls (≈$2–3, throttled, ~10 min), then set recovered shuls `shul.status='active'`. Full plan + appendices: `~/.claude/plans/reveiw-all-logs-and-reactive-locket.md` (= `docs/HOLISTIC-REMEDIATION-PLAN.md`). **Constraints:** prod aliases the BRANCH (don't push main until merge); gate the LLM-spend recovery + any destructive migration; E-DECISION-1 = v1 base.
+
+### Historical pickup: accumulate batch in plan file, then code (SUPERSEDED — the batch was executed this session)
+
+The geo-tz home-feed 500 fix is **designed and held** in `~/.claude/plans/i-want-you-to-fluttering-canyon.md`. User explicitly chose **batch-then-code**: surface more issues, add each to the plan, code everything in one PR when ready.
+
+Concrete pickup steps:
+1. Ask user what next issue / area to explore.
+2. As issues surface, add a new section to the plan file. **Don't jump to coding yet.**
+3. When user signals "ready," implement everything as one batch (one branch, one PR, one code-review).
+4. Phase-1 launch checklist (UptimeRobot + test cohort + share message) is still outstanding underneath — non-code, can run in parallel.
+
+The held fix recipe (geo-tz):
+- `next.config.ts`: add `serverExternalPackages: ["geo-tz"]` + `outputFileTracingIncludes: { "/": ["./node_modules/geo-tz/data/**/*"] }`.
+- `app/page.tsx:247`: wrap `findTz(lat, lng)[0] ?? "America/New_York"` in try/catch with the same fallback.
+
+### Historical pickup notes from prior session
+
+**2026-05-19 (UNIQUE INDEX + cross-status dedup closed via PR #3 `0aba418`).** Resume the launch-prep checklist:
 
 1. **UptimeRobot signup** (free tier, no card) → monitor `https://tfila.co/api/health`, 5-min interval, email alerts.
 2. **Pick the 3-5 person test cohort** → fill the table in `docs/FIRST-USERS-TEST-PLAN.md`.
@@ -25,7 +53,7 @@ The dedup + state-machine workstream is fully closed. Resume the launch-prep che
 4. **Trigger one deliberate test error** → verify Sentry receives it.
 5. **Send share message** → use the template in the test plan.
 
-### Historical pickup notes from prior session
+### Older historical pickup notes
 
 **Last working session: 2026-05-18 → 2026-05-19 (phase-1 launch prep + ops gates shipped; v2 went global; everything in commit `48aac17`, deploy `tfila-s3zf4v3cj`).**
 
@@ -145,6 +173,37 @@ Working definition of "build phase ends" (per SESSION.md): daily active users > 
 ---
 
 ## Done
+
+### 2026-06-07 (evening) — Remediation P3 + P4 complete + adversarially reviewed; PR #5 ✅
+
+Continued the holistic remediation to completion on `fix/holistic-remediation` (PR #5). **P3:** descoped the ShulCloud deterministic adapter after research (P0 already storm-proofed the cascade; the LLM handles ShulCloud's static HTML) and shipped instead **E-B5** report-wrong-time (anonymous tap → `time_report` table, migration 0013 applied to prod → admin triage at `/admin/reports`; never auto-spends LLM) + **E-B3** moat-doc reframe (`e15f580`). **P4:** the full UI pass — UI-8 design tokens (the whole app was silently rendering in **Arial** despite Geist; blue badges → neutral; tap-target/focus floors; amber dots), UI-1 landing, UI-2 feed (date picker navigates on change, upcoming-outranks-started ordering), UI-3 shul (Today/Tomorrow tabs, map clutter cut), UI-4 (/signin + /bot rescued from dead-ends), UI-6 (admin source-quotes default), **E-F1** (the bug that hid every reviewable shul from the queue), UI-5 (admin cockpit 8 tiles → in-place filter chips absorbing /queue + /rejected), UI-7 (candidate tabs) — `d6144a1`, `6dd6ae4`, `5448116`. **Verification:** two adversarial-review workflows (21 agents, ~850k tokens) over the full diff + the admin-UI delta — every confirmed finding was LOW severity; all fixed (`094251a`, `cf7112c`). Also discovered + documented that prod deploys are manual (merge-to-main / `vercel deploy --prod`), not git-push. **Next: merge PR #5 to deploy; then P5.**
+
+### 2026-06-07 — Holistic remediation: 3 reviews → unified plan → P0+P1+P2 to prod ✅
+
+3 exhaustive multi-agent review workflows (error/log audit: 44 findings, 2 refuted; effectiveness: 66 recs, 0 dropped by the skeptic; UI: 53 problems + 8 360px ASCII redesigns) → one unified one-branch plan (`docs/HOLISTIC-REMEDIATION-PLAN.md`). Then executed P0–P2 on `fix/holistic-remediation` and deployed to prod. The site had silently dropped **41→9 active shuls** after the 2026-05-24 Anthropic 429 storm (transient failures → permanent demotions via a one-way trapdoor).
+
+- **P0** `30f71b9` — geo-tz home-feed 500 fixed (next.config `serverExternalPackages`+`outputFileTracingIncludes` + try/catch); no-recovery trapdoor killed (public visibility derived from freshness; cron off `shul.status`); global Inngest concurrency cap (3) = 429-storm-proof; Biome+Vitest+HTTP-smoke safety net + scripts.
+- **P1** `a52ec67`/`00fbd7b`/`dd16f89`/`46ae688`/`e910a25` — H5/M13; **v2 retired** (one pipeline, −2643 LOC, H2 resolved); transient 429s retry instead of demote; sticky `review_status` + no `shul.status` demotion → shuls **self-heal** via the weekly cron; email-channel parity (H4/M3).
+- **P2 (start)** `0648bb0` — H3 tz-correct day-of-week in the feed; E-C3 code (zmanim render in shul tz on the detail page).
+- **Deploy + verify** `c4c65c5` — deployed the P1+P2 batch (`tfila-bph0uab11`, smoke-green); added `scripts/recover-stranded.mjs`; verified the v1 pipeline recovers shul 1 (broken since 05-24) → 5 rules @0.75, auto-restored to approved+ok.
+
+Outstanding next session: full stranded recovery (~29 shuls, gated LLM spend); P2 remainder (tz backfill+migration, seasonal mincha/maariv prompt, Hebcal gating, freshness=time-validity); P3 (ShulCloud adapter); P4 (8-screen UI redesign — wireframes in plan Appendix C); P5 (security/observability/cleanup). Deferred from P1: cosmetic enum-collapse migration + M1 + the `applyExtractionResult` DRY refactor. **Constraint: prod aliases the BRANCH deploy — don't push main until merge.**
+
+---
+
+### 2026-05-20 — `no_change`-as-healthy + async admin Extract Now + OPEN-ISSUES.md (PR #4 `1283563`) ✅
+
+Closes the regression flagged after PR #2/#3: the freshness probe + admin queue's `hasBrokenRun` predicate + Fix CC demote logic all checked `last_run_status = 'ok'` strictly, missing `'no_change'` (which is an equally-healthy state — cron ran successfully but URL hash matched). Three shuls (Bais Menachem, Anshei Lubavitch, Nosson's Shul) were mis-flagged in the "Investigate broken extraction" inbox and their freshness chip showed "never" despite having 14/14/11 rules from approved sources. Broadened 13 reader sites to `IN ('ok', 'no_change')` / `inArray(...)` across `lib/queries.ts` (×7), `lib/freshness.ts`, `lib/inngest/functions/scrape-one-shul.ts` (×3 in Fix CC demote logic), `lib/inngest/functions/weekly-rescrape-summary.ts`, `lib/llm/tools/previous-extraction.ts`.
+
+Also collapsed the admin "Extract Now from this URL" route from inline `await runCascade(...)` (30-120s spinner) to `inngest.send("data-source.requested", ...)` + 303 redirect with the existing `?rebuilt=1` "queued" banner. Same Inngest worker (`buildDataSource`) the per-data_source rebuild button uses. Admin can queue multiple extractions in succession without babysitting.
+
+Seeded **`docs/OPEN-ISSUES.md`** — new rolling log with 12 entries: 2 ✅ resolved in this PR + 10 🔍 deferred (multi-calendar shul UX gaps + Discovery candidates pipeline bugs across HIGH/MEDIUM/LOW severity).
+
+**Post-merge fix:** code review on PR #4 caught that the async refactor dropped the `unsupported → pending_review` status restore on success (was in the deleted inline route, missing from `buildDataSource`). Patched in commit `6cf58a0` (included in the squash) — added conditional restore inside `buildDataSource`'s success transaction so all 4 callers (Extract Now, rebuild, /submit, /inbound/email) auto-recover from `unsupported` when a manual re-extract succeeds.
+
+**Commit:** `1283563 fix: no_change-as-healthy + async admin Extract Now + seed OPEN-ISSUES.md (#4)` — 8 files changed.
+
+---
 
 ### 2026-05-19 — UNIQUE INDEX + cross-status dedup (PR #3 `0aba418`) ✅
 

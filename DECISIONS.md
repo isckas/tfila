@@ -10,8 +10,108 @@ and FEATURES.md (catalog of what exists). When a decision sits behind a
 piece of code or a future direction, write it here so the **why** survives
 context window evictions and personnel turnover.
 
+---
+
+## 2026-06-07 (evening) — P3 reframe + deploy reality
+
+### Decision — Descope the ShulCloud deterministic adapter (P3 E-B2); ship report-wrong-time instead
+
+**Context.** P3's centerpiece was a deterministic ShulCloud parser, justified by (a) ShulCloud being a JS-render failure case the cascade struggled with, (b) making ShulCloud shuls immune to the 429 storm, (c) being ~free vs an LLM call. Researching real ShulCloud sites before building (the lesson from v2's Docling misfire) overturned all three premises.
+
+**Findings.** All 4 active ShulCloud shuls extract on the plain **static-HTML tier at 0.75–0.92** (no JS render needed). P0 had **already** made transient 429s retry-with-backoff instead of demote, so ShulCloud shuls are already storm-immune. Cost is cheap Haiku (~cents/year). And the deterministic parser hits a real wall: a generic "Evening Minyan" at 5:30pm is mincha-or-maariv depending on shkia — exactly the disambiguation the LLM does and a DOM parser can't. The LLM's own "gold" extraction for shaareyzedek was actually noisy (3 overlapping rules for one event), so the accuracy bar wasn't even high.
+
+**Options.** (1) Build the adapter anyway (consistency/defense-in-depth). (2) Descope it; ship the two cheap P3 wins. (3) Skip P3, jump to P4.
+
+**Chose (2)** — user-confirmed. Shipped **E-B5** (anonymous report-wrong-time tap → `time_report` → admin triage; never auto-spends LLM) + **E-B3** (reframe the "moat" doc: the moat is the rule model + zmanim/special-day resolver + curated directory, NOT the commoditizable few-shot prompt — that mislabel was being used to reflexively veto deterministic strategies).
+
+**Implications.** No platform-aware router / tier-0 parser. The cascade stays the one engine; P0's storm-proofing is what made the adapter redundant. `EXTRACTION.md` carries the moat reframe. If ShulCloud-specific accuracy ever matters, revisit — but the DOM is clean (`ce_event_*` classes under `.calendar_day_view`), so it's a known quantity.
+
+### Decision — Production deploys are manual; merge-to-main is the durable path
+
+**Context.** Mid-P4, discovered prod wasn't picking up pushed commits. Pushing the branch creates a **Preview** deployment that **fails** (Preview env lacks `DATABASE_URL`; `db/client.ts` throws at module load during `next build`). The last git-tracked Production deploy was May-20 `main`, yet prod ran newer code (Jerusalem geo-tz returned 200) — so P0 went live via a manual `vercel deploy --prod` that leaves no git record.
+
+**Decision.** Ship via **merge PR to `main`** (Production env has `DATABASE_URL` → builds clean; durable, matches how PRs #2–4 shipped) and/or `vercel deploy --prod`. Never deploy stale pre-merge `main`. Captured in memory `reference_deploy_mechanism`. Optional future fix: lazy-init the Pool in `db/client.ts` so Preview builds stop failing.
+
+---
+
+## 2026-06-07 — Holistic remediation (3 reviews → unified plan → P0/P1/P2 to prod)
+
+### Decision 1 — One unified plan, one branch, "no waves"
+- **Context:** A "review all logs + code" ask grew into 3 review passes (error/log audit, effectiveness, UI), each with its own roadmap.
+- **Chose:** ONE plan (`~/.claude/plans/reveiw-all-logs-and-reactive-locket.md`, copied to `docs/HOLISTIC-REMEDIATION-PLAN.md`) on ONE branch `fix/holistic-remediation`, with P0–P5 as **build-order dependency phases, NOT optional waves**. Each item tagged with all its source IDs (e.g. `[C3·E-E1]`). Everything ships except the 2 refuted findings + the skeptic's "keep as-is" list.
+- **Lesson:** When multiple review passes accrete, dedupe into one tagged plan so there's a single source of truth; kill leftover per-review roadmaps.
+
+### Decision 2 — E-DECISION-1: consolidate to v1 base + v2's 2 wins
+- **Context:** Dual v1/v2 pipelines; v2 was the global default but underperformed (0.527 avg confidence, 5/28 approved) and its extra per-shul LLM calls amplified the 429 storm.
+- **Chose:** Retire v2 entirely (−2643 LOC), keep v1's simpler 4-tier cascade; fold in v2's two genuine wins — forced tool-schema output + required `sourceQuote` (`tools/extraction-output.ts` kept; fold-in still pending).
+- **Implications:** `EXTRACTION_PIPELINE_V2` flag now a no-op; H2 (markdown-vs-sanitized hash mismatch) resolved automatically.
+
+### Decision 3 — Status-model: fix the BEHAVIOR in code, defer the cosmetic enum migration
+- **Context:** A 3-axis status model (`shul.status`×`review_status`×`last_run_status`) + the demote/restore dance behind 30+ "Fix X" patches caused the no-recovery trapdoor.
+- **Chose:** Achieve the target behavior in code only — derived public visibility (E-A1), sticky `review_status` (never flip approved→pending on a run outcome), no `shul.status` demotion, transient-vs-terminal classification (only demote on terminal). Shuls now self-heal via the weekly cron. DEFER the cosmetic enum-value removal ({live,archived}/{approved,rejected}) + dropping `first_broken_at` to a gated migration — not needed for correctness.
+- **Lesson:** Separate behavioral fixes (code, no migration, shippable now) from cosmetic schema cleanup (destructive, gated). Ship the value, defer the churn.
+
+### Decision 4 — Execution: prod-fastest, gate only the destructive/costly steps
+- **Context:** Site down (41→9 active shuls); user wanted speed.
+- **Chose:** Deploy straight to prod (`vercel deploy --prod`; the Vercel **Preview** env lacks `DATABASE_URL`, so preview builds fail). Verify each deploy with the HTTP smoke test + a real test extraction. PAUSE for explicit go only on (a) LLM-spend ops and (b) destructive DB migrations. Prod aliases to the BRANCH deployment → don't push main until merge.
+- **Lesson:** "Fastest" ≠ "no gates" — gate the irreversible (migrations) + the metered (LLM spend); move fast on the rest.
+
+### Decision 5 — Root cause of the 41→9 regression (corrected by adversarial verification)
+- **Context:** Docs implied a clean v2 canary; the site had quietly dropped to 9 active shuls.
+- **Found:** The first global-v2 weekly cron (2026-05-24) hit an **Anthropic 429 storm** from an unthrottled ~41-way fan-out — TRANSIENT, proven from `config_json.cascade_attempts` ("429 rate_limit_error"). `preferredStrategy:'html'` pinning off fallback tiers turned the transient 429 into permanent "cascade exhausted all tiers" demotions; cron-only-fans-active+approved made it a one-way trapdoor. An initial "v2 dropped v1's URL fallback" hypothesis was REFUTED by the verifier and by re-extracting shul 1 successfully.
+- **Lesson:** Adversarially verify root-cause hypotheses against stored evidence (config_json/Sentry) before committing a fix.
+
+### Decision 6 — E-C1 evening times: convert to zmanim only when the source says so (option 2)
+- **Context:** 455 of 491 live rules were fixed clocks; shuls publish mincha/maariv clock times that actually track sunset (BAYT's "8:45pm"), so a frozen clock goes seasonally wrong while the freshness pill reads green.
+- **Options:** (1) auto-convert evening fixed times to a shkia-offset via server-side sunset math; (2) convert only when the page describes the time relative to a zman; (3) flag for admin, never auto-convert.
+- **Chose (user):** **Option 2** — the extraction prompt emits `zmanim` only when the source text says "before/after shkia/sunset/tzeis/plag/candle-lighting"; bare clock times stay fixed (lower confidence). Deleted the "emit fixed + reviewer note" escape hatch. The ShulCloud pre-computed-clock case (BAYT) is explicitly deferred to **P3's ShulCloud adapter**, which reads ShulCloud's underlying `shkia − N` rule directly — deterministic, no LLM guessing (the v1 pipeline has no sunset tool after retiring v2).
+- **Implications:** re-extract all active shuls with fixed evening rules (user chose); add a quiet "may shift seasonally" note (E-C4) on fixed evening times; keep "Verified N ago" as-is.
+- **Lesson:** Don't make the LLM guess sunset math it can't read off the page; route deterministic platforms (ShulCloud) to an adapter that reads the real rule, reserve the LLM for the long tail.
+
 **Convention:** latest at top. Sections grouped by date + topic. Cross-link
 to PROGRESS.md commits + FEATURES.md entries when relevant.
+
+---
+
+## 2026-06-03 — home-feed 500 + batch-then-code workflow
+
+Home feed returned HTTP 500 at one specific user-supplied coordinate (`?lat=43.8030364&lng=-79.4429928&radius=2`) after PR #4 shipped. Other coordinate sets — including ones 1.5 km away in the same neighborhood — returned 200. Three decisions came out of the investigation + the resulting fix design.
+
+### Decision 1 — Pull the stack trace from Sentry API instead of over-investigating statically
+
+**Context:** Initial investigation showed the SQL query worked when run directly, and every component + utility in the feed-render path (`resolveRuleTime`, `computeZmanimStrip`, `MinyanList`, `RelativeTime`, all formatters, `FeedHeader`, `isoDateInTz`) was individually defensive by static reading. Yet the 500 was deterministic. Spent ~20 turns reading code without finding a throwing line.
+
+**Options:** (a) keep reading code (slow, may never converge), (b) reproduce locally with `npm run build && start` (~5 min cycle, requires prod DB access which is already present), (c) pull the error from Sentry (~30 seconds once token is set up).
+
+**Chose (c).** The Sentry DSN was already wired up for the project. User created a read-only auth token (scopes: `event:read`, `project:read`), added it to `.env.local` as `SENTRY_AUTH_TOKEN`. First token attempt was invalid (64-char bare hex, possibly wrong type); second token authenticated but lacked `org:read` (the `/organizations/` endpoint denied access). The `/projects/` and `/events/` endpoints worked, which was enough — fetched the most recent error event on `GET /` and got the full stack trace in one curl.
+
+**Implication:** **For runtime errors that aren't visible by static reading, the FIRST move is Sentry, not deeper investigation.** Saved roughly 5-10 turns of speculation. Memorialized in `[[reference-sentry-access]]` so the access details survive — org slug `ik-c7`, project `javascript-nextjs-tfila`, US region (`us.sentry.io`), token works for `/projects/{org}/{project}/events/`.
+
+**Lesson:** Defensive static reading hits diminishing returns fast once the obvious throwers are eliminated. Runtime telemetry is the right answer.
+
+### Decision 2 — Fix geo-tz with `serverExternalPackages` + `outputFileTracingIncludes` + try/catch around `findTz`
+
+**Context:** The Sentry stack trace showed `Error: ENOENT: no such file or directory, open` inside `c.find` (geo-tz's `find()` function) calling `fs.openSync`, transaction `GET /`. geo-tz 8.1.7 reads its `.geo.dat` timezone-boundary data files from `node_modules/geo-tz/data/` at runtime, resolving paths relative to its own module dir. Two factors compound: (a) Next.js 16's Turbopack bundles geo-tz INTO an SSR chunk (`_0yjgu07._.js`), breaking `__dirname`-relative path resolution; (b) the `.geo.dat` binary files weren't traced into the deployment. The bug is location-specific because geo-tz only `openSync`s the `.geo.dat` for coordinate tiles requiring point-in-polygon precision — index-only-resolvable tiles (NYC, the old Thornhill coords) don't hit it.
+
+**Options:** (a) `outputFileTracingIncludes` for geo-tz data only; (b) `serverExternalPackages: ["geo-tz"]` only — keeps the module un-bundled so its path resolution is correct, and nft tracing handles the files; (c) both belt-and-suspenders + a try/catch around the `findTz` call as a third defense; (d) wrap only — leaves the data still missing.
+
+**Chose (c).** `serverExternalPackages` fixes the path-resolution side; `outputFileTracingIncludes` guarantees the data ships even if Next's `@vercel/nft` doesn't pick up the dynamic `fs.openSync` paths; the try/catch around `findTz` makes the core home page resilient to any future regression — falls back to `America/New_York` instead of 500-ing. Verified against the Next 16.2.4 docs (`outputFileTracingIncludes` and `serverExternalPackages` are both stable top-level config keys in Next 15+).
+
+**Implication:** `next.config.ts` gains two keys; `app/page.tsx:247` wraps `findTz` in try/catch. Held in the plan file `~/.claude/plans/i-want-you-to-fluttering-canyon.md` — not yet coded; will ship as part of the next batch.
+
+**Lesson:** Native-module data files on Next.js/Vercel need BOTH explicit external-package opt-out AND explicit file tracing. Sharp, geo-tz, aws-crt, canvas — same pattern.
+
+### Decision 3 — Batch-then-code workflow: accumulate designed fixes in the plan file, implement together
+
+**Context:** With the geo-tz fix designed, the natural impulse was to code + ship. User pushed back: "hold this in plan and we will continue to explore other things that come up. and code all at once."
+
+**Options:** (a) ship each fix as soon as designed (small PRs, frequent reviews), (b) accumulate in the plan file until the user signals "ready," then implement everything as one batch PR.
+
+**Chose (b).** User has now used this pattern twice in the same scope of work — the OPEN-ISSUES.md bundle for PR #4 was the same shape (explore → 12 entries accumulated → implement as one PR). Batching reduces PR overhead, lets related fixes share context in review, and matches the user's mental model of how the project moves forward.
+
+**Implication:** `~/.claude/plans/i-want-you-to-fluttering-canyon.md` becomes the **live working draft for the next batch**. As issues are surfaced and diagnosed, new sections get appended. When the user signals readiness, all fixes go into one branch, one PR, one code-review. Until then: do NOT jump to coding when something is diagnosed. Capture the fix shape in the plan and ask what's next.
+
+**Lesson:** Batch-then-code is a stable user preference for this project — codified in `[[feedback-batch-then-code]]`.
 
 ---
 
