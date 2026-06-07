@@ -139,8 +139,18 @@ export default async function HomePage({ searchParams }: PageProps) {
   // behavior the feed has always had.
   const travelDate = sp.date ? parseDateOnly(sp.date) : null;
   const referenceDate = travelDate ?? now;
-  const referenceDow = referenceDate.getDay();
   const rows = await getNearbyShulsWithRules(lat, lng, radiusMeters);
+
+  // Derive the timezone FROM lat/lng (the user's search location), not the
+  // server's TZ. On Vercel the server runs in UTC, so a raw getDay()/clock
+  // would be off by 4-5h. geo-tz maps lat/lng → IANA tz; fall back to ET for
+  // the rare unmapped point (or a missing-data throw — see C3 / next.config).
+  let userTz = "America/New_York";
+  try {
+    userTz = findTz(lat, lng)[0] ?? "America/New_York";
+  } catch {
+    // .geo.dat read can throw if the bundle is missing the data files; ET fallback.
+  }
 
   const earliest = travelDate
     ? Date.UTC(
@@ -168,15 +178,19 @@ export default async function HomePage({ searchParams }: PageProps) {
     // showed nothing for the feed because the only applicable rules were
     // special. Mirrors the shul detail page's resolution logic.
     if (r.specialScheduleKind && r.specialScheduleKind !== "regular") {
-      const refIso = isoDateInTz(referenceDate, r.timezone ?? "UTC");
+      const refIso = isoDateInTz(referenceDate, r.timezone ?? userTz);
       if (r.validFrom && refIso < r.validFrom) continue;
       if (r.validTo && refIso > r.validTo) continue;
-    } else if (
-      r.daysOfWeek &&
-      r.daysOfWeek.length > 0 &&
-      !r.daysOfWeek.includes(referenceDow)
-    ) {
-      continue;
+    } else if (r.daysOfWeek && r.daysOfWeek.length > 0) {
+      // H3: day-of-week must be computed in the SHUL's local timezone (falling
+      // back to the user's tz while shul.timezone is null, pending the E-C3
+      // backfill). The old referenceDate.getDay() returned the SERVER's day
+      // (UTC on Vercel), so an ET user browsing Friday night — Saturday in UTC
+      // — saw Saturday's minyanim and lost Friday-night maariv.
+      const dow = new Date(
+        isoDateInTz(referenceDate, r.timezone ?? userTz) + "T12:00:00Z",
+      ).getUTCDay();
+      if (!r.daysOfWeek.includes(dow)) continue;
     }
 
     const startDate = resolveRuleTime(
@@ -239,20 +253,6 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   const trimmed = resolved.slice(0, MAX_ITEMS);
 
-  // Derive the timezone FROM lat/lng (the user's search location) — not
-  // from the server's TZ. On Vercel, Intl.DateTimeFormat returns "UTC"
-  // server-side, which would render every clock 4-5 hours off in NYC/LA.
-  // geo-tz maps any lat/lng to its IANA tz; defensive fallback to ET
-  // for the rare unmapped point.
-  let userTz = "America/New_York";
-  try {
-    userTz = findTz(lat, lng)[0] ?? "America/New_York";
-  } catch {
-    // Defensive: geo-tz reads its `.geo.dat` boundary files via fs.openSync at
-    // call time. If the serverless bundle is missing them (the bug this branch
-    // fixes via next.config) or the point is unmapped, fall back to ET instead
-    // of throwing and 500-ing the entire feed render.
-  }
   const stripSnapshot = computeZmanimStrip(
     { lat, lng, timezone: userTz },
     referenceDate,

@@ -228,7 +228,10 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
       {/* ─── Zmanim strip for selected date ─────────────────── */}
       {zmanim && (
         <section className="mt-5">
-          <ZmanimStrip snapshot={zmanim} />
+          {/* E-C3: pass the shul tz so the strip renders the (tz-computed)
+              zmanim in the shul's local time — without it the strip formatted
+              in the host TZ (UTC on Vercel) while print + feed were correct. */}
+          <ZmanimStrip snapshot={zmanim} timezone={tz} />
         </section>
       )}
 
