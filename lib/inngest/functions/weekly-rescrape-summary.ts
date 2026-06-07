@@ -14,9 +14,15 @@ import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { dataSource, scrapeRun, shul } from "../../../db/schema";
 import { notifyAdmin } from "../../email";
+import { reportInngestFailure } from "../on-failure";
 import { STALE_THRESHOLD_DAYS } from "../../freshness";
 
 const LOOKBACK_MINUTES = 90;
+
+// M4: when this many sources newly break in one week, the digest is no longer
+// "routine" — prefix the subject with a loud alert so a fleet collapse (the
+// 2026-05-24 28-shul storm) doesn't read like a normal week's 1-2 breakages.
+const MASS_BREAKAGE_THRESHOLD = 5;
 
 // Absolute base URL for links in the email body. Email clients won't
 // auto-link relative paths — every URL has to be a full https://...
@@ -29,6 +35,7 @@ const BASE_URL = (
 export const weeklyRescrapeSummary = inngest.createFunction(
   {
     id: "shul-weekly-rescrape-summary",
+    onFailure: reportInngestFailure("shul-weekly-rescrape-summary"),
     triggers: [{ cron: "0 4 * * SUN" }],
   },
   async ({ step }) => {
@@ -122,6 +129,14 @@ export const weeklyRescrapeSummary = inngest.createFunction(
     );
     const staleCount = Number(stale.rows[0]?.n ?? 0);
 
+    // M4: current active-shul count, so a fleet drop is visible at a glance.
+    const activeRow = await step.run("count-active", async () =>
+      db.execute<{ n: number }>(
+        sql`SELECT COUNT(*)::int AS n FROM shul WHERE status = 'active'`,
+      ),
+    );
+    const activeCount = Number(activeRow.rows[0]?.n ?? 0);
+
     // Fix R: bucket currently-broken data_sources into NEW (first broken
     // within 7d) vs CHRONIC (broken longer). Powered by first_broken_at
     // which the scrape-one-shul mark-broken step now maintains via
@@ -142,15 +157,19 @@ export const weeklyRescrapeSummary = inngest.createFunction(
           ds.shul_id,
           s.slug,
           s.name,
-          ds.first_broken_at,
-          EXTRACT(EPOCH FROM (NOW() - ds.first_broken_at))::int / 86400 AS days_broken,
+          COALESCE(ds.first_broken_at, ds.last_run_at) AS first_broken_at,
+          EXTRACT(EPOCH FROM (NOW() - COALESCE(ds.first_broken_at, ds.last_run_at)))::int / 86400 AS days_broken,
           ds.extraction_strategy::text AS extraction_strategy
         FROM data_source ds
         JOIN shul s ON s.id = ds.shul_id
-        WHERE ds.first_broken_at IS NOT NULL
-          AND ds.review_status <> 'rejected'
+        -- M5: COALESCE to last_run_at instead of filtering first_broken_at
+        -- IS NOT NULL — migration 0011 added the column with no backfill, so
+        -- sources broken before it existed (and never re-transitioned) had a
+        -- NULL stamp and were INVISIBLE to this digest. Now all currently-broken
+        -- sources surface, using last_run_at as the "broken since" proxy.
+        WHERE ds.review_status <> 'rejected'
           AND ds.last_run_status IN ('broken', 'error')
-        ORDER BY ds.first_broken_at DESC
+        ORDER BY COALESCE(ds.first_broken_at, ds.last_run_at) DESC
       `),
     );
     const newBroken = brokenSources.rows.filter(
@@ -164,6 +183,7 @@ export const weeklyRescrapeSummary = inngest.createFunction(
     const lines: string[] = [];
     lines.push(`Weekly cron summary — ${new Date().toISOString().slice(0, 10)}`);
     lines.push("─".repeat(48));
+    lines.push(`Active shuls (public): ${activeCount}`);
     lines.push(`Total scrapes: ${total}`);
     lines.push("");
 
@@ -235,11 +255,16 @@ export const weeklyRescrapeSummary = inngest.createFunction(
       "Lookback window: last 90 min. Inngest dashboard has full per-run traces.",
     );
 
-    const subjectParts = [`Weekly cron · ${total} scrapes`];
+    const subjectParts = [`Weekly cron · ${activeCount} active · ${total} scrapes`];
     if (newBroken.length > 0) subjectParts.push(`${newBroken.length} NEW broken`);
     if (chronicBroken.length > 0)
       subjectParts.push(`${chronicBroken.length} chronic`);
     if (staleCount > 0) subjectParts.push(`${staleCount} stale`);
+    // M4: spike-gate — a mass breakage gets a loud prefix so it can't read as
+    // a routine digest.
+    if (newBroken.length >= MASS_BREAKAGE_THRESHOLD) {
+      subjectParts.unshift(`🚨 [ALERT] MASS BREAKAGE — ${newBroken.length} shuls`);
+    }
 
     await step.run("send-email", async () => {
       await notifyAdmin({

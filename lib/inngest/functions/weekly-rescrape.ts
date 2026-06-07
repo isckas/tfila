@@ -12,10 +12,12 @@ import { and, eq, ne } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { dataSource, shul } from "../../../db/schema";
+import { reportInngestFailure } from "../on-failure";
 
 export const weeklyRescrape = inngest.createFunction(
   {
     id: "shul-weekly-rescrape",
+    onFailure: reportInngestFailure("shul-weekly-rescrape"),
     triggers: [{ cron: "0 3 * * SUN" }],
   },
   async ({ step }) => {
