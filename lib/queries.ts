@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { dataSource, minyanRule, scrapeRun, shul, type MinyanTime } from "../db/schema";
 
@@ -21,7 +21,10 @@ export async function listActiveShuls() {
     .from(shul)
     .where(
       and(
-        eq(shul.status, "active"),
+        // Visibility = has a fresh good source AND not admin-archived. We no
+        // longer require status='active' (a derived state); a healthy shul shows
+        // even while its stored status lags. See plan E-A1 (kills the trapdoor).
+        ne(shul.status, "archived"),
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
@@ -286,7 +289,10 @@ export async function listShulsForLookup() {
     .from(shul)
     .where(
       and(
-        eq(shul.status, "active"),
+        // Visibility = has a fresh good source AND not admin-archived. We no
+        // longer require status='active' (a derived state); a healthy shul shows
+        // even while its stored status lags. See plan E-A1 (kills the trapdoor).
+        ne(shul.status, "archived"),
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
@@ -314,7 +320,10 @@ export async function searchActiveShuls(q: string, limit = 30) {
     .from(shul)
     .where(
       and(
-        eq(shul.status, "active"),
+        // Visibility = has a fresh good source AND not admin-archived. We no
+        // longer require status='active' (a derived state); a healthy shul shows
+        // even while its stored status lags. See plan E-A1 (kills the trapdoor).
+        ne(shul.status, "archived"),
         sql`(${shul.name} ILIKE ${pattern} OR ${shul.slug} ILIKE ${pattern})`,
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
@@ -659,7 +668,7 @@ export async function getNearbyShulsWithRules(
         ST_X(s.location::geometry) AS lng,
         ST_Distance(s.location, ${point}) AS distance_meters
       FROM shul s
-      WHERE s.status = 'active'
+      WHERE s.status <> 'archived'
         AND s.location IS NOT NULL
         AND ST_DWithin(s.location, ${point}, ${radiusMeters})
         AND EXISTS (

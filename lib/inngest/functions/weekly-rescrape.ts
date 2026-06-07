@@ -8,7 +8,7 @@
 // Saturday-night run captures the freshest schedule before Sunday
 // daveners hit the feed.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { inngest } from "../client";
 import { db } from "../../../db/client";
 import { dataSource, shul } from "../../../db/schema";
@@ -23,10 +23,10 @@ export const weeklyRescrape = inngest.createFunction(
       return { skipped: true, reason: "SCRAPE_ENABLED=false" };
     }
 
-    // Find every (active shul, approved data_source) pair.
-    // The shul.status filter ensures we don't scrape archived shuls;
-    // the data_source.review_status filter ensures we don't scrape
-    // unreviewed (pending) or rejected configs.
+    // Find every (non-archived shul, approved data_source) pair.
+    // The shul.status filter only excludes admin-archived shuls; the
+    // data_source.review_status filter ensures we don't scrape unreviewed
+    // (pending) or rejected configs.
     const targets = await step.run("list-targets", async () => {
       return db
         .select({
@@ -39,7 +39,11 @@ export const weeklyRescrape = inngest.createFunction(
         .innerJoin(shul, eq(shul.id, dataSource.shulId))
         .where(
           and(
-            eq(shul.status, "active"),
+            // Drive the worklist off the source's approval + "not archived",
+            // not a derived `status='active'` — so a shul that recovered (or is
+            // mid-recovery) stays in the cron instead of being trapdoored out
+            // of the fan-out forever. See plan E-A1 / C2.
+            ne(shul.status, "archived"),
             eq(dataSource.reviewStatus, "approved"),
           ),
         );

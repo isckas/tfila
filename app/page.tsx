@@ -244,7 +244,15 @@ export default async function HomePage({ searchParams }: PageProps) {
   // server-side, which would render every clock 4-5 hours off in NYC/LA.
   // geo-tz maps any lat/lng to its IANA tz; defensive fallback to ET
   // for the rare unmapped point.
-  const userTz = findTz(lat, lng)[0] ?? "America/New_York";
+  let userTz = "America/New_York";
+  try {
+    userTz = findTz(lat, lng)[0] ?? "America/New_York";
+  } catch {
+    // Defensive: geo-tz reads its `.geo.dat` boundary files via fs.openSync at
+    // call time. If the serverless bundle is missing them (the bug this branch
+    // fixes via next.config) or the point is unmapped, fall back to ET instead
+    // of throwing and 500-ing the entire feed render.
+  }
   const stripSnapshot = computeZmanimStrip(
     { lat, lng, timezone: userTz },
     referenceDate,

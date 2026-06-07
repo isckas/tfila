@@ -28,10 +28,13 @@ export const buildDataSource = inngest.createFunction(
     // for a given shul. Otherwise an admin "Re-extract" while the
     // weekly cron is mid-flight on the same shul double-writes
     // data_source rows + races on the shul.address / shul.name COALESCE.
-    concurrency: {
-      key: "event.data.shulId",
-      limit: 1,
-    },
+    concurrency: [
+      // GLOBAL cap — the admin "re-extract all" / bulk recovery path fans out
+      // through here, so it needs the same fleet-wide throttle as the weekly
+      // cron to avoid re-triggering the 429 storm. See plan C1 / E-D1 / UI-5.
+      { limit: 3 },
+      { key: "event.data.shulId", limit: 1 },
+    ],
     triggers: [{ event: "data-source.requested" }],
   },
   async ({ event, step }) => {

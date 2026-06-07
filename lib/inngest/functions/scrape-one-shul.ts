@@ -32,12 +32,18 @@ type Step = {
 export const scrapeOneShul = inngest.createFunction(
   {
     id: "shul-scrape-one",
-    concurrency: {
-      // Best-effort per-host limit. The event payload doesn't carry the
-      // host directly; we use shulId as a proxy (one shul = one host).
-      key: "event.data.shulId",
-      limit: 1,
-    },
+    concurrency: [
+      // GLOBAL cap across the whole fleet. The 2026-05-24 regression was an
+      // unthrottled ~41-way weekly fan-out that hammered Anthropic into 429s;
+      // because the rescrape pinned a single tier, those transient 429s became
+      // permanent "cascade exhausted all tiers" demotions and the site dropped
+      // 41→9 active shuls. Keep concurrent LLM-bound scrapes low so a rate
+      // limit can never cascade into mass breakage again. See plan C1 / E-D1.
+      { limit: 3 },
+      // Best-effort per-host limit. The event payload doesn't carry the host
+      // directly; we use shulId as a proxy (one shul = one host).
+      { key: "event.data.shulId", limit: 1 },
+    ],
     triggers: [{ event: "shul.scrape.requested" }],
   },
   async ({ event, step }) => {
