@@ -104,9 +104,8 @@ interface CascadeOpts {
   preferredStrategy?: ExtractionStrategy;
   timeoutMs?: number;
   /**
-   * Shul ID — required for v2 (context preamble + tools + critique).
-   * Optional for v1 (ignored). When v2 is active and shulId is missing
-   * we silently fall through to v1 with a console.warn.
+   * Shul ID — accepted for caller convenience / logging but not required by
+   * the cascade. (Was used by the retired v2 context preamble.)
    */
   shulId?: number;
 }
@@ -115,26 +114,11 @@ function isUseful(rules: number, confidence: number): boolean {
   return rules > 0 && confidence >= MIN_USEFUL_CONFIDENCE;
 }
 
-// ─── Feature flag dispatch ───────────────────────────────────
-//
-// EXTRACTION_PIPELINE_V2=true  → use v2 for ALL shuls
-// EXTRACTION_V2_SHUL_IDS=12,34 → use v2 only for those specific shuls
-// (neither set)                → use v1 for everything (current behavior)
-//
-// Per EXTRACTION-ONE-SHOT-PLAN.md "Feature flag design".
-
-function shouldUseV2(shulId: number | undefined): boolean {
-  if (process.env.EXTRACTION_PIPELINE_V2 === "true") return true;
-  if (shulId == null) return false;
-  const idsRaw = process.env.EXTRACTION_V2_SHUL_IDS;
-  if (!idsRaw) return false;
-  const ids = idsRaw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map(Number);
-  return ids.includes(shulId);
-}
+// NOTE: the v2 agent-loop pipeline (router + agent-loop + 5 tools + critique +
+// Jina/Docling) and its EXTRACTION_PIPELINE_V2 / EXTRACTION_V2_SHUL_IDS feature
+// flags were retired in the P1 consolidation. v2 underperformed v1 (0.527 avg
+// confidence vs v1's working canary) and its extra per-shul LLM calls amplified
+// the 2026-05-24 429 storm. v1 is now the only pipeline. See plan E-DECISION-1.
 
 /**
  * Find PDF links on a page. Accepts multiple HTML sources (e.g. static
@@ -238,13 +222,8 @@ function findImageCandidates(htmls: string[], baseUrl: string): string[] {
 }
 
 /**
- * Top-level cascade entry point. Dispatches to v1 (current production
- * pipeline) or v2 (extract-v2 + agent tools + critique + Jina/Docling)
- * based on feature flags.
- *
- * v2 needs a shulId for context preamble. If the flag is on for a
- * shul that has no shulId in scope (shouldn't happen but defensive),
- * we fall back to v1 silently.
+ * Top-level cascade entry point. Runs the 4-tier extraction cascade
+ * (HTML → JS-rendered → Vision → PDF) behind a cost circuit-breaker.
  */
 export async function runCascade(
   submittedUrl: string,
@@ -282,21 +261,6 @@ export async function runCascade(
     };
   }
 
-  if (shouldUseV2(opts.shulId)) {
-    if (opts.shulId == null) {
-      console.warn(
-        "[cascade] v2 enabled but no shulId provided; falling back to v1",
-      );
-    } else {
-      // Lazy-import so v2 dependencies aren't loaded in v1-only deploys
-      const { runCascadeV2 } = await import("./cascade-v2");
-      return runCascadeV2(submittedUrl, {
-        shulId: opts.shulId,
-        preferredStrategy: opts.preferredStrategy,
-        timeoutMs: opts.timeoutMs,
-      });
-    }
-  }
   return runCascadeV1Internal(submittedUrl, opts);
 }
 
