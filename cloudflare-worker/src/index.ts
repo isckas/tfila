@@ -34,10 +34,55 @@ export interface Env {
 }
 
 // Hosts we'll proxy. Empty array = no allowlist (proxy any host) —
-// fine as long as FETCH_PROXY_TOKEN stays secret. Populate this with
-// specific suffixes if you ever want a hard guardrail against the
-// proxy being repurposed for non-tfila scraping.
+// the proxy fetches the long tail of shul domains, so an allowlist isn't
+// practical; the SSRF guardrail is isBlockedHost() below + manual redirects,
+// not a host allowlist. Populate this only if you want to additionally pin the
+// proxy to specific suffixes.
 const HOST_ALLOWLIST: string[] = [];
+
+// SSRF guardrail for the proxy (M9). The tfila side already SSRF-validates
+// before falling back to this proxy, but the proxy is a standalone endpoint a
+// token-holder can call directly, so it re-checks here. Cloudflare Workers have
+// no DNS resolver, so this catches LITERAL private/loopback/link-local/metadata
+// IPs + local hostnames (and, with manual redirects below, redirects TO them).
+// It cannot catch a hostname that DNS-resolves to a private IP — accepted.
+const MAX_PROXY_REDIRECTS = 5;
+
+function isBlockedHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    h === "localhost" ||
+    h.endsWith(".localhost") ||
+    h.endsWith(".local") ||
+    h.endsWith(".internal")
+  ) {
+    return true;
+  }
+  // IPv6 literals ONLY — they always contain a colon (a bracketed
+  // http://[fd00::1]/ becomes "fd00::1" after bracket-strip). Gating on the
+  // colon stops the bare fc/fd ULA prefixes from wrongly blocking ordinary
+  // domains like fda.gov / fcc.gov / fcbarcelona.com.
+  if (h.includes(":")) {
+    if (
+      h === "::1" ||
+      h === "::" ||
+      h.startsWith("fe80:") ||
+      h.startsWith("fc") ||
+      h.startsWith("fd")
+    ) {
+      return true;
+    }
+  }
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (a === 0 || a === 10 || a === 127) return true; // 0/8, 10/8, 127/8
+  if (a === 169 && b === 254) return true; // link-local + cloud metadata
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16/12
+  if (a === 192 && b === 168) return true; // 192.168/16
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64/10
+  return false;
+}
 
 // Realistic browser UA. Some anti-bot systems still block well-known
 // crawler UAs even on residential ASNs; using a desktop Chrome string
@@ -164,6 +209,9 @@ export default {
     if (target.protocol !== "http:" && target.protocol !== "https:") {
       return Response.json({ error: "only http(s) urls" }, { status: 400 });
     }
+    if (isBlockedHost(target.hostname)) {
+      return Response.json({ error: "blocked host" }, { status: 403 });
+    }
     if (HOST_ALLOWLIST.length > 0) {
       const ok = HOST_ALLOWLIST.some((suffix) =>
         target.hostname === suffix || target.hostname.endsWith("." + suffix),
@@ -179,21 +227,41 @@ export default {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 12_000);
 
-    let upstream: Response;
+    // Follow redirects MANUALLY (M9) so a redirect to a private/metadata IP
+    // can't slip past the isBlockedHost check above.
+    let upstream!: Response;
+    let currentUrl = target.toString();
     try {
-      upstream = await fetch(target.toString(), {
-        method: "GET",
-        headers: {
-          "User-Agent": BROWSER_UA,
-          // Mirror what a real browser sends; some anti-bot systems
-          // 403 requests missing Accept/Accept-Language entirely.
-          Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        redirect: "follow",
-        signal: controller.signal,
-      });
+      for (let hop = 0; ; hop++) {
+        upstream = await fetch(currentUrl, {
+          method: "GET",
+          headers: {
+            "User-Agent": BROWSER_UA,
+            // Mirror what a real browser sends; some anti-bot systems
+            // 403 requests missing Accept/Accept-Language entirely.
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+          redirect: "manual",
+          signal: controller.signal,
+        });
+        const loc = upstream.headers.get("location");
+        if (upstream.status >= 300 && upstream.status < 400 && loc) {
+          if (hop >= MAX_PROXY_REDIRECTS) break;
+          const next = new URL(loc, currentUrl);
+          if (
+            (next.protocol !== "http:" && next.protocol !== "https:") ||
+            isBlockedHost(next.hostname)
+          ) {
+            clearTimeout(timeoutId);
+            return Response.json({ error: "blocked redirect" }, { status: 403 });
+          }
+          currentUrl = next.toString();
+          continue;
+        }
+        break;
+      }
     } catch (e) {
       clearTimeout(timeoutId);
       const msg = e instanceof Error ? e.message : String(e);

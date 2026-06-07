@@ -36,10 +36,12 @@ import {
   isSharedMtaDomain,
   normalizeWebsiteUrl,
 } from "../../inbound/extract-website";
+import { reportInngestFailure } from "../on-failure";
 
 export const processEmail = inngest.createFunction(
   {
     id: "email-received-process",
+    onFailure: reportInngestFailure("email-received-process"),
     concurrency: { key: "event.data.originalSenderEmail", limit: 1 },
     triggers: [{ event: "email.received" }],
     // Cap the whole function. With per-sender concurrency=1, a hung

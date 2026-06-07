@@ -11,6 +11,7 @@ import {
   persistDataSourceWithRules,
   applyShulNameAndAddressFromExtraction,
 } from "../../pipeline/persist-submission";
+import { reportInngestFailure } from "../on-failure";
 
 function hostOfUrl(url: string): string {
   try {
@@ -23,6 +24,7 @@ function hostOfUrl(url: string): string {
 export const buildDataSource = inngest.createFunction(
   {
     id: "data-source-build",
+    onFailure: reportInngestFailure("data-source-build"),
     // Concurrency keyed on shulId — same key as scrapeOneShul — so the
     // initial-build path and the rescrape path are mutually exclusive
     // for a given shul. Otherwise an admin "Re-extract" while the

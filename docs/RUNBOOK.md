@@ -33,13 +33,13 @@ vercel env add MAINTENANCE_MODE true production
 # (Site has no maintenance check today — add one if you reach for this.)
 ```
 
-**Verify**: hit `https://tfila.co/api/health`, expect `{ ok: true, db: { ok: true, latencyMs: <small> } }`.
+**Verify**: hit `https://tfila.co/api/health`, expect `{ ok: true }` (HTTP 200). It probes BOTH the DB and the geo-tz feed dependency; a 503 / `{ ok: false }` means one is down (the breakdown is in the Vercel runtime logs — `db=… feed=…`). No latency/timing is exposed (deliberate — no timing oracle).
 
 ---
 
 ## Weekly cron silently failed
 
-**Trigger**: Sunday morning passes with no `Weekly cron · …` email from `weekly-rescrape-summary`. Or you see one with all-`broken` rows.
+**Trigger**: a `⚠️ CRON DID NOT RUN` email from `weekly-rescrape-summary` (the dead-man's switch — H8 — fires when zero `scrape_run` rows are found in the lookback). Or a digest with all-`broken` rows. (A silent Sunday should no longer happen — if it does, the summary cron itself didn't fire.)
 
 **Dashboard**:
 1. https://app.inngest.com → Functions → `weekly-rescrape` — was the cron fired? Did it complete?
@@ -63,7 +63,7 @@ node scripts/extract-one-shul.ts <shulId>
 
 **Verify**:
 - New row in `scrape_run` table for the affected shul with `status='ok'`
-- New `data_source` row attached (if v2: `source_quote` populated)
+- New `data_source` row attached (`source_quote` populated per rule)
 - The cron-summary email arrives next Sunday with the affected shul as `ok`
 
 ---
@@ -93,13 +93,9 @@ vercel env add EXTRACTION_DISABLED true production
 # (cascade.ts must check this flag — wire up if not present)
 ```
 
-**Command — disable v2 specifically** (if v2 is suspected):
-```bash
-vercel env rm EXTRACTION_PIPELINE_V2 production
-# Optionally also: vercel env rm EXTRACTION_V2_SHUL_IDS production
-```
-
 **Verify**: Anthropic console usage flatlines within 5 min. Inngest function queue stays empty for new events.
+
+> Note: the v2 agent-loop pipeline + its `EXTRACTION_PIPELINE_V2` / `EXTRACTION_V2_SHUL_IDS` flags were retired in P1 (one v1 cascade now). The daily cost-gate (`LLM_DAILY_BUDGET_USD`, default $25) + `EXTRACTION_DISABLED` are the live levers.
 
 ---
 

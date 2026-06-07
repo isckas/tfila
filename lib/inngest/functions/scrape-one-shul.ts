@@ -25,6 +25,7 @@ import {
 } from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
+import { reportInngestFailure } from "../on-failure";
 
 // Permissive step type — we only use step.run. Avoids the gnarly
 // `Parameters<typeof inngest.createFunction>[…]` extraction while
@@ -36,6 +37,7 @@ type Step = {
 export const scrapeOneShul = inngest.createFunction(
   {
     id: "shul-scrape-one",
+    onFailure: reportInngestFailure("shul-scrape-one"),
     concurrency: [
       // GLOBAL cap across the whole fleet. The 2026-05-24 regression was an
       // unthrottled ~41-way weekly fan-out that hammered Anthropic into 429s;
