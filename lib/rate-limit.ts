@@ -25,6 +25,10 @@ const limiters = {
   adminLinkIp: makeLimiter("admin-link:ip", 10, "1 h"),
   adminLinkEmail: makeLimiter("admin-link:email", 3, "1 h"),
   inboundEmail: makeLimiter("inbound-email", 100, "1 d"),
+  // "Report a wrong time" (E-B5). Generous per-IP cap — a coarse abuse guard
+  // on top of the per-(shul, reporter, day) dedupe done in the route. One
+  // person legitimately reporting a handful of shuls in an hour is fine.
+  reportTimeIp: makeLimiter("report-time:ip", 20, "1 h"),
 };
 
 /**

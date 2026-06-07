@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listAdminShuls } from "@/lib/queries";
+import { listAdminShuls, countOpenTimeReports } from "@/lib/queries";
 import {
   adminShulStateSortKey,
   deriveAdminShulState,
@@ -22,6 +22,7 @@ export const dynamic = "force-dynamic";
 export default async function AdminHomePage() {
   // Pull a generous slice — most projects have a few hundred shuls at most.
   const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
+  const openReports = await countOpenTimeReports();
 
   // Derive state per shul + bucket counts
   const withState = shuls.map((s) => ({
@@ -67,6 +68,17 @@ export default async function AdminHomePage() {
         {inboxTotal} shul{inboxTotal === 1 ? "" : "s"} need attention ·{" "}
         {totalActive} active · {totalArchived} archived
       </p>
+
+      {/* E-B5: user wrong-time reports awaiting triage. */}
+      {openReports > 0 && (
+        <Link
+          href="/admin/reports"
+          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-900 hover:bg-amber-100"
+        >
+          🚩 {openReports} wrong-time report{openReports === 1 ? "" : "s"} to
+          review →
+        </Link>
+      )}
 
       {/* ─── Tile counts by state (clickable filters) ────────── */}
       <section className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -133,6 +145,10 @@ export default async function AdminHomePage() {
 
       {/* ─── Other shortcuts ─────────────────────────────────── */}
       <section className="mt-8 text-xs text-neutral-500">
+        <Link href="/admin/reports" className="underline-offset-2 hover:underline">
+          Wrong-time reports →
+        </Link>
+        {" · "}
         <Link href="/admin/candidates" className="underline-offset-2 hover:underline">
           Discovery candidates →
         </Link>

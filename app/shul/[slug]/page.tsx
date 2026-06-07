@@ -9,6 +9,7 @@ import { hasFreshDataSourceForShul } from "@/lib/freshness";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
+import { ReportWrongTime } from "@/components/ReportWrongTime";
 import {
   TEFILLAH_LABEL,
   TEFILLAH_ORDER,
@@ -470,6 +471,12 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
           </p>
         </section>
       )}
+
+      {/* ─── Report a wrong time (E-B5) ─────────────────────── */}
+      {/* Cheapest accuracy signal: a daven-er at the shul flags a wrong time.
+          Shown for every shul (incl. email-only, which has no submittedUrl
+          section above). Anonymous; admin triages in the cockpit. */}
+      <ReportWrongTime shulId={shul.id} />
 
       {/* ─── Last updated (separate paragraph) ──────────────── */}
       <p className="mt-6 text-xs text-neutral-500">

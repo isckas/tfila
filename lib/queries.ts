@@ -1,6 +1,13 @@
 import { and, asc, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { dataSource, minyanRule, scrapeRun, shul, type MinyanTime } from "../db/schema";
+import {
+  dataSource,
+  minyanRule,
+  scrapeRun,
+  shul,
+  timeReport,
+  type MinyanTime,
+} from "../db/schema";
 
 // ─── Davener-facing reads ────────────────────────────────────────────────
 //
@@ -754,4 +761,36 @@ export async function getNearbyShulsWithRules(
     notes: r.notes,
     lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at) : null,
   }));
+}
+
+// ─── Admin: "report a wrong time" reports (E-B5) ─────────────────────────
+// Lightweight read helpers for the admin triage surface. The full cockpit
+// integration (count chip + inline triage) is folded into the P4 redesign;
+// these helpers are what it reads.
+
+/** Count of open (un-triaged) time reports — for the admin home badge. */
+export async function countOpenTimeReports(): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`COUNT(*)::int` })
+    .from(timeReport)
+    .where(eq(timeReport.status, "open"));
+  return rows[0]?.n ?? 0;
+}
+
+/** Open time reports joined to their shul, newest first. */
+export async function listOpenTimeReports(limit = 100) {
+  return db
+    .select({
+      id: timeReport.id,
+      shulId: timeReport.shulId,
+      shulName: shul.name,
+      shulSlug: shul.slug,
+      note: timeReport.note,
+      createdAt: timeReport.createdAt,
+    })
+    .from(timeReport)
+    .innerJoin(shul, eq(shul.id, timeReport.shulId))
+    .where(eq(timeReport.status, "open"))
+    .orderBy(desc(timeReport.createdAt))
+    .limit(limit);
 }

@@ -102,6 +102,16 @@ export const specialScheduleKindEnum = pgEnum("special_schedule_kind", [
   "ad_hoc",
 ]);
 
+// Lifecycle of a user-submitted "this time looks wrong" report (E-B5).
+//   open      — newly reported, awaiting admin triage
+//   resolved  — admin re-extracted / confirmed-and-fixed the times
+//   dismissed — admin checked; the reported time was actually correct
+export const timeReportStatusEnum = pgEnum("time_report_status", [
+  "open",
+  "resolved",
+  "dismissed",
+]);
+
 // ─── shul ────────────────────────────────────────────────────────────────
 export const shul = pgTable(
   "shul",
@@ -286,6 +296,47 @@ export const scrapeRun = pgTable(
   (t) => [index("scrape_run_shul_idx").on(t.shulId, t.startedAt)],
 );
 
+// ─── time_report ─────────────────────────────────────────────────────────
+// User-submitted "this minyan time looks wrong" reports (E-B5). The cheapest
+// accuracy signal we have: a daven-er who's physically there notices a wrong
+// time and taps a link on the shul page. Anonymous (no auth) — we keep only a
+// SHA-256 of the reporter IP so we can dedupe one person spamming the same
+// shul, never the raw IP. Reports are NOT auto-actioned: they surface in the
+// admin cockpit (folded into the P4 redesign) and the admin decides whether
+// to re-extract, so an anonymous tap can never trigger LLM spend on its own.
+export const timeReport = pgTable(
+  "time_report",
+  {
+    id: serial("id").primaryKey(),
+    shulId: integer("shul_id")
+      .notNull()
+      .references(() => shul.id, { onDelete: "cascade" }),
+    // Optional: the specific rule the reporter flagged. NULL when the report
+    // is about the shul's schedule generally (the public UI reports per-shul
+    // with a free-text note rather than per-rule, so this is usually NULL).
+    minyanRuleId: integer("minyan_rule_id").references(() => minyanRule.id, {
+      onDelete: "set null",
+    }),
+    // Free-text note from the reporter (e.g. "Mincha is 7:15 not 7:00"). Capped
+    // at the API layer; column is unbounded text.
+    note: text("note"),
+    // SHA-256 of the reporter's IP (peppered). Never the raw IP. Used only for
+    // the per-(shul, reporter, day) dedupe so one annoyed user can't create 50
+    // identical rows. NULL if the IP couldn't be determined.
+    reporterIpHash: varchar("reporter_ip_hash", { length: 64 }),
+    status: timeReportStatusEnum("status").default("open").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    // Admin cockpit reads open reports per shul, newest first.
+    index("time_report_shul_status_idx").on(t.shulId, t.status, t.createdAt),
+  ],
+);
+
 // ─── Inferred types ──────────────────────────────────────────────────────
 export type Shul = typeof shul.$inferSelect;
 export type NewShul = typeof shul.$inferInsert;
@@ -295,6 +346,8 @@ export type MinyanRule = typeof minyanRule.$inferSelect;
 export type NewMinyanRule = typeof minyanRule.$inferInsert;
 export type ScrapeRun = typeof scrapeRun.$inferSelect;
 export type NewScrapeRun = typeof scrapeRun.$inferInsert;
+export type TimeReport = typeof timeReport.$inferSelect;
+export type NewTimeReport = typeof timeReport.$inferInsert;
 
 // ─── Tagged-union time helper types (for app code) ───────────────────────
 export type MinyanTime =
