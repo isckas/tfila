@@ -290,7 +290,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
               href={`/admin/candidates?${qs.toString()}`}
               className={`inline-flex min-h-9 items-center rounded-full px-3.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 ${
                 isActive
-                  ? "bg-amber-800 text-white"
+                  ? "bg-neutral-900 text-white"
                   : "border border-neutral-300 hover:bg-neutral-100"
               }`}
             >

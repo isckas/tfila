@@ -67,8 +67,13 @@ export default async function AdminHomePage({
 
   // UI-5: filter chips filter the inbox on THIS page (absorbing the old
   // /queue + /rejected routes + the 8-tile wall) rather than linking out.
+  // Only honor a ?state= that maps to a real inbox chip; anything else
+  // (active, archived, a stale bookmark, garbage) falls back to the full
+  // inbox rather than a misleading "Filtered — 0 shuls" view.
   const activeChip =
-    stateParam && stateParam !== "all" ? stateParam : "all";
+    stateParam && INBOX_CHIPS.some((c) => c.state === stateParam)
+      ? stateParam
+      : "all";
   const displayedRows = (
     activeChip === "all"
       ? inboxWithState

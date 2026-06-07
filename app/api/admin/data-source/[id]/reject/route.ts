@@ -29,5 +29,6 @@ export async function POST(
     })
     .where(eq(dataSource.id, dsId));
 
-  return safeRedirect(req, "/admin/queue");
+  // Land on the chip-filtered inbox (the cockpit absorbed /admin/queue in UI-5).
+  return safeRedirect(req, "/admin?state=pending_review");
 }
