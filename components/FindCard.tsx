@@ -84,11 +84,11 @@ export function FindCard() {
         {status === "requesting" ? "Locating…" : "Use my location"}
       </button>
 
-      <div className="my-3 flex items-center gap-2 text-[10px] uppercase tracking-wide text-neutral-400">
-        <span className="h-px flex-1 bg-neutral-200" />
-        or enter an address
-        <span className="h-px flex-1 bg-neutral-200" />
-      </div>
+      {/* Address is a quiet fallback under the dominant "Use my location"
+          CTA — not a co-equal option (UI-1). */}
+      <p className="mt-3 mb-1.5 text-xs text-neutral-400">
+        No GPS? Enter an address:
+      </p>
 
       <form method="get" action="/api/search" className="flex gap-1.5">
         <label htmlFor="findcard-q" className="sr-only">

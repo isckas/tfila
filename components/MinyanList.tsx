@@ -136,9 +136,25 @@ export function MinyanList({ items, serverNowMs }: Props) {
 
       {filtered.length === 0 ? (
         <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-6 text-sm text-neutral-600">
-          {active === "all"
-            ? "Nothing in the next few hours within walking distance."
-            : `No ${CHIP_LABEL[active]} in the next few hours within walking distance.`}
+          {active === "all" ? (
+            <>
+              <p className="font-medium text-neutral-900">
+                Nothing in the next few hours within walking distance.
+              </p>
+              <p className="mt-2 text-neutral-600">
+                Know a shul nearby? Help us list it — we&apos;ll keep its tfila
+                times fresh from its own website or weekly bulletin.
+              </p>
+              <Link
+                href="/submit"
+                className="mt-3 inline-block rounded-lg bg-amber-800 px-4 py-2 text-sm font-medium text-white hover:bg-amber-900"
+              >
+                Add a shul
+              </Link>
+            </>
+          ) : (
+            `No ${CHIP_LABEL[active]} in the next few hours within walking distance.`
+          )}
         </div>
       ) : (
         <ul className="space-y-2">

@@ -115,7 +115,7 @@ export function LookupCard({ shuls }: Props) {
 
       {!trimmed && (
         <p className="mt-auto pt-3 text-xs text-neutral-400">
-          {shuls.length} shul{shuls.length === 1 ? "" : "s"} indexed.
+          Refreshed every Motzei Shabbat.
         </p>
       )}
     </div>

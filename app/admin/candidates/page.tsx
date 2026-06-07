@@ -25,14 +25,15 @@ interface PageProps {
   }>;
 }
 
-const STATUSES = ["pending", "approved", "rejected", "duplicate", "deferred"];
+// `deferred` was a dead status — no code ever wrote it, so the pill was
+// perma-empty (L2). Dropped from the filter row + badge map.
+const STATUSES = ["pending", "approved", "rejected", "duplicate"];
 
 const STATUS_BADGE: Record<string, string> = {
   pending: "bg-amber-100 text-amber-900",
   approved: "bg-emerald-100 text-emerald-900",
   rejected: "bg-rose-100 text-rose-900",
   duplicate: "bg-neutral-200 text-neutral-700",
-  deferred: "bg-blue-100 text-blue-900",
 };
 
 const STATUS_BADGE_SHUL: Record<string, string> = {

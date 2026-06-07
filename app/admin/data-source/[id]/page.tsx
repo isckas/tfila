@@ -304,7 +304,7 @@ export default async function ReviewDetailPage({ params }: PageProps) {
                         </span>
                       )}
                     {r.nusach && (
-                      <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-xs text-blue-800">
+                      <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-700">
                         {r.nusach}
                       </span>
                     )}

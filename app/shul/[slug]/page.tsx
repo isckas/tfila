@@ -190,7 +190,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         )}
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
           {shul.nusach && (
-            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800">
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-neutral-700">
               {shul.nusach}
             </span>
           )}
@@ -386,7 +386,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
                         <td className="px-3 py-2 text-xs text-neutral-500">
                           {r.notes ?? ""}
                           {r.nusach && (
-                            <span className="ml-1 rounded bg-blue-100 px-1 text-blue-800">
+                            <span className="ml-1 rounded bg-neutral-100 px-1 text-neutral-700">
                               {r.nusach}
                             </span>
                           )}

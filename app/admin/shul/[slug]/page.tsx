@@ -68,7 +68,7 @@ export default async function AdminShulDetailPage({
           </span>
         )}
         {s.nusach && (
-          <span className="rounded bg-blue-100 px-2 py-0.5 text-blue-800">
+          <span className="rounded bg-neutral-100 px-2 py-0.5 text-neutral-700">
             {s.nusach}
           </span>
         )}

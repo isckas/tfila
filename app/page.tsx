@@ -14,6 +14,7 @@ import { LookupCard } from "@/components/LookupCard";
 import { AddCard } from "@/components/AddCard";
 import { ResumeBanner } from "@/components/ResumeBanner";
 import { FeedHeader } from "@/components/FeedHeader";
+import { FeedDatePicker } from "@/components/FeedDatePicker";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
 import {
   MinyanListByShul,
@@ -87,11 +88,9 @@ export default async function HomePage({ searchParams }: PageProps) {
                   Tfila times that don&apos;t go stale.
                 </h1>
                 <p className="mt-2 text-sm text-neutral-600">
-                  Every Tfila / Shul directory has the same problem
-                  &mdash; times posted years ago, never updated. Tfila.co
-                  reads each shul&apos;s own website or weekly email
-                  bulletin, refreshes every Motzei Shabbat, for real
-                  accurate Tfila times.
+                  Fresh from each shul&apos;s own website or weekly bulletin,
+                  re-checked every Motzei Shabbat &mdash; not posted-once-and-
+                  forgotten times.
                 </p>
               </div>
             </div>
@@ -226,9 +225,25 @@ export default async function HomePage({ searchParams }: PageProps) {
         r.time?.kind === "fixed",
     });
   }
-  // Sort by start time first — for address-search, this also gives each
-  // shul's earliest-upcoming minyanim when we take the top N per shul below.
-  resolved.sort((a, b) => a.startIso.localeCompare(b.startIso));
+  // Ordering (UI-2): in "now" mode an UPCOMING minyan always outranks one that
+  // already started, even if the started one is chronologically earlier — a
+  // davener wants the next catchable minyan at the top, not one they just
+  // missed. Among already-started ones, most-recently-started first (closest
+  // to still catching). In travel mode there's no "now", so sort purely by
+  // time. For address-search this also gives each shul's earliest-upcoming
+  // minyan when we take the top N per shul below.
+  const nowMs = now.getTime();
+  resolved.sort((a, b) => {
+    const aMs = Date.parse(a.startIso);
+    const bMs = Date.parse(b.startIso);
+    if (!travelDate) {
+      const aStarted = aMs < nowMs ? 1 : 0;
+      const bStarted = bMs < nowMs ? 1 : 0;
+      if (aStarted !== bStarted) return aStarted - bStarted; // upcoming first
+      if (aStarted === 1) return bMs - aMs; // among started: most-recent first
+    }
+    return aMs - bMs; // upcoming (or travel): soonest first
+  });
 
   // Address-search branch: per-shul grouping + distance-sort. The
   // walking-default flat list still gets the time-sort + slice below.
@@ -281,43 +296,17 @@ export default async function HomePage({ searchParams }: PageProps) {
         radiusMiles={radiusMiles}
       />
 
-      {/* Travel-mode date picker — GET form so each pick is a clean
-          server-rendered navigation. Defaults to today; switching to a
-          future or past date flips the feed into travel-planning shape
-          (full-day window instead of "next 24h"). */}
-      <form
-        method="get"
-        action="/"
-        className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-600"
-      >
-        <input type="hidden" name="lat" value={lat} />
-        <input type="hidden" name="lng" value={lng} />
-        {sp.radius && <input type="hidden" name="radius" value={sp.radius} />}
-        {sp.via && <input type="hidden" name="via" value={sp.via} />}
-        <label className="flex items-center gap-1.5">
-          <span className="text-neutral-500">Date:</span>
-          <input
-            type="date"
-            name="date"
-            defaultValue={dateInputValue}
-            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs focus-visible:border-neutral-500 focus-visible:outline-none"
-          />
-        </label>
-        <button
-          type="submit"
-          className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
-        >
-          Update
-        </button>
-        {isTravelMode && (
-          <Link
-            href={`/?lat=${lat}&lng=${lng}${sp.radius ? `&radius=${sp.radius}` : ""}`}
-            className="text-xs text-neutral-500 underline-offset-2 hover:underline"
-          >
-            back to today
-          </Link>
-        )}
-      </form>
+      {/* Travel-mode date picker — navigates on change (no Update button to
+          tap; UI-2). Defaults to today; switching to a future/past date flips
+          the feed into travel-planning shape (full-day window vs "next 24h"). */}
+      <FeedDatePicker
+        lat={lat}
+        lng={lng}
+        radius={sp.radius}
+        via={sp.via}
+        value={dateInputValue}
+        isTravelMode={isTravelMode}
+      />
 
       {/* Zmanim */}
       <ZmanimStrip snapshot={stripSnapshot} timezone={userTz} />
@@ -389,7 +378,7 @@ function EmptyAddressSearch({
       </p>
       <Link
         href="/submit"
-        className="mt-3 inline-block rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+        className="mt-3 inline-block rounded-lg bg-amber-800 px-4 py-2 text-sm font-medium text-white hover:bg-amber-900"
       >
         Add a shul
       </Link>
