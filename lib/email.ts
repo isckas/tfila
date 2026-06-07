@@ -60,15 +60,43 @@ function escapeHtml(s: string): string {
 /**
  * Send a one-line notification to the admin (ADMIN_EMAIL).
  * Used for new shul submissions, failed scrapes, etc.
- * Silently no-ops if ADMIN_EMAIL is not set.
- * Errors are swallowed (we never want notifications to break a user flow).
+ * No-ops if ADMIN_EMAIL is not set (warns loudly in prod — M12).
+ *
+ * By default errors are swallowed (a notification must never break a user
+ * flow like /submit). Pass `critical: true` for alerts where a swallowed
+ * failure means the ONLY signal is lost (the weekly digest, the dead-man's
+ * switch) — it re-throws so the enclosing Inngest step retries instead of
+ * vanishing.
  */
 export async function notifyAdmin(args: {
   subject: string;
   text: string;
+  critical?: boolean;
 }): Promise<void> {
   const to = process.env.ADMIN_EMAIL;
-  if (!to) return;
+  if (!to) {
+    if (process.env.NODE_ENV === "production") {
+      console.warn(
+        "[notifyAdmin] ADMIN_EMAIL is not set in production — admin alerts are being silently dropped.",
+      );
+      // The email channel is dead without an address, so a `critical` alert
+      // (e.g. the dead-man's switch) would vanish in exactly the misconfig it
+      // exists to catch. Route it to Sentry as a second channel so it still
+      // reaches a human. Best-effort — Sentry is optional.
+      if (args.critical) {
+        try {
+          const Sentry = await import("@sentry/nextjs");
+          Sentry.captureMessage(
+            `[critical admin alert dropped — ADMIN_EMAIL unset] ${args.subject}`,
+            "error",
+          );
+        } catch {
+          /* Sentry unavailable — the console.warn above is the floor. */
+        }
+      }
+    }
+    return;
+  }
   try {
     await sendTransactional({
       to,
@@ -77,5 +105,6 @@ export async function notifyAdmin(args: {
     });
   } catch (err) {
     console.error("[notifyAdmin] failed:", (err as Error).message);
+    if (args.critical) throw err;
   }
 }

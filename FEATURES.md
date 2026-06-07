@@ -722,6 +722,82 @@ Probably where this lands if we go deep.
 
 ---
 
+## HebCal-grounded LLM context — anchor extraction in the upcoming-week calendar
+
+Added: 2026-05-19 · **Status: exploration. No decisions yet.**
+
+Sibling to the "LLM extraction context" entry above, but narrower: instead of "everything the model should know about Jewish bulletins," this is specifically about **grounding extraction in the actual upcoming-week calendar** by pulling from HebCal (or an equivalent API) before each extraction call. The hypothesis: when the LLM knows the exact Hebrew date, what week's parsha is coming, and which Yom Tov / fast / Rosh Chodesh occurrences fall in the next 7-14 days, it can resolve a lot of currently-ambiguous bulletin language with higher confidence — fewer "ad_hoc" fallbacks, fewer wrong `validFrom` dates, fewer mis-tagged special schedules.
+
+### Why this might matter
+
+Bulletins are written with the reader's calendar context implicit. Examples we already see:
+
+- "Selichos schedule" on a bulletin published in Elul means a different start window than the same phrase published in Tishrei (Aseres Yemei Teshuvah). Today the LLM sees the phrase but not the date — and the bulletin itself often doesn't say which week.
+- "Tisha B'Av begins Wednesday night" — without a year, the model has to guess which year. If we tell it "today is 14 Av 5786, Tisha B'Av was last week," it can refuse to extract a stale schedule (or tag it `valid_to = past`).
+- "For Parshas Behar" — implies a specific Shabbos. With HebCal-grounded context: "Parshas Behar 5786 is Shabbos 2026-05-30 → extract validFrom=2026-05-25 valid_to=2026-05-31."
+- Fast-day windows ("17 Tammuz mincha will be at 6:30") — HebCal says when 17 Tammuz falls THIS year, so the model can tag `special_schedule_kind='fast_day'` with the correct date instead of guessing or defaulting to `ad_hoc`.
+- Rosh Chodesh schedules — bulletins often say "Rosh Chodesh Tammuz davening at 6:15" without dates. HebCal tells us when this Rosh Chodesh is.
+
+The two prompt-driven bugs in prod referenced in the sibling entry (Edmond J. Safra partial-date defaulting + the past-`validFrom` issue) are exactly the kind of failure HebCal grounding could prevent — the model defaulted because it didn't know "today" precisely enough.
+
+### What HebCal provides
+
+HebCal's free API (`hebcal.com/home/195/jewish-calendar-rest-api`) returns JSON for any date range. Endpoint examples:
+
+- `/hebcal?cfg=json&v=1&start=2026-05-19&end=2026-06-02&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&i=on` returns major + minor holidays, Rosh Chodesh, fasts, special parshiyos, candle-lighting times for the window
+- `/converter?cfg=json&gy=2026&gm=5&gd=19&g2h=1` returns "today's" Hebrew date
+- `/shabbat?cfg=json&geonameid=6167865&M=on` returns the upcoming Shabbos with zmanim for a given geolocation
+
+For our use case the first endpoint (a 14-day window starting from "today" of the extraction call) is the relevant one. Free tier, no auth needed, JSON.
+
+### Options to explore
+
+**A. Inject HebCal-derived JSON blob into the extraction system prompt at call time**
+Before each `runCascade` call, fetch `today + 14 days` from HebCal. Pass a small structured object into the prompt: `{ todayGregorian, todayHebrew, upcomingShabbatos: [{date, parsha}], upcomingHolidays: [{date, kind, name}], upcomingFasts: [{date, name}] }`. The LLM uses it to resolve ambiguous dates + tag special schedules correctly.
+
+- **Pros:** Smallest change. One fetch per extraction. ~200 token preamble. Composable with the existing system prompt.
+- **Cons:** Adds latency (1 HTTP round-trip — though we can run it in parallel with content fetch). HebCal availability becomes an extraction dependency (mitigation: cache 24h; if cache miss + HebCal down, fall back to today's Gregorian date only — degraded but not broken).
+
+**B. HebCal as an MCP tool the LLM calls on demand**
+Wrap HebCal endpoints as MCP tools (`get_hebrew_date`, `get_upcoming_holidays`, `get_parsha_for_week`). Let Claude decide when to invoke them. Skip the preamble.
+
+- **Pros:** Model only calls when relevant — saves tokens on bulletins that don't need calendar grounding. Cleaner separation.
+- **Cons:** MCP tool-use adds latency and complexity. Cascade is already multi-step; introducing tool-use inside extraction makes the trace harder to debug. Need to confirm the Anthropic SDK / our cascade harness supports tool-use inside the existing extract path.
+
+**C. Build a calendar-grounding step as a separate cascade tier**
+Run extraction as today. Then a follow-up pass: "given the extracted rules + this HebCal window, refine any `ad_hoc` rules into proper `yom_tov`/`fast_day`/`rosh_chodesh` tags + fix any obviously-stale `validFrom`/`valid_to`." Acts as a refinement layer.
+
+- **Pros:** Orthogonal to options A/B. Catches errors regardless of how they arose. Targeted at the highest-value cases (the `ad_hoc` bucket).
+- **Cons:** Doubles per-extraction cost (similar shape to option D in the sibling entry). Refinement-pass prompt is its own design problem.
+
+**D. Hybrid: option A preamble for all extractions + option C refinement only for low-confidence or ad_hoc-heavy outputs**
+Cheap context-grounding by default, expensive refinement only when the first pass smells off.
+
+- Probably where this lands if we go forward.
+
+### Open sub-questions
+
+- **Cache window:** HebCal output for "today + 14 days" is identical across all extractions on the same day. One global daily cache (Vercel KV / Upstash / file) avoids hammering HebCal. How long to cache: 24h sliding TTL feels right since extractions happen across all timezones.
+- **Geolocation:** HebCal's Shabbos times + candle-lighting depend on city/geo. Do we pass the shul's location to HebCal per-extraction (so the model gets *that shul's* candle-lighting time), or use a default city (Toronto / NY) and let the model handle local variation? Per-shul is more accurate but burns the daily cache. Probably start with global cache + only pass per-shul geo when the content explicitly references zmanim.
+- **What to do with the Hebrew date format:** include both the Hebrew transliteration ("14 Iyar 5786") and the Gregorian date, so the model can ground both directions.
+- **Confidence boost measurement:** how do we prove this works? The sibling entry's "build a test set first" applies here too. Specifically: tag each test-set bulletin with the Hebrew date that should anchor it, then check whether HebCal-grounded extraction produces more correct `validFrom`/`valid_to` and special-schedule tags than the baseline.
+- **Failure mode:** if HebCal returns garbage or is unreachable, do we fail the extraction or fall back to ungrounded? Probably ungrounded with a `confidence_penalty` flag on the resulting rules, so admin review prioritizes them.
+
+### What to do first (when picked up)
+
+1. **Smoke-test HebCal API.** Fetch a 14-day window from `today` and a 14-day window centered on a known Yom Tov, confirm output shape. Verify rate limits + auth requirements (free tier should be fine for our volume).
+2. **Pair with the test-set work in the sibling entry.** Same test bulletins, but score on "did HebCal-grounded extraction produce correct date anchoring?" specifically.
+3. **Try option A first.** Smallest infra change. If it moves the accuracy needle on the test set, lock in. If it doesn't, the refinement-pass approach (option C) is the next step rather than retrying option A with more tokens.
+
+### Related
+
+- The sibling "LLM extraction context" entry above — this is one specific concrete sub-direction within that larger exploration. If we build this, the sibling entry's option A glossary should reference the HebCal preamble as a complementary technique.
+- `lib/llm/prompts.ts` — where the preamble would land if we go option A.
+- `lib/llm/cascade.ts` — where the per-call HebCal fetch + cache would sit.
+- HebCal API docs: https://www.hebcal.com/home/195/jewish-calendar-rest-api
+
+---
+
 ## Automated tests — typecheck is the only safety net today
 
 Added: 2026-05-15 · **Status: gap noted. No decisions yet.**
