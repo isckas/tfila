@@ -7,6 +7,7 @@ import {
   type AdminShulState,
 } from "@/lib/admin-state";
 import { AdminInbox } from "@/components/AdminInbox";
+import { BulkReextractButton } from "@/components/BulkReextractButton";
 import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -23,10 +24,10 @@ export const dynamic = "force-dynamic";
 export default async function AdminHomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ state?: string }>;
+  searchParams: Promise<{ state?: string; reextract?: string }>;
 }) {
   await requireAdmin();
-  const { state: stateParam } = await searchParams;
+  const { state: stateParam, reextract } = await searchParams;
   // Pull a generous slice — most projects have a few hundred shuls at most.
   const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
   const openReports = await countOpenTimeReports();
@@ -89,6 +90,29 @@ export default async function AdminHomePage({
         {inboxTotal} shul{inboxTotal === 1 ? "" : "s"} need attention ·{" "}
         {totalActive} active · {totalArchived} archived
       </p>
+
+      {/* Bulk re-extract result banner. */}
+      {reextract != null && (
+        <div
+          className={
+            "mt-3 rounded-lg border px-3 py-1.5 text-sm " +
+            (reextract === "error"
+              ? "border-rose-300 bg-rose-50 text-rose-900"
+              : "border-emerald-300 bg-emerald-50 text-emerald-900")
+          }
+        >
+          {reextract === "error"
+            ? "Couldn't queue the re-extraction — check the logs."
+            : `Queued ${reextract} re-extraction${reextract === "1" ? "" : "s"} (throttled to 3 at a time). Check back in a few minutes.`}
+        </div>
+      )}
+
+      {/* UI-5: bulk re-extract all broken shuls (confirm + rate-gated). */}
+      {counts.broken > 0 && (
+        <div className="mt-3">
+          <BulkReextractButton count={counts.broken} />
+        </div>
+      )}
 
       {/* E-B5: user wrong-time reports awaiting triage. */}
       {openReports > 0 && (

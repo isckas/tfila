@@ -64,10 +64,18 @@ function pricingForModel(model: unknown): {
 }
 
 async function todayCumulativeUsd(): Promise<number> {
+  // E-D2: count rows RESCRAPED today, not just CREATED today. The weekly cron
+  // (the single biggest spend event) UPDATEs existing data_source rows — it
+  // overwrites config_json.usage with the new run's tokens and bumps
+  // last_run_at — so a `created_at`-only filter was blind to all cron spend.
+  // Including `last_run_at >= today` captures both initial builds and rescrapes;
+  // config_json.usage reflects the latest run, so each row is counted once at
+  // today's cost.
   const rows = await db.execute<ConfigRow>(sql`
     SELECT config_json AS config
     FROM data_source
     WHERE created_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
+       OR last_run_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
   `);
 
   let usd = 0;
