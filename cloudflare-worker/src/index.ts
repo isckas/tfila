@@ -58,9 +58,20 @@ function isBlockedHost(hostname: string): boolean {
   ) {
     return true;
   }
-  // IPv6 loopback / link-local / ULA.
-  if (h === "::1" || h === "::" || h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) {
-    return true;
+  // IPv6 literals ONLY — they always contain a colon (a bracketed
+  // http://[fd00::1]/ becomes "fd00::1" after bracket-strip). Gating on the
+  // colon stops the bare fc/fd ULA prefixes from wrongly blocking ordinary
+  // domains like fda.gov / fcc.gov / fcbarcelona.com.
+  if (h.includes(":")) {
+    if (
+      h === "::1" ||
+      h === "::" ||
+      h.startsWith("fe80:") ||
+      h.startsWith("fc") ||
+      h.startsWith("fd")
+    ) {
+      return true;
+    }
   }
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
   if (!m) return false;

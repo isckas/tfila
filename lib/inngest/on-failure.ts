@@ -13,16 +13,19 @@ import { notifyAdmin } from "../email";
 export function reportInngestFailure(fnId: string) {
   return async ({
     error,
-    runId,
+    event,
   }: {
     error: Error;
-    runId?: string;
-    event?: unknown;
+    // Inngest runs onFailure as a SEPARATE function (triggered by the internal
+    // `inngest/function.failed` event), so the top-level ctx.runId is THIS
+    // notifier's run — the FAILED run id is on the failure event payload.
+    event?: { data?: { run_id?: string } };
   }): Promise<void> => {
+    const failedRunId = event?.data?.run_id ?? "unknown";
     try {
       const Sentry = await import("@sentry/nextjs");
       Sentry.captureException(error, {
-        tags: { inngestFn: fnId, runId: runId ?? "unknown" },
+        tags: { inngestFn: fnId, runId: failedRunId },
       });
     } catch {
       /* Sentry unavailable — the email below is the floor. */
@@ -31,10 +34,14 @@ export function reportInngestFailure(fnId: string) {
       subject: `⚠️ Inngest function failed: ${fnId}`,
       text: [
         `Function "${fnId}" exhausted its retries and failed — it will NOT run again automatically.`,
-        `runId: ${runId ?? "unknown"}`,
+        `runId: ${failedRunId}`,
         "",
         `Error: ${error?.message ?? String(error)}`,
       ].join("\n"),
+      // Terminal alert — this only fires AFTER retries are exhausted, so a
+      // swallowed send would lose the only signal. `critical` gives it a retry
+      // budget + Sentry fallback when ADMIN_EMAIL is unset.
+      critical: true,
     });
   };
 }
