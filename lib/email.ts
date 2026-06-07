@@ -79,6 +79,21 @@ export async function notifyAdmin(args: {
       console.warn(
         "[notifyAdmin] ADMIN_EMAIL is not set in production — admin alerts are being silently dropped.",
       );
+      // The email channel is dead without an address, so a `critical` alert
+      // (e.g. the dead-man's switch) would vanish in exactly the misconfig it
+      // exists to catch. Route it to Sentry as a second channel so it still
+      // reaches a human. Best-effort — Sentry is optional.
+      if (args.critical) {
+        try {
+          const Sentry = await import("@sentry/nextjs");
+          Sentry.captureMessage(
+            `[critical admin alert dropped — ADMIN_EMAIL unset] ${args.subject}`,
+            "error",
+          );
+        } catch {
+          /* Sentry unavailable — the console.warn above is the floor. */
+        }
+      }
     }
     return;
   }

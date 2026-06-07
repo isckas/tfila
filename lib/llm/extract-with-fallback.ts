@@ -109,8 +109,20 @@ export async function extractFromUrlWithFallback(
   }
 
   if (!best) {
+    // Surface the per-candidate fetch/extract errors in the thrown message so
+    // the cascade's transient classifier (isTransientCascadeFailure) can see a
+    // transient token (DNS blip / 429 / timeout) that otherwise lived only in
+    // a discarded inner attempt. A DNS blip hits every same-origin candidate
+    // identically, so the FIRST error carries the token (kept at the front so
+    // it survives the cascade's errorMessage slice). Without this, an
+    // all-candidates-transiently-failed rescrape was misclassified TERMINAL and
+    // the shul wrongly marked broken — the exact plan C1/M2 failure mode.
+    const innerErrors = attempts
+      .map((a) => a.errorMessage)
+      .filter(Boolean)
+      .join(" | ");
     throw new ExtractionError(
-      `No URL on ${submittedUrl}'s origin yielded extractable rules. Tried: ${attempts
+      `${innerErrors ? `${innerErrors}. ` : ""}No URL on ${submittedUrl}'s origin yielded extractable rules. Tried: ${attempts
         .map((a) => a.url)
         .join(", ")}`,
     );
