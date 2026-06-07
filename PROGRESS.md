@@ -13,13 +13,15 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-06-07 evening (holistic remediation — P0–P4 ALL complete + adversarially reviewed; on PR #5, ready to merge to prod).**
+**Last working session: 2026-06-07 evening — ENTIRE remediation P0–P5(core) SHIPPED + LIVE in prod (PR #5 + PR #6 both merged + deployed).**
 
-### Pickup: merge PR #5 → deploy; then P5 (only remaining phase)
+### Pickup: P5 cleanup backlog (everything high-value is SHIPPED + LIVE)
 
-**P0–P4 are done** on `fix/holistic-remediation` (PR #5: https://github.com/isckas/tfila/pull/5). P3 = report-wrong-time feature (ShulCloud adapter descoped per research). P4 = full UI pass (UI-1..8 + E-F1). Two adversarial-review workflows (21 agents) over the diff found only low-severity items — all fixed. typecheck + full build green.
+**Done + deployed:** P0–P4 (PR #5 `f7fe72e`) and P5's security/observability core (PR #6 `1ad13e7`) are both merged to `main` and **LIVE in prod** — Vercel build success; landing/feed/shul/`/api/health` all 200; the SSRF redirect rewrite was runtime-tested (real redirect chains followed, metadata IP refused). The site that was 41→9 down is recovered (24 active), correct (tz-aware times), hardened (SSRF at the fetch boundary), and monitored (dead-man's switch + feed-probing health check). Four adversarial-review workflows (~50 agents) gated the work; every finding was low-severity and fixed.
 
-**Next concrete action:** **merge PR #5 to `main` to deploy.** Prod deploys are MANUAL, not git-push (see memory `reference_deploy_mechanism` — Production env has DATABASE_URL so the merge builds clean; branch Preview builds fail by design; if the prod alias is pinned to a manual deploy, run `vercel deploy --prod` after merge). Then smoke-check prod. **After deploy, P5 is the only remaining plan phase** (security: SSRF at fetch boundary H6/M9/M10; observability: dead-man's switch H8, /api/health probes the feed H9, M4–M17; the delete-list + L-items; cost-gate counts cron spend E-D2). Bulk "re-extract all broken" (UI-5 stretch) deferred — needs confirm + the P0 rate gate. The P3 ShulCloud-adapter pickup below is now historical (descoped).
+**Next concrete action:** the documented **P5 cleanup backlog** (see PR #6 body) — none blocking: M11 (Inngest `onFailure`), E-D2 (cost-gate cron spend — needs a real spend-tracking mechanism, not a half-fix), M16 (Sentry source-maps), the Jina/Docling/`is_manual_edit` tier deletions + discovery→one-shot, and the lows (L3 dead `broken` UI, L4 approve-303, L5 reject-reason, L8 RUNBOOK `/api/health` drift, L10 OPEN-ISSUES, M15 `.env.local`, M17 candidate→pgEnum, M8 admin DAL authz, M9 CF-proxy allowlist, M4/M5 digest spike-gate + first_broken_at backfill). Plus the bulk "re-extract all broken" admin action (UI-5 stretch) — needs a confirm + the P0 rate gate.
+
+**Deploy reminder:** prod deploys via **merge-to-`main`** (Vercel git-integration auto-deploys main→prod, ~45s). Direct `main` pushes are blocked → use a branch + PR. See memory `reference_deploy_mechanism`. The P3 ShulCloud-adapter pickup below is historical (descoped).
 
 ### (historical — descoped) Pickup: P3 — ShulCloud adapter
 
