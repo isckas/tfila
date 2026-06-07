@@ -29,7 +29,10 @@ const ADMIN_STATES: AdminShulState[] = [
 ];
 
 const STATUS_LABELS = SHUL_STATUS_LABELS;
-const STATUSES = ["pending_review", "active", "broken", "archived", "unsupported"];
+// Raw shul.status filter values. `broken` dropped (L3) — it's a DEPRECATED
+// status no code writes; the enum value is kept only for legacy rows. (The
+// derived "broken" inbox state still lives in ADMIN_STATES above.)
+const STATUSES = ["pending_review", "active", "archived", "unsupported"];
 
 export default async function AdminShulsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
