@@ -69,6 +69,20 @@ Common phrasings:
 - "Maariv at tzeis" (with no qualifier) → \`{kind: "zmanim", anchor: "tzeis_72", offsetMin: 0}\`
 - "Shacharis 30 min before sunrise" (this is Vasikin) → \`{kind: "zmanim", anchor: "netz", offsetMin: -30}\` with \`tefillah: "other"\`, \`tefillahLabel: "Vasikin Shacharis"\` — OR \`tefillah: "shacharis"\` with notes: "Vasikin (sunrise)". Either is fine; prefer the latter.
 
+### Evening minyanim: prefer zmanim when the source describes them relatively
+
+Mincha and Maariv shift with sunset across the year. When the source describes an
+evening time **relative to a zman** — "before/after shkia (sunset)", "before/after
+sunset", "at tzeis", "at plag", "at candle-lighting" — you MUST emit a
+\`zmanim\`-anchored rule, never a fixed clock. A fixed evening clock time silently
+goes WRONG as the days lengthen/shorten.
+
+Only use a fixed clock for an evening minyan when the source explicitly states a
+**fixed year-round** time (e.g. "Maariv is 9:30 PM all year"). If the page shows
+only a bare clock with no relative wording (a calendar widget that already
+computed this week's time), keep it fixed but LOWER the confidence — do NOT invent
+an offset you cannot read from the page.
+
 ## Days of the week
 
 \`daysOfWeek\`: \`[0]\` = Sunday only, \`[6]\` = Shabbos only, \`[1,2,3,4,5]\` = weekdays Mon-Fri.
@@ -235,11 +249,11 @@ JSON:
 \`\`\`json
 {
   "confidence": 0.55,
-  "reasoning": "Prose-only schedule. Weekday Shacharis/Mincha unambiguous. Maariv splits by season — I can't represent 'winter Maariv = Mincha + 10 min' cleanly, so I emitted summer-Maariv as a fixed 21:00 rule and added a notes field about the winter variant. Reviewer should adjust if needed.",
+  "reasoning": "Prose-only schedule. Weekday Shacharis/Mincha unambiguous. Summer Maariv is a stated fixed clock (9:00 PM) so it's a fixed rule; the winter variant is sunset-tracked. Evening times a page describes relative to a zman are emitted as zmanim, never frozen clocks.",
   "rules": [
     { "tefillah": "shacharis", "daysOfWeek": [0,1,2,3,4,5], "time": { "kind": "fixed", "clock": "06:45" } },
     { "tefillah": "mincha", "daysOfWeek": [0,1,2,3,4,5], "time": { "kind": "fixed", "clock": "13:30" } },
-    { "tefillah": "maariv", "daysOfWeek": [0,1,2,3,4,5], "time": { "kind": "fixed", "clock": "21:00" }, "notes": "Summer schedule (Pesach to end of October). Winter Maariv is 10 min after Mincha — not represented in this rule; reviewer please add." },
+    { "tefillah": "maariv", "daysOfWeek": [0,1,2,3,4,5], "time": { "kind": "fixed", "clock": "21:00" }, "notes": "Summer schedule (Pesach to end of October); winter Maariv is sunset-tracked (10 min after Mincha)." },
     { "tefillah": "shacharis", "daysOfWeek": [6], "time": { "kind": "fixed", "clock": "09:00" } },
     { "tefillah": "mincha", "daysOfWeek": [6], "time": { "kind": "zmanim", "anchor": "shkia", "offsetMin": -15 } },
     { "tefillah": "maariv", "daysOfWeek": [6], "time": { "kind": "zmanim", "anchor": "tzeis_72", "offsetMin": 0 } }

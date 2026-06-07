@@ -43,6 +43,8 @@ export interface ResolvedMinyan {
    * "Verified Nd ago" trust chip. Null if no successful scrape (rare —
    * the stale-gate query already excludes those). */
   lastVerifiedIso: string | null;
+  /** E-C4: true for a fixed-clock mincha/maariv — flagged as seasonally drift-prone. */
+  fixedEvening?: boolean;
 }
 
 interface Props {
@@ -208,6 +210,14 @@ export function MinyanList({ items, serverNowMs }: Props) {
                   </div>
                   {m.notes && (
                     <div className="mt-1 text-xs text-neutral-500">{m.notes}</div>
+                  )}
+                  {m.fixedEvening && (
+                    <div
+                      className="mt-0.5 text-xs text-neutral-400"
+                      title="This is a posted clock time, not anchored to sunset, so it may drift across the year. Double-check close to the time."
+                    >
+                      posted time — may shift seasonally
+                    </div>
                   )}
                 </Link>
               </li>

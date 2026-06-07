@@ -218,6 +218,12 @@ export default async function HomePage({ searchParams }: PageProps) {
       notes: r.notes,
       specialScheduleKind: r.specialScheduleKind ?? "regular",
       lastVerifiedIso: r.lastVerifiedAt ? r.lastVerifiedAt.toISOString() : null,
+      // E-C4: a fixed-clock mincha/maariv can drift vs the real sunset across
+      // the year (a posted "8:45pm" is often really shkia-tracked). Flag it so
+      // the UI shows a quiet seasonal caveat. Zmanim-anchored rules don't drift.
+      fixedEvening:
+        (r.tefillah === "mincha" || r.tefillah === "maariv") &&
+        r.time?.kind === "fixed",
     });
   }
   // Sort by start time first — for address-search, this also gives each
