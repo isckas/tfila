@@ -329,15 +329,18 @@ export default async function ReviewDetailPage({ params }: PageProps) {
                       {r.notes}
                     </div>
                   )}
-                  {r.sourceQuote && (
-                    <details className="mt-1.5 text-xs">
-                      <summary className="cursor-pointer text-neutral-400 hover:text-neutral-700">
-                        source
-                      </summary>
-                      <blockquote className="mt-1 border-l-2 border-neutral-300 bg-neutral-50 px-2 py-1 font-mono text-[11px] text-neutral-700">
-                        {r.sourceQuote}
-                      </blockquote>
-                    </details>
+                  {/* UI-6: source quote shown by default (not collapsed) — the
+                      whole point of grounding is verifying each rule against
+                      its quote without opening the URL. A rule with no quote is
+                      flagged so ungrounded extractions are obvious. */}
+                  {r.sourceQuote ? (
+                    <blockquote className="mt-1.5 border-l-2 border-neutral-300 bg-neutral-50 px-2 py-1 font-mono text-[11px] text-neutral-600">
+                      {r.sourceQuote}
+                    </blockquote>
+                  ) : (
+                    <div className="mt-1.5 text-[11px] text-amber-800">
+                      ⚠ no source quote — unverified extraction
+                    </div>
                   )}
                 </div>
 

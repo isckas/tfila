@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "About Tfila-Bot",
@@ -9,6 +10,10 @@ export const metadata: Metadata = {
 export default function BotPage() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-12 prose prose-neutral">
+      {/* UI-4: home link so /bot isn't a dead-end. */}
+      <Link href="/" className="text-sm text-neutral-500 no-underline hover:underline">
+        ← tfila.co
+      </Link>
       <h1>About Tfila-Bot</h1>
 
       <p>

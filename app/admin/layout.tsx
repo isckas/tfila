@@ -17,7 +17,7 @@ export default async function AdminLayout({
                 the davener-facing site. /admin is reachable via the
                 Admin link below. */}
             <Link href="/" className="font-semibold tracking-tight">
-              tfila<span className="text-amber-700">.</span>co
+              tfila<span className="text-amber-800">.</span>co
             </Link>
             <Link
               href="/admin"

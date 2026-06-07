@@ -76,6 +76,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
   const tz = shul.timezone ?? "America/New_York";
   const now = new Date();
   const todayIso = isoDateInTz(now, tz);
+  const tomorrowIso = isoDateInTz(new Date(now.getTime() + 86_400_000), tz);
   const selectedIso = (sp.date && parseDateOnly(sp.date)) ? sp.date! : todayIso;
   const selectedDate = parseDateOnly(selectedIso) ?? now;
   const selectedDow = new Date(selectedIso + "T12:00:00Z").getUTCDay();
@@ -236,8 +237,40 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </section>
       )}
 
+      {/* ─── Today / Tomorrow quick tabs (UI-3 ✓CLICK) ──────── */}
+      {/* The two common views are one tap each; arbitrary dates live in the
+          "Other days" disclosure below. */}
+      <div className="mt-6 flex items-center gap-1.5 text-sm">
+        <Link
+          href={
+            userLat != null && userLng != null
+              ? `/shul/${shul.slug}?lat=${userLat}&lng=${userLng}`
+              : `/shul/${shul.slug}`
+          }
+          className={
+            "rounded-full border px-3 py-1 text-xs transition-colors " +
+            (selectedIso === todayIso
+              ? "border-neutral-900 bg-neutral-900 text-white"
+              : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
+          }
+        >
+          Today
+        </Link>
+        <Link
+          href={`/shul/${shul.slug}?date=${tomorrowIso}${userLocSuffix}`}
+          className={
+            "rounded-full border px-3 py-1 text-xs transition-colors " +
+            (selectedIso === tomorrowIso
+              ? "border-neutral-900 bg-neutral-900 text-white"
+              : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
+          }
+        >
+          Tomorrow
+        </Link>
+      </div>
+
       {/* ─── Schedule for selected date ─────────────────────── */}
-      <section className="mt-6">
+      <section className="mt-3">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
           Schedule for{" "}
           {selectedDate.toLocaleDateString([], {
@@ -401,41 +434,8 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </div>
       </details>
 
-      {/* ─── Map ────────────────────────────────────────────── */}
-      {shul.lat != null && shul.lng != null && (
-        <section className="mt-8">
-          <h2 className="mb-2 text-sm font-medium text-neutral-700">Location</h2>
-          <div className="overflow-hidden rounded-xl border border-neutral-200">
-            <iframe
-              title={`Map of ${shul.name}`}
-              width="100%"
-              height="280"
-              loading="lazy"
-              style={{ border: 0 }}
-              src={`https://www.openstreetmap.org/export/embed.html?bbox=${shul.lng - 0.01},${shul.lat - 0.005},${shul.lng + 0.01},${shul.lat + 0.005}&layer=mapnik&marker=${shul.lat},${shul.lng}`}
-            />
-          </div>
-          <p className="mt-2 text-xs text-neutral-500">
-            <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${shul.lat},${shul.lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-amber-800 underline-offset-2 hover:underline"
-            >
-              Open in Google Maps
-            </a>
-            {" · "}
-            <a
-              href={`https://www.openstreetmap.org/?mlat=${shul.lat}&mlon=${shul.lng}#map=16/${shul.lat}/${shul.lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline-offset-2 hover:underline"
-            >
-              View on OpenStreetMap
-            </a>
-          </p>
-        </section>
-      )}
+      {/* Map iframe + redundant OSM/Maps links cut (UI-3) — the header
+          already carries a "directions →" link to Google Maps. */}
 
       {/* ─── Verify Schedule Source ─────────────────────────── */}
       {shul.submittedUrl && (
@@ -459,8 +459,6 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
             </a>
           </p>
           <p className="mt-2 text-xs text-neutral-500">
-            Status: <span className="font-mono">{shul.status}</span>
-            {" · "}
             <Link href="/" className="underline-offset-2 hover:underline">
               home feed
             </Link>
