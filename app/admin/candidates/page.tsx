@@ -143,7 +143,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
           SELECT 1 FROM data_source ds2
            WHERE ds2.shul_id = s.id
              AND ds2.review_status = 'approved'
-             AND ds2.last_run_status = 'ok'
+             AND ds2.last_run_status IN ('ok', 'no_change')
         ) THEN 'no approved+ok data_source'
       END AS failure_reason
     FROM shul_candidate sc
@@ -156,7 +156,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
           SELECT 1 FROM data_source ds2
            WHERE ds2.shul_id = s.id
              AND ds2.review_status = 'approved'
-             AND ds2.last_run_status = 'ok'
+             AND ds2.last_run_status IN ('ok', 'no_change')
         )
       )
     ORDER BY sc.reviewed_at DESC
