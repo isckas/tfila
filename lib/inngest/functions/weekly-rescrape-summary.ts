@@ -49,11 +49,30 @@ export const weeklyRescrapeSummary = inngest.createFunction(
 
     const total = counts.rows.reduce((s, r) => s + Number(r.n), 0);
 
-    // ─── Skip the email when nothing ran ───────────────────────
-    // Cron didn't fire, or the deploy was paused. Either way, sending
-    // an empty digest is just noise.
+    // ─── Dead-man's switch (H8) ────────────────────────────────
+    // Zero scrape_run rows in the lookback means the weekly rescrape almost
+    // certainly did NOT run — a paused deploy, a broken cron, or a silent
+    // failure. The OLD code suppressed this as "noise" (empty digest), which
+    // is EXACTLY how the 41→9 outage hid for two weeks. Send a LOUD alert
+    // instead, and make it critical so a send failure retries the step rather
+    // than the only signal vanishing.
     if (total === 0) {
-      return { skipped: true, reason: "no scrape_run rows in lookback window" };
+      await step.run("dead-mans-switch-alert", async () => {
+        await notifyAdmin({
+          subject: "⚠️ CRON DID NOT RUN — no scrape activity this week",
+          text: [
+            `The weekly digest fired but found ZERO scrape_run rows in the last ${LOOKBACK_MINUTES} minutes.`,
+            ``,
+            `That almost certainly means the weekly rescrape did NOT run (paused deploy, broken cron, or a silent failure).`,
+            `Every public listing goes stale within ${STALE_THRESHOLD_DAYS} days if this isn't fixed.`,
+            ``,
+            `Check: the Inngest dashboard (shul-weekly-rescrape), the SCRAPE_ENABLED env var, and the latest deploy.`,
+            `${BASE_URL}/admin`,
+          ].join("\n"),
+          critical: true,
+        });
+      });
+      return { alerted: "dead_mans_switch", reason: "no scrape_run rows in lookback window" };
     }
 
     // ─── Per-shul detail for broken / error rows ───────────────

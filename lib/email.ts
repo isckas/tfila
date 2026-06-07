@@ -60,15 +60,28 @@ function escapeHtml(s: string): string {
 /**
  * Send a one-line notification to the admin (ADMIN_EMAIL).
  * Used for new shul submissions, failed scrapes, etc.
- * Silently no-ops if ADMIN_EMAIL is not set.
- * Errors are swallowed (we never want notifications to break a user flow).
+ * No-ops if ADMIN_EMAIL is not set (warns loudly in prod — M12).
+ *
+ * By default errors are swallowed (a notification must never break a user
+ * flow like /submit). Pass `critical: true` for alerts where a swallowed
+ * failure means the ONLY signal is lost (the weekly digest, the dead-man's
+ * switch) — it re-throws so the enclosing Inngest step retries instead of
+ * vanishing.
  */
 export async function notifyAdmin(args: {
   subject: string;
   text: string;
+  critical?: boolean;
 }): Promise<void> {
   const to = process.env.ADMIN_EMAIL;
-  if (!to) return;
+  if (!to) {
+    if (process.env.NODE_ENV === "production") {
+      console.warn(
+        "[notifyAdmin] ADMIN_EMAIL is not set in production — admin alerts are being silently dropped.",
+      );
+    }
+    return;
+  }
   try {
     await sendTransactional({
       to,
@@ -77,5 +90,6 @@ export async function notifyAdmin(args: {
     });
   } catch (err) {
     console.error("[notifyAdmin] failed:", (err as Error).message);
+    if (args.critical) throw err;
   }
 }

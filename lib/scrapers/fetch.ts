@@ -1,3 +1,5 @@
+import { assertPublicHttpUrl } from "../ssrf";
+
 // Browser-like UA used as a fallback when a site refuses our branded
 // Tfila-Bot identity. Some WAFs (Cloudflare, etc.) return 406/403 for
 // non-browser User-Agents, even when we identify ourselves honestly.
@@ -6,6 +8,10 @@ const BROWSER_UA =
 
 const BROWSER_ACCEPT =
   "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+
+// Cap redirect-following so a redirect loop can't spin the function. Each hop
+// is SSRF-revalidated, so this also bounds the validation work.
+const MAX_REDIRECTS = 5;
 
 export interface FetchResult {
   url: string;
@@ -28,23 +34,37 @@ async function fetchOnce(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": ua,
-        Accept: BROWSER_ACCEPT,
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-      },
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-    const html = res.ok ? await res.text() : "";
-    return {
-      status: res.status,
-      html,
-      finalUrl: res.url,
-      ok: res.ok,
-    };
+    // Follow redirects MANUALLY so we can SSRF-validate every hop (H6/M10).
+    // The branded-UA guard at /submit only covers the first URL; the actual
+    // fetch path here is reached by the async cascade + the weekly rescrape on
+    // stored URLs, and `redirect: "follow"` would chase a Location into a
+    // private/metadata IP (169.254.169.254, 10/8, 127/8) unchecked. Validating
+    // the entry URL + each redirect target before connecting closes that.
+    let currentUrl = url;
+    for (let hop = 0; ; hop++) {
+      await assertPublicHttpUrl(currentUrl);
+      const res = await fetch(currentUrl, {
+        headers: {
+          "User-Agent": ua,
+          Accept: BROWSER_ACCEPT,
+          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Encoding": "gzip, deflate, br",
+        },
+        redirect: "manual",
+        signal: ctrl.signal,
+      });
+      const location = res.headers.get("location");
+      if (res.status >= 300 && res.status < 400 && location) {
+        if (hop >= MAX_REDIRECTS) {
+          return { status: 310, html: "", finalUrl: currentUrl, ok: false };
+        }
+        // Resolve relative redirects against the current URL.
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+      const html = res.ok ? await res.text() : "";
+      return { status: res.status, html, finalUrl: currentUrl, ok: res.ok };
+    }
   } finally {
     clearTimeout(timer);
   }
