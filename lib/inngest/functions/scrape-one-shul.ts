@@ -256,16 +256,12 @@ export const scrapeOneShul = inngest.createFunction(
         });
 
     if (verdict.shouldFlagBroken) {
-      // Don't auto-apply. Mark broken, flag for review, keep old rules
-      // in place so daveners see the previous schedule until reviewed.
-      //
-      // Fix Q'/CC: stamp first_broken_at on first broken in streak; demote
-      // shul.status from active→pending_review when no other approved+ok
-      // source remains for the shul.
-      // Wrapped in db.transaction so Inngest retry on partial failure
-      // doesn't double-insert the scrape_run audit row. All three writes
-      // (run audit, data_source mark-broken, parent-shul demote) are now
-      // atomic; on retry, the whole step replays cleanly.
+      // Terminal failure (a transient one would have thrown above). Record a
+      // broken run and keep the old rules in place. We do NOT touch
+      // review_status (sticky — E-A4) or shul.status (visibility is derived —
+      // E-A2); the source stays approved so the weekly cron keeps retrying it
+      // and it self-heals. Wrapped in a transaction so an Inngest retry doesn't
+      // double-insert the scrape_run audit row.
       await step.run("mark-broken", async () => {
         const now = new Date();
         await db.transaction(async (tx) => {
@@ -285,7 +281,11 @@ export const scrapeOneShul = inngest.createFunction(
             .set({
               lastRunAt: now,
               lastRunStatus: "broken",
-              reviewStatus: "pending",
+              // E-A4: keep review_status STICKY. A run outcome belongs in
+              // last_run_status, not review_status; wiping the human's approval
+              // on a broken run is what created the no-recovery trapdoor (the
+              // cron only re-fans approved sources). Leaving it approved lets
+              // the weekly cron keep retrying so the source self-heals.
               confidenceScore: cascade.extraction?.confidence ?? null,
               updatedAt: now,
               // first_broken_at: only set if not already in a broken streak.
@@ -307,26 +307,10 @@ export const scrapeOneShul = inngest.createFunction(
               },
             })
             .where(eq(dataSource.id, dataSourceId));
-
-          // Fix CC: active→pending_review demotion. If the parent shul has
-          // no other approved+ok+fresh data_source after this run, demote
-          // shul.status so admin gets prompted instead of leaving stale
-          // rules visible on a "still active" shul.
-          await tx.execute(sql`
-            UPDATE shul
-               SET status = 'pending_review', updated_at = NOW()
-             WHERE id = ${shulId}
-               AND status = 'active'
-               AND NOT EXISTS (
-                 SELECT 1 FROM data_source ds2
-                  WHERE ds2.shul_id = shul.id
-                    AND ds2.id <> ${dataSourceId}
-                    AND ds2.review_status = 'approved'
-                    AND ds2.last_run_status IN ('ok', 'no_change')
-                    AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
-                        NOW() - INTERVAL '14 days'
-               )
-          `);
+          // E-A2: no shul.status demotion. Public visibility is now a pure
+          // function of "has a fresh approved+ok source" (lib/queries.ts), so a
+          // broken run hides the shul automatically. Not churning shul.status
+          // kills the demote/restore dance behind the 30+ "Fix X" patches.
         });
       });
       return {
@@ -509,31 +493,13 @@ async function rescrapeNonHtml(
           .set({
             lastRunAt: now,
             lastRunStatus: "broken",
-            // Match the other two mark-broken sites: bump back to pending
-            // review so this row appears in the admin Broken inbox. Without
-            // this, the source stays approved+broken and only Fix G/V's
-            // "no approved+ok+fresh source" reduction picks it up — but it
-            // still pollutes the apparent "approved" count.
-            reviewStatus: "pending",
+            // E-A4: review_status stays sticky (see scrapeOneShul mark-broken).
             firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             updatedAt: now,
           })
           .where(eq(dataSource.id, args.dataSourceId));
-        await tx.execute(sql`
-          UPDATE shul
-             SET status = 'pending_review', updated_at = NOW()
-           WHERE id = ${args.shulId}
-             AND status = 'active'
-             AND NOT EXISTS (
-               SELECT 1 FROM data_source ds2
-                WHERE ds2.shul_id = shul.id
-                  AND ds2.id <> ${args.dataSourceId}
-                  AND ds2.review_status = 'approved'
-                  AND ds2.last_run_status IN ('ok', 'no_change')
-                  AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
-                      NOW() - INTERVAL '14 days'
-             )
-        `);
+        // E-A2: no shul.status demotion (visibility is derived). See the HTML
+        // mark-broken path.
       });
     });
     return { changed: false, broken: true, strategy: args.strategy };
@@ -581,27 +547,14 @@ async function rescrapeNonHtml(
           .set({
             lastRunAt: now,
             lastRunStatus: "broken",
-            reviewStatus: "pending",
+            // E-A4: review_status stays sticky.
             confidenceScore: cascade.extraction!.confidence,
             firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             updatedAt: now,
           })
           .where(eq(dataSource.id, args.dataSourceId));
-        await tx.execute(sql`
-          UPDATE shul
-             SET status = 'pending_review', updated_at = NOW()
-           WHERE id = ${args.shulId}
-             AND status = 'active'
-             AND NOT EXISTS (
-               SELECT 1 FROM data_source ds2
-                WHERE ds2.shul_id = shul.id
-                  AND ds2.id <> ${args.dataSourceId}
-                  AND ds2.review_status = 'approved'
-                  AND ds2.last_run_status IN ('ok', 'no_change')
-                  AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
-                      NOW() - INTERVAL '14 days'
-             )
-        `);
+        // E-A2: no shul.status demotion (visibility is derived). See the HTML
+        // mark-broken path.
       });
     });
     return {
