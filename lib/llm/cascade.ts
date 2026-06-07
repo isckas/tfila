@@ -572,5 +572,45 @@ export function isFailed(r: CascadeResult): r is CascadeResult & {
   return r.strategy === "failed";
 }
 
+// Patterns that indicate a TRANSIENT infrastructure failure (worth retrying)
+// rather than a terminal "this page has no schedule" outcome: Anthropic 429
+// rate limits + 5xx overloads, fetch/render timeouts, DNS/socket errors.
+const TRANSIENT_ERROR_RE =
+  /(\b429\b|\b5\d\d\b|rate[_\s-]?limit|overloaded|too many requests|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|timed?\s?out|fetch failed)/i;
+
+function attemptLooksTransient(a: CascadeAttempt): boolean {
+  // The cost-gate bail is a deliberate skip, not a transient error.
+  if (
+    a.status === "skipped" &&
+    /budget|kill switch|disabled/i.test(a.errorMessage ?? "")
+  ) {
+    return false;
+  }
+  if (a.httpStatus != null && (a.httpStatus === 429 || a.httpStatus >= 500)) {
+    return true;
+  }
+  return a.errorMessage != null && TRANSIENT_ERROR_RE.test(a.errorMessage);
+}
+
+/**
+ * True when a failed cascade looks like a TRANSIENT infra problem (rate limit,
+ * overload, timeout, network) rather than a genuine "no schedule here" result.
+ * Callers should THROW so Inngest retries with backoff instead of demoting the
+ * source — the 2026-05-24 mass regression was transient 429s treated as
+ * permanent "cascade exhausted all tiers" demotions. See plan C1 / M2.
+ */
+export function isTransientCascadeFailure(r: CascadeResult): boolean {
+  if (r.strategy !== "failed") return false;
+  return r.attempts.some(attemptLooksTransient);
+}
+
+/** Short message naming the first transient attempt, for the thrown error. */
+export function transientCascadeMessage(r: CascadeResult): string {
+  const a = r.attempts.find(attemptLooksTransient);
+  return `transient extraction failure (will retry): ${
+    a?.errorMessage ?? a?.httpStatus ?? "unknown"
+  }`;
+}
+
 // Re-export types for downstream
 export type { ExtractionResult, PdfExtractionResult, VisionExtractionResult };

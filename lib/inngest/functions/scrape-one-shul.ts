@@ -18,7 +18,11 @@ import { db } from "../../../db/client";
 import { dataSource, minyanRule, scrapeRun, shul } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
 import { hashSanitizedHtml } from "../../llm/extract";
-import { runCascade } from "../../llm/cascade";
+import {
+  runCascade,
+  isTransientCascadeFailure,
+  transientCascadeMessage,
+} from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
 
@@ -214,11 +218,17 @@ export const scrapeOneShul = inngest.createFunction(
     // fix: it lets the weekly cron recover from shul-page-shape changes
     // without admin intervention.
     const cascade = await step.run("llm-extract", async () => {
-      return runCascade(url, {
+      const r = await runCascade(url, {
         preferredStrategy: "html",
         shulId,
         timeoutMs: 25_000,
       });
+      // Transient infra failure (Anthropic 429/5xx, fetch timeout, network) —
+      // throw so Inngest retries the whole step with backoff rather than
+      // recording a permanent "broken" run. The 2026-05-24 mass regression was
+      // transient 429s treated as terminal. See plan C1 / M2.
+      if (isTransientCascadeFailure(r)) throw new Error(transientCascadeMessage(r));
+      return r;
     });
 
     // ─── 5. Decide: auto-apply, or flag as broken? ──────────────
@@ -467,13 +477,17 @@ async function rescrapeNonHtml(
     (args.previousConfig as { submitted_url?: string } | null)?.submitted_url ??
     args.identifier;
 
-  const cascade = await step.run("cascade-rerun", async () =>
-    runCascade(submittedUrl, {
+  const cascade = await step.run("cascade-rerun", async () => {
+    const r = await runCascade(submittedUrl, {
       timeoutMs: 25_000,
       preferredStrategy: args.strategy,
       shulId: args.shulId,
-    }),
-  );
+    });
+    // Transient infra failure → throw so Inngest retries instead of demoting.
+    // See plan C1 / M2 and the HTML path above.
+    if (isTransientCascadeFailure(r)) throw new Error(transientCascadeMessage(r));
+    return r;
+  });
 
   if (cascade.strategy === "failed" || !cascade.extraction) {
     await step.run("mark-broken-cascade-failed", async () => {
