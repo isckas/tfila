@@ -2,6 +2,7 @@ import Link from "next/link";
 import { desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { dataSource, shul } from "@/db/schema";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ interface PageProps {
 export default async function AdminRejectedDataSourcesPage({
   searchParams,
 }: PageProps) {
+  await requireAdmin();
   const sp = await searchParams;
   const reasonFilter = sp.reason?.trim() ?? null;
 

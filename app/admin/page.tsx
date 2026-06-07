@@ -7,6 +7,7 @@ import {
   type AdminShulState,
 } from "@/lib/admin-state";
 import { AdminInbox } from "@/components/AdminInbox";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ export default async function AdminHomePage({
 }: {
   searchParams: Promise<{ state?: string }>;
 }) {
+  await requireAdmin();
   const { state: stateParam } = await searchParams;
   // Pull a generous slice — most projects have a few hundred shuls at most.
   const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });

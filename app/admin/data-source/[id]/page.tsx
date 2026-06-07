@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getDataSourceForReview } from "@/lib/queries";
 import type { MinyanTime } from "@/db/schema";
 import { parseCascadeAttempts } from "@/lib/llm/cascade";
+import { requireAdmin } from "@/lib/auth";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -11,6 +12,7 @@ interface PageProps {
 export const dynamic = "force-dynamic";
 
 export default async function ReviewDetailPage({ params }: PageProps) {
+  await requireAdmin();
   const { id } = await params;
   const dsId = Number(id);
   if (!Number.isInteger(dsId)) notFound();

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getShulForAdmin, getRecentScrapeRunsForShul } from "@/lib/queries";
 import { parseCascadeAttempts } from "@/lib/llm/cascade";
 import { StatusBadge } from "@/components/badges/StatusBadge";
+import { requireAdmin } from "@/lib/auth";
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -33,6 +34,7 @@ export default async function AdminShulDetailPage({
   params,
   searchParams,
 }: PageProps) {
+  await requireAdmin();
   const { slug } = await params;
   const sp = await searchParams;
   const data = await getShulForAdmin(slug);

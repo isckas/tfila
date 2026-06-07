@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listOpenTimeReports } from "@/lib/queries";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ export const dynamic = "force-dynamic";
  * shul's admin page (where "Extract Now" lives) and offers Resolve / Dismiss.
  */
 export default async function AdminReportsPage() {
+  await requireAdmin();
   const reports = await listOpenTimeReports(200);
 
   return (
