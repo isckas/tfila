@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Sign in",
@@ -22,7 +23,14 @@ export default async function SignInPage({ searchParams }: PageProps) {
 
   return (
     <main className="mx-auto max-w-md px-6 py-16">
-      <h1 className="text-2xl font-semibold mb-2">Admin sign-in</h1>
+      {/* UI-4: wordmark = home so /signin isn't a dead-end. */}
+      <Link
+        href="/"
+        className="text-sm font-semibold tracking-tight text-neutral-900"
+      >
+        tfila<span className="text-amber-800">.</span>co
+      </Link>
+      <h1 className="mt-6 text-2xl font-semibold mb-2">Admin sign-in</h1>
       <p className="text-sm text-neutral-600 mb-6">
         Enter your email. We&apos;ll send a one-time sign-in link (valid 15 minutes).
       </p>
@@ -61,7 +69,7 @@ export default async function SignInPage({ searchParams }: PageProps) {
         </label>
         <button
           type="submit"
-          className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+          className="rounded bg-amber-800 px-4 py-2 text-sm font-medium text-white hover:bg-amber-900"
         >
           Send link
         </button>

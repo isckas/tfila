@@ -108,7 +108,9 @@ Each source type has different conventions. HTML has classnames/IDs that hint at
 
 ### 3. Few-shot domain prompt
 
-The 4K+ system prompt with 5 worked examples (clean schedule, mixed minyan/shiur, Yom Tov section, non-schedule page, prose-only multi-season) is the **single biggest accuracy lever** in the stack. No generic web-scraping LLM tool has Jewish-domain context built in. This is the moat — keep it regardless of which tier implementations swap.
+The 4K+ system prompt with 5 worked examples (clean schedule, mixed minyan/shiur, Yom Tov section, non-schedule page, prose-only multi-season) is the **single biggest accuracy lever** in the stack. No generic web-scraping LLM tool has Jewish-domain context built in. Keep it regardless of which tier implementations swap.
+
+> **2026-06-07 reframe (plan E-B3).** Earlier docs called the few-shot prompt "the moat." That's wrong, and the label did real harm: it was cited to reflexively veto *deterministic* acquisition strategies, which is how the pipeline ended up an LLM mono-cascade. The prompt is the **most** commoditizable, most failure-prone layer (it's the part a 429 storm or a model regression breaks). The actual moat is the durable stuff downstream: **the `minyan_rule` model + the zmanim/special-day resolver + the curated, freshness-gated directory.** Those are what a competitor can't cheaply copy and what survives any extraction-tier swap. Treat deterministic parsers (e.g. a platform adapter) as *complements* to the prompt, not threats to a moat. (The ShulCloud adapter itself was scoped out on 2026-06-07 — see the remediation plan — once P0 made the cascade storm-proof and the LLM proved adequate on ShulCloud's static HTML; the conceptual correction stands regardless.)
 
 ### 4. Schema-validated output (Zod)
 

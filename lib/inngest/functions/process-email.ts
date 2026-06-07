@@ -350,7 +350,11 @@ async function persistFromEmail(args: PersistArgs) {
             lastRunAt: now,
             lastReceivedAt: now,
             lastRunStatus: "broken",
-            reviewStatus: "pending",
+            // E-A4 parity: review_status stays STICKY — a bad-week email must
+            // not wipe the human's approval (that one-way-door was H4). M3:
+            // stamp first_broken_at so the broken streak shows in the weekly
+            // digest; the URL path always did this, the email path didn't.
+            firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             confidenceScore: args.extracted.extraction.confidence,
             updatedAt: now,
             configJson: {
@@ -423,6 +427,10 @@ async function persistFromEmail(args: PersistArgs) {
         lastRunAt: now,
         lastReceivedAt: now,
         lastRunStatus: "ok",
+        // E-A5 parity: clear the broken streak on recovery (the URL apply path
+        // does this). review_status is left untouched — a good email must NOT
+        // auto-approve a never-reviewed source.
+        firstBrokenAt: null,
         updatedAt: now,
       })
       .where(eq(dataSource.id, dataSourceId));

@@ -24,7 +24,7 @@ export function FeedHeader({ placeName, lat, lng, radiusMiles }: Props) {
       <div className="flex items-center justify-between gap-3">
         <Link href="/" className="shrink-0">
           <span className="text-base font-semibold tracking-tight text-neutral-900">
-            tfila<span className="text-amber-700">.</span>co
+            tfila<span className="text-amber-800">.</span>co
           </span>
         </Link>
 

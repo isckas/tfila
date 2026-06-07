@@ -104,9 +104,8 @@ interface CascadeOpts {
   preferredStrategy?: ExtractionStrategy;
   timeoutMs?: number;
   /**
-   * Shul ID — required for v2 (context preamble + tools + critique).
-   * Optional for v1 (ignored). When v2 is active and shulId is missing
-   * we silently fall through to v1 with a console.warn.
+   * Shul ID — accepted for caller convenience / logging but not required by
+   * the cascade. (Was used by the retired v2 context preamble.)
    */
   shulId?: number;
 }
@@ -115,26 +114,11 @@ function isUseful(rules: number, confidence: number): boolean {
   return rules > 0 && confidence >= MIN_USEFUL_CONFIDENCE;
 }
 
-// ─── Feature flag dispatch ───────────────────────────────────
-//
-// EXTRACTION_PIPELINE_V2=true  → use v2 for ALL shuls
-// EXTRACTION_V2_SHUL_IDS=12,34 → use v2 only for those specific shuls
-// (neither set)                → use v1 for everything (current behavior)
-//
-// Per EXTRACTION-ONE-SHOT-PLAN.md "Feature flag design".
-
-function shouldUseV2(shulId: number | undefined): boolean {
-  if (process.env.EXTRACTION_PIPELINE_V2 === "true") return true;
-  if (shulId == null) return false;
-  const idsRaw = process.env.EXTRACTION_V2_SHUL_IDS;
-  if (!idsRaw) return false;
-  const ids = idsRaw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map(Number);
-  return ids.includes(shulId);
-}
+// NOTE: the v2 agent-loop pipeline (router + agent-loop + 5 tools + critique +
+// Jina/Docling) and its EXTRACTION_PIPELINE_V2 / EXTRACTION_V2_SHUL_IDS feature
+// flags were retired in the P1 consolidation. v2 underperformed v1 (0.527 avg
+// confidence vs v1's working canary) and its extra per-shul LLM calls amplified
+// the 2026-05-24 429 storm. v1 is now the only pipeline. See plan E-DECISION-1.
 
 /**
  * Find PDF links on a page. Accepts multiple HTML sources (e.g. static
@@ -238,13 +222,8 @@ function findImageCandidates(htmls: string[], baseUrl: string): string[] {
 }
 
 /**
- * Top-level cascade entry point. Dispatches to v1 (current production
- * pipeline) or v2 (extract-v2 + agent tools + critique + Jina/Docling)
- * based on feature flags.
- *
- * v2 needs a shulId for context preamble. If the flag is on for a
- * shul that has no shulId in scope (shouldn't happen but defensive),
- * we fall back to v1 silently.
+ * Top-level cascade entry point. Runs the 4-tier extraction cascade
+ * (HTML → JS-rendered → Vision → PDF) behind a cost circuit-breaker.
  */
 export async function runCascade(
   submittedUrl: string,
@@ -282,21 +261,6 @@ export async function runCascade(
     };
   }
 
-  if (shouldUseV2(opts.shulId)) {
-    if (opts.shulId == null) {
-      console.warn(
-        "[cascade] v2 enabled but no shulId provided; falling back to v1",
-      );
-    } else {
-      // Lazy-import so v2 dependencies aren't loaded in v1-only deploys
-      const { runCascadeV2 } = await import("./cascade-v2");
-      return runCascadeV2(submittedUrl, {
-        shulId: opts.shulId,
-        preferredStrategy: opts.preferredStrategy,
-        timeoutMs: opts.timeoutMs,
-      });
-    }
-  }
   return runCascadeV1Internal(submittedUrl, opts);
 }
 
@@ -606,6 +570,46 @@ export function isFailed(r: CascadeResult): r is CascadeResult & {
   extraction: null;
 } {
   return r.strategy === "failed";
+}
+
+// Patterns that indicate a TRANSIENT infrastructure failure (worth retrying)
+// rather than a terminal "this page has no schedule" outcome: Anthropic 429
+// rate limits + 5xx overloads, fetch/render timeouts, DNS/socket errors.
+const TRANSIENT_ERROR_RE =
+  /(\b429\b|\b5\d\d\b|rate[_\s-]?limit|overloaded|too many requests|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|timed?\s?out|fetch failed)/i;
+
+function attemptLooksTransient(a: CascadeAttempt): boolean {
+  // The cost-gate bail is a deliberate skip, not a transient error.
+  if (
+    a.status === "skipped" &&
+    /budget|kill switch|disabled/i.test(a.errorMessage ?? "")
+  ) {
+    return false;
+  }
+  if (a.httpStatus != null && (a.httpStatus === 429 || a.httpStatus >= 500)) {
+    return true;
+  }
+  return a.errorMessage != null && TRANSIENT_ERROR_RE.test(a.errorMessage);
+}
+
+/**
+ * True when a failed cascade looks like a TRANSIENT infra problem (rate limit,
+ * overload, timeout, network) rather than a genuine "no schedule here" result.
+ * Callers should THROW so Inngest retries with backoff instead of demoting the
+ * source — the 2026-05-24 mass regression was transient 429s treated as
+ * permanent "cascade exhausted all tiers" demotions. See plan C1 / M2.
+ */
+export function isTransientCascadeFailure(r: CascadeResult): boolean {
+  if (r.strategy !== "failed") return false;
+  return r.attempts.some(attemptLooksTransient);
+}
+
+/** Short message naming the first transient attempt, for the thrown error. */
+export function transientCascadeMessage(r: CascadeResult): string {
+  const a = r.attempts.find(attemptLooksTransient);
+  return `transient extraction failure (will retry): ${
+    a?.errorMessage ?? a?.httpStatus ?? "unknown"
+  }`;
 }
 
 // Re-export types for downstream

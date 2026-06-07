@@ -96,14 +96,20 @@ export function deriveAdminShulState(
   if (row.status === "archived") return "archived";
   if (row.status === "unsupported") return "unsupported";
 
-  // Broken: shul is flagged broken at the row level, OR any data_source's
-  // last run is broken. Latter is the live signal even when shul.status
-  // hasn't been pushed to 'broken' yet.
-  if (row.status === "broken" || row.hasBrokenRun) return "broken";
-
-  // Pending review takes priority over health: a fresh extraction landed
-  // but admin hasn't approved it yet.
+  // E-F1: a reviewable PENDING extraction outranks "broken". The query's
+  // has_pending_source already excludes strategy='failed' zombies (Fix T), so
+  // this only fires for a genuinely reviewable extraction — a shul whose ONLY
+  // pending source is a failed extraction has has_pending_source=false and
+  // still falls through to "broken" below (so M14 doesn't regress). Without
+  // this order, every shul that had both a broken run AND a fresh pending
+  // extraction was mislabeled "broken" and never appeared in the review queue
+  // (verified: it hid all reviewable shuls).
   if (row.hasPendingSource) return "pending_review";
+
+  // Broken: no approved+ok+fresh source exists (query aggregates this as
+  // has_broken_run), or the shul row is flagged broken. Live signal even when
+  // shul.status hasn't been pushed to 'broken'.
+  if (row.status === "broken" || row.hasBrokenRun) return "broken";
 
   // No data_sources at all — extraction hasn't fired (or just hasn't
   // landed). Will resolve itself when the Inngest job completes.

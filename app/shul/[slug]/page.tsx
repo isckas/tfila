@@ -9,6 +9,7 @@ import { hasFreshDataSourceForShul } from "@/lib/freshness";
 import { resolveRuleTime } from "@/lib/zmanim/resolve";
 import { computeZmanimStrip } from "@/lib/zmanim/strip";
 import { ZmanimStrip } from "@/components/ZmanimStrip";
+import { ReportWrongTime } from "@/components/ReportWrongTime";
 import {
   TEFILLAH_LABEL,
   TEFILLAH_ORDER,
@@ -75,6 +76,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
   const tz = shul.timezone ?? "America/New_York";
   const now = new Date();
   const todayIso = isoDateInTz(now, tz);
+  const tomorrowIso = isoDateInTz(new Date(now.getTime() + 86_400_000), tz);
   const selectedIso = (sp.date && parseDateOnly(sp.date)) ? sp.date! : todayIso;
   const selectedDate = parseDateOnly(selectedIso) ?? now;
   const selectedDow = new Date(selectedIso + "T12:00:00Z").getUTCDay();
@@ -189,7 +191,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         )}
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
           {shul.nusach && (
-            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800">
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-neutral-700">
               {shul.nusach}
             </span>
           )}
@@ -228,12 +230,47 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
       {/* ─── Zmanim strip for selected date ─────────────────── */}
       {zmanim && (
         <section className="mt-5">
-          <ZmanimStrip snapshot={zmanim} />
+          {/* E-C3: pass the shul tz so the strip renders the (tz-computed)
+              zmanim in the shul's local time — without it the strip formatted
+              in the host TZ (UTC on Vercel) while print + feed were correct. */}
+          <ZmanimStrip snapshot={zmanim} timezone={tz} />
         </section>
       )}
 
+      {/* ─── Today / Tomorrow quick tabs (UI-3 ✓CLICK) ──────── */}
+      {/* The two common views are one tap each; arbitrary dates live in the
+          "Other days" disclosure below. */}
+      <div className="mt-6 flex items-center gap-1.5 text-sm">
+        <Link
+          href={
+            userLat != null && userLng != null
+              ? `/shul/${shul.slug}?lat=${userLat}&lng=${userLng}`
+              : `/shul/${shul.slug}`
+          }
+          className={
+            "inline-flex min-h-9 items-center justify-center rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 " +
+            (selectedIso === todayIso
+              ? "border-neutral-900 bg-neutral-900 text-white"
+              : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
+          }
+        >
+          Today
+        </Link>
+        <Link
+          href={`/shul/${shul.slug}?date=${tomorrowIso}${userLocSuffix}`}
+          className={
+            "inline-flex min-h-9 items-center justify-center rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 " +
+            (selectedIso === tomorrowIso
+              ? "border-neutral-900 bg-neutral-900 text-white"
+              : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50")
+          }
+        >
+          Tomorrow
+        </Link>
+      </div>
+
       {/* ─── Schedule for selected date ─────────────────────── */}
-      <section className="mt-6">
+      <section className="mt-3">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
           Schedule for{" "}
           {selectedDate.toLocaleDateString([], {
@@ -382,7 +419,7 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
                         <td className="px-3 py-2 text-xs text-neutral-500">
                           {r.notes ?? ""}
                           {r.nusach && (
-                            <span className="ml-1 rounded bg-blue-100 px-1 text-blue-800">
+                            <span className="ml-1 rounded bg-neutral-100 px-1 text-neutral-700">
                               {r.nusach}
                             </span>
                           )}
@@ -397,41 +434,8 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
         </div>
       </details>
 
-      {/* ─── Map ────────────────────────────────────────────── */}
-      {shul.lat != null && shul.lng != null && (
-        <section className="mt-8">
-          <h2 className="mb-2 text-sm font-medium text-neutral-700">Location</h2>
-          <div className="overflow-hidden rounded-xl border border-neutral-200">
-            <iframe
-              title={`Map of ${shul.name}`}
-              width="100%"
-              height="280"
-              loading="lazy"
-              style={{ border: 0 }}
-              src={`https://www.openstreetmap.org/export/embed.html?bbox=${shul.lng - 0.01},${shul.lat - 0.005},${shul.lng + 0.01},${shul.lat + 0.005}&layer=mapnik&marker=${shul.lat},${shul.lng}`}
-            />
-          </div>
-          <p className="mt-2 text-xs text-neutral-500">
-            <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${shul.lat},${shul.lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-amber-800 underline-offset-2 hover:underline"
-            >
-              Open in Google Maps
-            </a>
-            {" · "}
-            <a
-              href={`https://www.openstreetmap.org/?mlat=${shul.lat}&mlon=${shul.lng}#map=16/${shul.lat}/${shul.lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline-offset-2 hover:underline"
-            >
-              View on OpenStreetMap
-            </a>
-          </p>
-        </section>
-      )}
+      {/* Map iframe + redundant OSM/Maps links cut (UI-3) — the header
+          already carries a "directions →" link to Google Maps. */}
 
       {/* ─── Verify Schedule Source ─────────────────────────── */}
       {shul.submittedUrl && (
@@ -455,8 +459,6 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
             </a>
           </p>
           <p className="mt-2 text-xs text-neutral-500">
-            Status: <span className="font-mono">{shul.status}</span>
-            {" · "}
             <Link href="/" className="underline-offset-2 hover:underline">
               home feed
             </Link>
@@ -467,6 +469,12 @@ export default async function ShulPage({ params, searchParams }: PageProps) {
           </p>
         </section>
       )}
+
+      {/* ─── Report a wrong time (E-B5) ─────────────────────── */}
+      {/* Cheapest accuracy signal: a daven-er at the shul flags a wrong time.
+          Shown for every shul (incl. email-only, which has no submittedUrl
+          section above). Anonymous; admin triages in the cockpit. */}
+      <ReportWrongTime shulId={shul.id} />
 
       {/* ─── Last updated (separate paragraph) ──────────────── */}
       <p className="mt-6 text-xs text-neutral-500">

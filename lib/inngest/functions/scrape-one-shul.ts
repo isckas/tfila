@@ -18,7 +18,11 @@ import { db } from "../../../db/client";
 import { dataSource, minyanRule, scrapeRun, shul } from "../../../db/schema";
 import { fetchHtml } from "../../scrapers/fetch";
 import { hashSanitizedHtml } from "../../llm/extract";
-import { runCascade } from "../../llm/cascade";
+import {
+  runCascade,
+  isTransientCascadeFailure,
+  transientCascadeMessage,
+} from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
 
@@ -32,12 +36,18 @@ type Step = {
 export const scrapeOneShul = inngest.createFunction(
   {
     id: "shul-scrape-one",
-    concurrency: {
-      // Best-effort per-host limit. The event payload doesn't carry the
-      // host directly; we use shulId as a proxy (one shul = one host).
-      key: "event.data.shulId",
-      limit: 1,
-    },
+    concurrency: [
+      // GLOBAL cap across the whole fleet. The 2026-05-24 regression was an
+      // unthrottled ~41-way weekly fan-out that hammered Anthropic into 429s;
+      // because the rescrape pinned a single tier, those transient 429s became
+      // permanent "cascade exhausted all tiers" demotions and the site dropped
+      // 41→9 active shuls. Keep concurrent LLM-bound scrapes low so a rate
+      // limit can never cascade into mass breakage again. See plan C1 / E-D1.
+      { limit: 3 },
+      // Best-effort per-host limit. The event payload doesn't carry the host
+      // directly; we use shulId as a proxy (one shul = one host).
+      { key: "event.data.shulId", limit: 1 },
+    ],
     triggers: [{ event: "shul.scrape.requested" }],
   },
   async ({ event, step }) => {
@@ -208,11 +218,17 @@ export const scrapeOneShul = inngest.createFunction(
     // fix: it lets the weekly cron recover from shul-page-shape changes
     // without admin intervention.
     const cascade = await step.run("llm-extract", async () => {
-      return runCascade(url, {
+      const r = await runCascade(url, {
         preferredStrategy: "html",
         shulId,
         timeoutMs: 25_000,
       });
+      // Transient infra failure (Anthropic 429/5xx, fetch timeout, network) —
+      // throw so Inngest retries the whole step with backoff rather than
+      // recording a permanent "broken" run. The 2026-05-24 mass regression was
+      // transient 429s treated as terminal. See plan C1 / M2.
+      if (isTransientCascadeFailure(r)) throw new Error(transientCascadeMessage(r));
+      return r;
     });
 
     // ─── 5. Decide: auto-apply, or flag as broken? ──────────────
@@ -240,16 +256,12 @@ export const scrapeOneShul = inngest.createFunction(
         });
 
     if (verdict.shouldFlagBroken) {
-      // Don't auto-apply. Mark broken, flag for review, keep old rules
-      // in place so daveners see the previous schedule until reviewed.
-      //
-      // Fix Q'/CC: stamp first_broken_at on first broken in streak; demote
-      // shul.status from active→pending_review when no other approved+ok
-      // source remains for the shul.
-      // Wrapped in db.transaction so Inngest retry on partial failure
-      // doesn't double-insert the scrape_run audit row. All three writes
-      // (run audit, data_source mark-broken, parent-shul demote) are now
-      // atomic; on retry, the whole step replays cleanly.
+      // Terminal failure (a transient one would have thrown above). Record a
+      // broken run and keep the old rules in place. We do NOT touch
+      // review_status (sticky — E-A4) or shul.status (visibility is derived —
+      // E-A2); the source stays approved so the weekly cron keeps retrying it
+      // and it self-heals. Wrapped in a transaction so an Inngest retry doesn't
+      // double-insert the scrape_run audit row.
       await step.run("mark-broken", async () => {
         const now = new Date();
         await db.transaction(async (tx) => {
@@ -269,7 +281,11 @@ export const scrapeOneShul = inngest.createFunction(
             .set({
               lastRunAt: now,
               lastRunStatus: "broken",
-              reviewStatus: "pending",
+              // E-A4: keep review_status STICKY. A run outcome belongs in
+              // last_run_status, not review_status; wiping the human's approval
+              // on a broken run is what created the no-recovery trapdoor (the
+              // cron only re-fans approved sources). Leaving it approved lets
+              // the weekly cron keep retrying so the source self-heals.
               confidenceScore: cascade.extraction?.confidence ?? null,
               updatedAt: now,
               // first_broken_at: only set if not already in a broken streak.
@@ -291,26 +307,10 @@ export const scrapeOneShul = inngest.createFunction(
               },
             })
             .where(eq(dataSource.id, dataSourceId));
-
-          // Fix CC: active→pending_review demotion. If the parent shul has
-          // no other approved+ok+fresh data_source after this run, demote
-          // shul.status so admin gets prompted instead of leaving stale
-          // rules visible on a "still active" shul.
-          await tx.execute(sql`
-            UPDATE shul
-               SET status = 'pending_review', updated_at = NOW()
-             WHERE id = ${shulId}
-               AND status = 'active'
-               AND NOT EXISTS (
-                 SELECT 1 FROM data_source ds2
-                  WHERE ds2.shul_id = shul.id
-                    AND ds2.id <> ${dataSourceId}
-                    AND ds2.review_status = 'approved'
-                    AND ds2.last_run_status IN ('ok', 'no_change')
-                    AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
-                        NOW() - INTERVAL '14 days'
-               )
-          `);
+          // E-A2: no shul.status demotion. Public visibility is now a pure
+          // function of "has a fresh approved+ok source" (lib/queries.ts), so a
+          // broken run hides the shul automatically. Not churning shul.status
+          // kills the demote/restore dance behind the 30+ "Fix X" patches.
         });
       });
       return {
@@ -367,14 +367,18 @@ export const scrapeOneShul = inngest.createFunction(
           .set({
             lastRunAt: now,
             lastRunStatus: "ok",
-            // Recovery from a broken streak: mark-broken flipped this to
-            // 'pending' (lines 269 area). Now that the extraction recovered,
-            // restore 'approved' so the source re-qualifies for the public
-            // freshness gate (lib/freshness.ts hasFreshDataSourceForShul +
-            // the EXISTS clauses in lib/queries.ts), all of which now
-            // require review_status='approved' per Fix P. Without this
-            // restore, broken→recovered cycles would permanently hide the
-            // shul from public surfaces.
+            // Re-approve on recovery. Under the E-A4 sticky-review model
+            // mark-broken no longer demotes review_status, so on the normal
+            // weekly-cron path this is a no-op (the source is already
+            // 'approved'). It's load-bearing for the RECOVERY path:
+            // scripts/recover-stranded.mjs re-fans shul.scrape.requested at
+            // sources the pre-P1 code demoted to 'pending' during the 429
+            // storm; this restores them to 'approved' so they re-qualify for
+            // the public freshness gate (lib/freshness.ts + the EXISTS clauses
+            // in lib/queries.ts, all of which require review_status='approved').
+            // Intentionally asymmetric with process-email.ts, which does NOT
+            // auto-approve — a never-reviewed source must not auto-approve
+            // (those enter via data-source.requested/buildDataSource, not here).
             reviewStatus: "approved",
             confidenceScore: extraction.confidence,
             extractionStrategy: cascade.strategy,
@@ -461,13 +465,17 @@ async function rescrapeNonHtml(
     (args.previousConfig as { submitted_url?: string } | null)?.submitted_url ??
     args.identifier;
 
-  const cascade = await step.run("cascade-rerun", async () =>
-    runCascade(submittedUrl, {
+  const cascade = await step.run("cascade-rerun", async () => {
+    const r = await runCascade(submittedUrl, {
       timeoutMs: 25_000,
       preferredStrategy: args.strategy,
       shulId: args.shulId,
-    }),
-  );
+    });
+    // Transient infra failure → throw so Inngest retries instead of demoting.
+    // See plan C1 / M2 and the HTML path above.
+    if (isTransientCascadeFailure(r)) throw new Error(transientCascadeMessage(r));
+    return r;
+  });
 
   if (cascade.strategy === "failed" || !cascade.extraction) {
     await step.run("mark-broken-cascade-failed", async () => {
@@ -489,31 +497,13 @@ async function rescrapeNonHtml(
           .set({
             lastRunAt: now,
             lastRunStatus: "broken",
-            // Match the other two mark-broken sites: bump back to pending
-            // review so this row appears in the admin Broken inbox. Without
-            // this, the source stays approved+broken and only Fix G/V's
-            // "no approved+ok+fresh source" reduction picks it up — but it
-            // still pollutes the apparent "approved" count.
-            reviewStatus: "pending",
+            // E-A4: review_status stays sticky (see scrapeOneShul mark-broken).
             firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             updatedAt: now,
           })
           .where(eq(dataSource.id, args.dataSourceId));
-        await tx.execute(sql`
-          UPDATE shul
-             SET status = 'pending_review', updated_at = NOW()
-           WHERE id = ${args.shulId}
-             AND status = 'active'
-             AND NOT EXISTS (
-               SELECT 1 FROM data_source ds2
-                WHERE ds2.shul_id = shul.id
-                  AND ds2.id <> ${args.dataSourceId}
-                  AND ds2.review_status = 'approved'
-                  AND ds2.last_run_status IN ('ok', 'no_change')
-                  AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
-                      NOW() - INTERVAL '14 days'
-             )
-        `);
+        // E-A2: no shul.status demotion (visibility is derived). See the HTML
+        // mark-broken path.
       });
     });
     return { changed: false, broken: true, strategy: args.strategy };
@@ -561,27 +551,14 @@ async function rescrapeNonHtml(
           .set({
             lastRunAt: now,
             lastRunStatus: "broken",
-            reviewStatus: "pending",
+            // E-A4: review_status stays sticky.
             confidenceScore: cascade.extraction!.confidence,
             firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             updatedAt: now,
           })
           .where(eq(dataSource.id, args.dataSourceId));
-        await tx.execute(sql`
-          UPDATE shul
-             SET status = 'pending_review', updated_at = NOW()
-           WHERE id = ${args.shulId}
-             AND status = 'active'
-             AND NOT EXISTS (
-               SELECT 1 FROM data_source ds2
-                WHERE ds2.shul_id = shul.id
-                  AND ds2.id <> ${args.dataSourceId}
-                  AND ds2.review_status = 'approved'
-                  AND ds2.last_run_status IN ('ok', 'no_change')
-                  AND COALESCE(ds2.last_received_at, ds2.last_run_at) >=
-                      NOW() - INTERVAL '14 days'
-             )
-        `);
+        // E-A2: no shul.status demotion (visibility is derived). See the HTML
+        // mark-broken path.
       });
     });
     return {

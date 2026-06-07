@@ -1,6 +1,13 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { db } from "../db/client";
-import { dataSource, minyanRule, scrapeRun, shul, type MinyanTime } from "../db/schema";
+import {
+  dataSource,
+  minyanRule,
+  scrapeRun,
+  shul,
+  timeReport,
+  type MinyanTime,
+} from "../db/schema";
 
 // ─── Davener-facing reads ────────────────────────────────────────────────
 //
@@ -21,7 +28,10 @@ export async function listActiveShuls() {
     .from(shul)
     .where(
       and(
-        eq(shul.status, "active"),
+        // Visibility = has a fresh good source AND not admin-archived. We no
+        // longer require status='active' (a derived state); a healthy shul shows
+        // even while its stored status lags. See plan E-A1 (kills the trapdoor).
+        ne(shul.status, "archived"),
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
@@ -286,7 +296,10 @@ export async function listShulsForLookup() {
     .from(shul)
     .where(
       and(
-        eq(shul.status, "active"),
+        // Visibility = has a fresh good source AND not admin-archived. We no
+        // longer require status='active' (a derived state); a healthy shul shows
+        // even while its stored status lags. See plan E-A1 (kills the trapdoor).
+        ne(shul.status, "archived"),
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
           WHERE ds_fresh.shul_id = ${shul.id}
@@ -314,7 +327,10 @@ export async function searchActiveShuls(q: string, limit = 30) {
     .from(shul)
     .where(
       and(
-        eq(shul.status, "active"),
+        // Visibility = has a fresh good source AND not admin-archived. We no
+        // longer require status='active' (a derived state); a healthy shul shows
+        // even while its stored status lags. See plan E-A1 (kills the trapdoor).
+        ne(shul.status, "archived"),
         sql`(${shul.name} ILIKE ${pattern} OR ${shul.slug} ILIKE ${pattern})`,
         sql`EXISTS (
           SELECT 1 FROM data_source ds_fresh
@@ -605,9 +621,13 @@ export interface NearbyShulRule {
 
 /**
  * Returns every (shul, live minyan_rule) within `radiusMeters` of the given
- * point. Only shuls with status='active' and rules with deleted_at IS NULL
- * are returned. Rules from data_sources whose review_status is 'rejected'
- * are excluded; 'pending' rules are still shown (low signal vs. blank).
+ * point. Visibility is DERIVED, not driven by shul.status: a shul appears only
+ * if it is non-archived AND has a fresh (<=14d) approved + ok/no_change
+ * data_source (the E-A1 trapdoor fix — mirrors listActiveShuls; do NOT
+ * "restore" a status='active' filter or you re-introduce the visibility
+ * trapdoor this branch exists to kill). Live rules only (deleted_at IS NULL);
+ * rules from 'rejected' data_sources are excluded ('pending' rules on an
+ * otherwise-eligible shul are still shown, low signal vs. blank).
  *
  * Filtering by date/time and special-schedule resolution happens in app
  * code after this query — keeps the SQL stable and the rule-resolution
@@ -659,7 +679,7 @@ export async function getNearbyShulsWithRules(
         ST_X(s.location::geometry) AS lng,
         ST_Distance(s.location, ${point}) AS distance_meters
       FROM shul s
-      WHERE s.status = 'active'
+      WHERE s.status <> 'archived'
         AND s.location IS NOT NULL
         AND ST_DWithin(s.location, ${point}, ${radiusMeters})
         AND EXISTS (
@@ -745,4 +765,36 @@ export async function getNearbyShulsWithRules(
     notes: r.notes,
     lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at) : null,
   }));
+}
+
+// ─── Admin: "report a wrong time" reports (E-B5) ─────────────────────────
+// Lightweight read helpers for the admin triage surface. The full cockpit
+// integration (count chip + inline triage) is folded into the P4 redesign;
+// these helpers are what it reads.
+
+/** Count of open (un-triaged) time reports — for the admin home badge. */
+export async function countOpenTimeReports(): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`COUNT(*)::int` })
+    .from(timeReport)
+    .where(eq(timeReport.status, "open"));
+  return rows[0]?.n ?? 0;
+}
+
+/** Open time reports joined to their shul, newest first. */
+export async function listOpenTimeReports(limit = 100) {
+  return db
+    .select({
+      id: timeReport.id,
+      shulId: timeReport.shulId,
+      shulName: shul.name,
+      shulSlug: shul.slug,
+      note: timeReport.note,
+      createdAt: timeReport.createdAt,
+    })
+    .from(timeReport)
+    .innerJoin(shul, eq(shul.id, timeReport.shulId))
+    .where(eq(timeReport.status, "open"))
+    .orderBy(desc(timeReport.createdAt))
+    .limit(limit);
 }

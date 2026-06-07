@@ -26,7 +26,7 @@ export function RadiusSelector({ current }: Props) {
           next.set("radius", e.target.value);
           router.replace(`/?${next.toString()}`);
         }}
-        className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-xs focus:border-neutral-500 focus:outline-none"
+        className="min-h-9 rounded border border-neutral-300 bg-white px-2 py-1 text-xs focus-visible:border-neutral-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-300"
       >
         {RADIUS_OPTIONS.map((r) => (
           <option key={r} value={r}>

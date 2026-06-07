@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul, shulCandidate } from "@/db/schema";
 import targetsJson from "@/data/discovery-targets.json";
@@ -25,14 +25,16 @@ interface PageProps {
   }>;
 }
 
-const STATUSES = ["pending", "approved", "rejected", "duplicate", "deferred"];
+// UI-7: candidate filtering collapsed from 5 status pills (incl. the dead
+// `deferred`, L2) to 2 tabs — Pending (needs action) vs Reviewed (done). The
+// three reviewed states still get distinct per-row badges below.
+const REVIEWED_STATUSES = ["approved", "rejected", "duplicate"];
 
 const STATUS_BADGE: Record<string, string> = {
   pending: "bg-amber-100 text-amber-900",
   approved: "bg-emerald-100 text-emerald-900",
   rejected: "bg-rose-100 text-rose-900",
   duplicate: "bg-neutral-200 text-neutral-700",
-  deferred: "bg-blue-100 text-blue-900",
 };
 
 const STATUS_BADGE_SHUL: Record<string, string> = {
@@ -68,8 +70,13 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
       ORDER BY n DESC
   `);
 
-  // Build WHERE conditions
-  const conditions = [eq(shulCandidate.reviewStatus, status)];
+  // Build WHERE conditions. "reviewed" is a tab pseudo-status that spans the
+  // three terminal states; a bare status (deep link) still filters exactly.
+  const conditions = [
+    status === "reviewed"
+      ? inArray(shulCandidate.reviewStatus, REVIEWED_STATUSES)
+      : eq(shulCandidate.reviewStatus, status),
+  ];
   if (target) conditions.push(eq(shulCandidate.discoveryTargetName, target));
   if (hasUrl === "yes") {
     conditions.push(sql`${shulCandidate.websiteUri} IS NOT NULL`);
@@ -143,7 +150,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
           SELECT 1 FROM data_source ds2
            WHERE ds2.shul_id = s.id
              AND ds2.review_status = 'approved'
-             AND ds2.last_run_status = 'ok'
+             AND ds2.last_run_status IN ('ok', 'no_change')
         ) THEN 'no approved+ok data_source'
       END AS failure_reason
     FROM shul_candidate sc
@@ -156,7 +163,7 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
           SELECT 1 FROM data_source ds2
            WHERE ds2.shul_id = s.id
              AND ds2.review_status = 'approved'
-             AND ds2.last_run_status = 'ok'
+             AND ds2.last_run_status IN ('ok', 'no_change')
         )
       )
     ORDER BY sc.reviewed_at DESC
@@ -259,25 +266,36 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
         </form>
       </section>
 
-      {/* Status filter pills */}
+      {/* Pending / Reviewed tabs (UI-7) */}
       <div className="mt-5 flex flex-wrap gap-2 text-sm">
-        {STATUSES.map((s) => {
+        {[
+          { key: "pending", label: "Pending", n: counts.pending ?? 0 },
+          {
+            key: "reviewed",
+            label: "Reviewed",
+            n: REVIEWED_STATUSES.reduce((sum, k) => sum + (counts[k] ?? 0), 0),
+          },
+        ].map((tab) => {
+          const isActive =
+            tab.key === "reviewed"
+              ? status === "reviewed" || REVIEWED_STATUSES.includes(status)
+              : status === tab.key;
           const qs = new URLSearchParams();
-          qs.set("status", s);
+          qs.set("status", tab.key);
           if (target) qs.set("target", target);
           if (hasUrl) qs.set("has_url", hasUrl);
           return (
             <Link
-              key={s}
+              key={tab.key}
               href={`/admin/candidates?${qs.toString()}`}
-              className={`rounded-full px-3 py-1 ${
-                status === s
-                  ? "bg-amber-800 text-white"
+              className={`inline-flex min-h-9 items-center rounded-full px-3.5 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 ${
+                isActive
+                  ? "bg-neutral-900 text-white"
                   : "border border-neutral-300 hover:bg-neutral-100"
               }`}
             >
-              {s}
-              <span className="ml-1 text-xs opacity-75">({counts[s] ?? 0})</span>
+              {tab.label}
+              <span className="ml-1 text-xs opacity-75">({tab.n})</span>
             </Link>
           );
         })}

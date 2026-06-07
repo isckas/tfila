@@ -14,6 +14,7 @@ import { LookupCard } from "@/components/LookupCard";
 import { AddCard } from "@/components/AddCard";
 import { ResumeBanner } from "@/components/ResumeBanner";
 import { FeedHeader } from "@/components/FeedHeader";
+import { FeedDatePicker } from "@/components/FeedDatePicker";
 import { MinyanList, type ResolvedMinyan } from "@/components/MinyanList";
 import {
   MinyanListByShul,
@@ -87,11 +88,9 @@ export default async function HomePage({ searchParams }: PageProps) {
                   Tfila times that don&apos;t go stale.
                 </h1>
                 <p className="mt-2 text-sm text-neutral-600">
-                  Every Tfila / Shul directory has the same problem
-                  &mdash; times posted years ago, never updated. Tfila.co
-                  reads each shul&apos;s own website or weekly email
-                  bulletin, refreshes every Motzei Shabbat, for real
-                  accurate Tfila times.
+                  Fresh from each shul&apos;s own website or weekly bulletin,
+                  re-checked every Motzei Shabbat &mdash; not posted-once-and-
+                  forgotten times.
                 </p>
               </div>
             </div>
@@ -139,8 +138,18 @@ export default async function HomePage({ searchParams }: PageProps) {
   // behavior the feed has always had.
   const travelDate = sp.date ? parseDateOnly(sp.date) : null;
   const referenceDate = travelDate ?? now;
-  const referenceDow = referenceDate.getDay();
   const rows = await getNearbyShulsWithRules(lat, lng, radiusMeters);
+
+  // Derive the timezone FROM lat/lng (the user's search location), not the
+  // server's TZ. On Vercel the server runs in UTC, so a raw getDay()/clock
+  // would be off by 4-5h. geo-tz maps lat/lng → IANA tz; fall back to ET for
+  // the rare unmapped point (or a missing-data throw — see C3 / next.config).
+  let userTz = "America/New_York";
+  try {
+    userTz = findTz(lat, lng)[0] ?? "America/New_York";
+  } catch {
+    // .geo.dat read can throw if the bundle is missing the data files; ET fallback.
+  }
 
   const earliest = travelDate
     ? Date.UTC(
@@ -168,15 +177,19 @@ export default async function HomePage({ searchParams }: PageProps) {
     // showed nothing for the feed because the only applicable rules were
     // special. Mirrors the shul detail page's resolution logic.
     if (r.specialScheduleKind && r.specialScheduleKind !== "regular") {
-      const refIso = isoDateInTz(referenceDate, r.timezone ?? "UTC");
+      const refIso = isoDateInTz(referenceDate, r.timezone ?? userTz);
       if (r.validFrom && refIso < r.validFrom) continue;
       if (r.validTo && refIso > r.validTo) continue;
-    } else if (
-      r.daysOfWeek &&
-      r.daysOfWeek.length > 0 &&
-      !r.daysOfWeek.includes(referenceDow)
-    ) {
-      continue;
+    } else if (r.daysOfWeek && r.daysOfWeek.length > 0) {
+      // H3: day-of-week must be computed in the SHUL's local timezone (falling
+      // back to the user's tz while shul.timezone is null, pending the E-C3
+      // backfill). The old referenceDate.getDay() returned the SERVER's day
+      // (UTC on Vercel), so an ET user browsing Friday night — Saturday in UTC
+      // — saw Saturday's minyanim and lost Friday-night maariv.
+      const dow = new Date(
+        isoDateInTz(referenceDate, r.timezone ?? userTz) + "T12:00:00Z",
+      ).getUTCDay();
+      if (!r.daysOfWeek.includes(dow)) continue;
     }
 
     const startDate = resolveRuleTime(
@@ -204,11 +217,33 @@ export default async function HomePage({ searchParams }: PageProps) {
       notes: r.notes,
       specialScheduleKind: r.specialScheduleKind ?? "regular",
       lastVerifiedIso: r.lastVerifiedAt ? r.lastVerifiedAt.toISOString() : null,
+      // E-C4: a fixed-clock mincha/maariv can drift vs the real sunset across
+      // the year (a posted "8:45pm" is often really shkia-tracked). Flag it so
+      // the UI shows a quiet seasonal caveat. Zmanim-anchored rules don't drift.
+      fixedEvening:
+        (r.tefillah === "mincha" || r.tefillah === "maariv") &&
+        r.time?.kind === "fixed",
     });
   }
-  // Sort by start time first — for address-search, this also gives each
-  // shul's earliest-upcoming minyanim when we take the top N per shul below.
-  resolved.sort((a, b) => a.startIso.localeCompare(b.startIso));
+  // Ordering (UI-2): in "now" mode an UPCOMING minyan always outranks one that
+  // already started, even if the started one is chronologically earlier — a
+  // davener wants the next catchable minyan at the top, not one they just
+  // missed. Among already-started ones, most-recently-started first (closest
+  // to still catching). In travel mode there's no "now", so sort purely by
+  // time. For address-search this also gives each shul's earliest-upcoming
+  // minyan when we take the top N per shul below.
+  const nowMs = now.getTime();
+  resolved.sort((a, b) => {
+    const aMs = Date.parse(a.startIso);
+    const bMs = Date.parse(b.startIso);
+    if (!travelDate) {
+      const aStarted = aMs < nowMs ? 1 : 0;
+      const bStarted = bMs < nowMs ? 1 : 0;
+      if (aStarted !== bStarted) return aStarted - bStarted; // upcoming first
+      if (aStarted === 1) return bMs - aMs; // among started: most-recent first
+    }
+    return aMs - bMs; // upcoming (or travel): soonest first
+  });
 
   // Address-search branch: per-shul grouping + distance-sort. The
   // walking-default flat list still gets the time-sort + slice below.
@@ -239,12 +274,6 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   const trimmed = resolved.slice(0, MAX_ITEMS);
 
-  // Derive the timezone FROM lat/lng (the user's search location) — not
-  // from the server's TZ. On Vercel, Intl.DateTimeFormat returns "UTC"
-  // server-side, which would render every clock 4-5 hours off in NYC/LA.
-  // geo-tz maps any lat/lng to its IANA tz; defensive fallback to ET
-  // for the rare unmapped point.
-  const userTz = findTz(lat, lng)[0] ?? "America/New_York";
   const stripSnapshot = computeZmanimStrip(
     { lat, lng, timezone: userTz },
     referenceDate,
@@ -267,43 +296,17 @@ export default async function HomePage({ searchParams }: PageProps) {
         radiusMiles={radiusMiles}
       />
 
-      {/* Travel-mode date picker — GET form so each pick is a clean
-          server-rendered navigation. Defaults to today; switching to a
-          future or past date flips the feed into travel-planning shape
-          (full-day window instead of "next 24h"). */}
-      <form
-        method="get"
-        action="/"
-        className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-600"
-      >
-        <input type="hidden" name="lat" value={lat} />
-        <input type="hidden" name="lng" value={lng} />
-        {sp.radius && <input type="hidden" name="radius" value={sp.radius} />}
-        {sp.via && <input type="hidden" name="via" value={sp.via} />}
-        <label className="flex items-center gap-1.5">
-          <span className="text-neutral-500">Date:</span>
-          <input
-            type="date"
-            name="date"
-            defaultValue={dateInputValue}
-            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs focus-visible:border-neutral-500 focus-visible:outline-none"
-          />
-        </label>
-        <button
-          type="submit"
-          className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
-        >
-          Update
-        </button>
-        {isTravelMode && (
-          <Link
-            href={`/?lat=${lat}&lng=${lng}${sp.radius ? `&radius=${sp.radius}` : ""}`}
-            className="text-xs text-neutral-500 underline-offset-2 hover:underline"
-          >
-            back to today
-          </Link>
-        )}
-      </form>
+      {/* Travel-mode date picker — navigates on change (no Update button to
+          tap; UI-2). Defaults to today; switching to a future/past date flips
+          the feed into travel-planning shape (full-day window vs "next 24h"). */}
+      <FeedDatePicker
+        lat={lat}
+        lng={lng}
+        radius={sp.radius}
+        via={sp.via}
+        value={dateInputValue}
+        isTravelMode={isTravelMode}
+      />
 
       {/* Zmanim */}
       <ZmanimStrip snapshot={stripSnapshot} timezone={userTz} />
@@ -375,7 +378,7 @@ function EmptyAddressSearch({
       </p>
       <Link
         href="/submit"
-        className="mt-3 inline-block rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+        className="mt-3 inline-block rounded-lg bg-amber-800 px-4 py-2 text-sm font-medium text-white hover:bg-amber-900"
       >
         Add a shul
       </Link>
