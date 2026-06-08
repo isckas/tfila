@@ -10,6 +10,7 @@ import {
   StatusBadge,
   SHUL_STATUS_LABELS,
 } from "@/components/badges/StatusBadge";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ const STATUS_LABELS = SHUL_STATUS_LABELS;
 const STATUSES = ["pending_review", "active", "archived", "unsupported"];
 
 export default async function AdminShulsPage({ searchParams }: PageProps) {
+  await requireAdmin();
   const sp = await searchParams;
   const q = sp.q?.trim() || null;
   const status = sp.status?.trim() || null;

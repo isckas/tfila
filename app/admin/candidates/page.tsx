@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul, shulCandidate } from "@/db/schema";
 import targetsJson from "@/data/discovery-targets.json";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,7 @@ const STATUS_BADGE_SHUL: Record<string, string> = {
 };
 
 export default async function AdminCandidatesPage({ searchParams }: PageProps) {
+  await requireAdmin();
   const sp = await searchParams;
   const status = sp.status?.trim() || "pending";
   const target = sp.target?.trim() || null;

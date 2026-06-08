@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { minyanRule, shul, dataSource, type MinyanTime } from "@/db/schema";
+import { requireAdmin } from "@/lib/auth";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -49,6 +50,7 @@ const ANCHOR_OPTIONS = [
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Shabbos"];
 
 export default async function EditRulePage({ params }: PageProps) {
+  await requireAdmin();
   const { id } = await params;
   const ruleId = Number(id);
   if (!Number.isInteger(ruleId)) notFound();

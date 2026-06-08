@@ -1,6 +1,7 @@
 import { listAdminShuls } from "@/lib/queries";
 import { deriveAdminShulState } from "@/lib/admin-state";
 import { AdminInbox } from "@/components/AdminInbox";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export const dynamic = "force-dynamic";
  * and admin can approve/reject each.
  */
 export default async function AdminQueuePage() {
+  await requireAdmin();
   const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
   const inbox = shuls
     .filter((s) => deriveAdminShulState(s) === "pending_review")

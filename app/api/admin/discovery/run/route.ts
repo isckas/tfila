@@ -184,13 +184,14 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "missing target" }, { status: 400 });
   }
 
-  const selected =
-    targetName === "all"
-      ? TARGETS
-      : TARGETS.filter((t) => t.name === targetName);
+  // H7: the `all` branch iterated every target (≈186 sequential Places calls)
+  // → blew past maxDuration, got killed mid-loop leaving orphaned discovery_run
+  // rows, with no cost ceiling. Run ONE target per request (the UI only ever
+  // submits a single picked target); `all` now matches nothing → 400.
+  const selected = TARGETS.filter((t) => t.name === targetName);
   if (selected.length === 0) {
     return NextResponse.json(
-      { error: `no target matched "${targetName}"` },
+      { error: `no target matched "${targetName}" (run one target at a time)` },
       { status: 400 },
     );
   }

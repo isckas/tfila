@@ -411,6 +411,8 @@ export const shulCandidate = pgTable(
     sourceDetail: text("source_detail"),
     discoveryTargetName: text("discovery_target_name"),
     rawResponseJsonb: jsonb("raw_response_jsonb").notNull(),
+    // text (not a pgEnum) but guarded by a CHECK constraint at the DB level
+    // (migration 0014, M17): one of pending|approved|rejected|duplicate|deferred.
     reviewStatus: text("review_status").notNull().default("pending"),
     reviewReason: text("review_reason"),
     linkedShulId: integer("linked_shul_id"),

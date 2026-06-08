@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { loadChangelog } from "@/lib/changelog";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export const metadata = {
 };
 
 export default async function AdminChangelogPage() {
+  await requireAdmin();
   const { versions } = await loadChangelog();
   const current = versions[0] ?? null;
 
