@@ -64,18 +64,20 @@ function pricingForModel(model: unknown): {
 }
 
 async function todayCumulativeUsd(): Promise<number> {
-  // E-D2: count rows RESCRAPED today, not just CREATED today. The weekly cron
-  // (the single biggest spend event) UPDATEs existing data_source rows — it
-  // overwrites config_json.usage with the new run's tokens and bumps
-  // last_run_at — so a `created_at`-only filter was blind to all cron spend.
-  // Including `last_run_at >= today` captures both initial builds and rescrapes;
-  // config_json.usage reflects the latest run, so each row is counted once at
-  // today's cost.
+  // E-D2: count rows that actually RE-EXTRACTED today, not just rows created
+  // today. The weekly cron (the biggest spend event) UPDATEs existing rows on a
+  // real re-extract — overwriting config_json.usage with the new run's tokens
+  // and bumping built_at — so a `created_at`-only filter was blind to all cron
+  // spend. We gate on `built_at` (NOT last_run_at): built_at moves only on a
+  // genuine extraction, whereas last_run_at also moves on no_change/broken
+  // runs that spent NO tokens but still carry stale prior-run usage — counting
+  // those would over-estimate. config_json.usage holds the latest run, so each
+  // row contributes exactly once, at the cost of the run that actually ran today.
   const rows = await db.execute<ConfigRow>(sql`
     SELECT config_json AS config
     FROM data_source
     WHERE created_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
-       OR last_run_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
+       OR built_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
   `);
 
   let usd = 0;
