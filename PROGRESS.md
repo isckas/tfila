@@ -13,15 +13,17 @@ Three sections:
 
 ## Now — next session
 
-**Last working session: 2026-06-07 evening — ENTIRE remediation P0–P5(core) SHIPPED + LIVE in prod (PR #5 + PR #6 both merged + deployed).**
+**Last working session: 2026-06-07 — ENTIRE remediation P0–P5 + the full P5 cleanup backlog SHIPPED + LIVE in prod (PRs #5–#9 all merged).**
 
-### Pickup: P5 cleanup backlog (everything high-value is SHIPPED + LIVE)
+### Pickup: remediation COMPLETE — nothing blocking outstanding
 
-**Done + deployed:** P0–P4 (PR #5 `f7fe72e`) and P5's security/observability core (PR #6 `1ad13e7`) are both merged to `main` and **LIVE in prod** — Vercel build success; landing/feed/shul/`/api/health` all 200; the SSRF redirect rewrite was runtime-tested (real redirect chains followed, metadata IP refused). The site that was 41→9 down is recovered (24 active), correct (tz-aware times), hardened (SSRF at the fetch boundary), and monitored (dead-man's switch + feed-probing health check). Four adversarial-review workflows (~50 agents) gated the work; every finding was low-severity and fixed.
+**Done + deployed** (5 merged PRs): P0–P4 (#5), P5 core (#6), docs (#7), P5 cleanup A+B (#8), P5 cleanup C+D+E (#9). The 41→9 outage is recovered (24 active), correct (tz-aware seasonal times), hardened (SSRF at the fetch boundary + CF-proxy), monitored (dead-man's switch + feed-probing health + Inngest `onFailure`), and cleaned up. ~6 adversarial-review workflows gated the work — caught real bugs (worker `fc`/`fd` false-positive, `onFailure` wrong runId, cost-gate over-count), all fixed before merge. Every deploy smoke-checked green. Migrations live in prod: 0013 (time_report), 0014 (shul_candidate review CHECK).
 
-**Next concrete action:** the documented **P5 cleanup backlog** (see PR #6 body) — none blocking: M11 (Inngest `onFailure`), E-D2 (cost-gate cron spend — needs a real spend-tracking mechanism, not a half-fix), M16 (Sentry source-maps), the Jina/Docling/`is_manual_edit` tier deletions + discovery→one-shot, and the lows (L3 dead `broken` UI, L4 approve-303, L5 reject-reason, L8 RUNBOOK `/api/health` drift, L10 OPEN-ISSUES, M15 `.env.local`, M17 candidate→pgEnum, M8 admin DAL authz, M9 CF-proxy allowlist, M4/M5 digest spike-gate + first_broken_at backfill). Plus the bulk "re-extract all broken" admin action (UI-5 stretch) — needs a confirm + the P0 rate gate.
+**Next concrete action:** none blocking — the remediation is complete. For NEW work, `main` is clean + synced.
 
-**Deploy reminder:** prod deploys via **merge-to-`main`** (Vercel git-integration auto-deploys main→prod, ~45s). Direct `main` pushes are blocked → use a branch + PR. See memory `reference_deploy_mechanism`. The P3 ShulCloud-adapter pickup below is historical (descoped).
+**Deliberately NOT done (kept as working features, not dead code):** `is_manual_edit` (rescrape "Fix EE" admin-override protection + dedup ordering — removal risks the just-stabilized rescrape + needs a destructive DROP COLUMN) and the **PDF cascade tier** (working fallback, 0 current PDF sources). **M16** (Sentry source-maps) deferred for build-env risk. Lows L4 (303+`?err=` is correct PRG, not a bug) / L5 / L10 / M15 left as marginal/local-only. All in the PR #9 body.
+
+**Deploy reminder:** prod deploys via **merge-to-`main`** (Vercel git-integration auto-deploys main→prod, ~45–75s). Direct `main` pushes are blocked → use a branch + PR. See memory `reference_deploy_mechanism`. The P3 ShulCloud-adapter pickup below is historical (descoped).
 
 ### (historical — descoped) Pickup: P3 — ShulCloud adapter
 
