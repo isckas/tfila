@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-06-07 (late) — ENTIRE remediation + P5 backlog COMPLETE and LIVE
+
+### Briefing for next session (read first)
+- **Where we are:** The whole remediation is **done and live in prod** — P0–P5 *and the full P5 cleanup backlog* — across 5 merged PRs (#5 P0–P4, #6 P5 core, #7 docs, #8 P5 cleanup A+B, #9 P5 cleanup C+D+E). The site that was silently down 41→9 is recovered (24 active), correct, hardened, monitored, and cleaned up. Every batch was adversarially reviewed (≈6 review workflows total); reviews caught real bugs (worker `fc`/`fd` false-positive, `onFailure` wrong runId, cost-gate over-count) — all fixed before merge. Each deploy smoke-checked green.
+- **Next concrete action:** Nothing outstanding/blocking. The remediation is complete. If picking up new work, `main` is clean + `origin/main`-synced.
+- **Deliberately NOT done (kept as working features, not dead code):** `is_manual_edit` (rescrape soft-delete "Fix EE" admin-override protection + dedup ordering — removing risks the just-stabilized rescrape + needs a destructive DROP COLUMN) and the **PDF cascade tier** (working fallback; 0 current PDF sources). **M16** (Sentry source-maps) deferred for build-env risk. See PR #9 body.
+- **Critical data:** Prod deploys = merge to `main` (Vercel git-integration auto-deploys, ~45–75s; see [[reference_deploy_mechanism]]). Migrations applied to prod: 0013 (time_report), 0014 (shul_candidate review CHECK). Active count = 24.
+
+### Done since the entry below (P5 + backlog, PRs #6/#8/#9)
+- **P5 core** (#6): SSRF at fetch boundary (H6/M10, runtime-tested), dead-man's switch (H8), `/api/health` feed probe (H9), `notifyAdmin` critical (M12).
+- **P5 cleanup A+B** (#8): M9 (CF-proxy SSRF guard), M11 (Inngest `onFailure` ×5), M4 (digest spike-gate), M5 (first_broken_at backfill), L3, L8.
+- **P5 cleanup C+D+E** (#9): M8 (per-page admin auth ×11), M17 (candidate CHECK), Jina/Docling delete + H7, E-D2 (cost-gate counts cron spend), bulk re-extract (confirm + rate-gated).
+
+---
+
 ## 2026-06-07 (evening) — P3 + P4 complete + 2 adversarial reviews; PR #5 open, ready to merge
 
 ### Briefing for next session (read first)
