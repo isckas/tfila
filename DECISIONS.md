@@ -12,6 +12,25 @@ context window evictions and personnel turnover.
 
 ---
 
+## 2026-06-07 (late) — P5 backlog execution (harden / observe / delete)
+
+### Decision 1 — Batch the P5 backlog; review + deploy each batch independently
+**Context.** After P5's core (SSRF/dead-man's/health) shipped, the user said "do everything" — work the full ~15-item P5 cleanup backlog. **Options.** One mega-PR; parallel agents per item; or batched-by-area with a review gate each. **Chose** batched (A: lows+CF-proxy, B: observability, C: authz+enum, D: deletions, E: cost-gate+bulk-reextract), each typecheck/build-verified, adversarially reviewed, then merged to prod via its own PR (#8, #9). **Implications.** Review workflows across P5 caught **real bugs I introduced** — the CF-worker `fc`/`fd` prefix wrongly blocking `fda.gov`-style domains, `onFailure` reading the notifier's runId instead of the failed run's (`event.data.run_id`), the cost-gate over-counting on no_change rows — all fixed pre-merge. **Lesson.** The per-batch adversarial review earned its cost every time; never ship security/observability code to prod unreviewed.
+
+### Decision 2 — KEEP `is_manual_edit` + the PDF cascade tier (don't "delete" working features)
+**Context.** The plan's delete-list named `is_manual_edit` + the Docling/PDF tier. **Found:** NOT dead code — `is_manual_edit` is woven into the rescrape soft-delete ("Fix EE" admin-override protection) + the dedup ORDER BY, and the PDF tier is a live cascade fallback; both sit in the exact rescrape/cascade logic stabilized in P0/P1 to fix the 41→9 outage. **Chose** to keep both. **Implications.** Removing `is_manual_edit` would change rescrape behavior + need a destructive `DROP COLUMN`; removing the PDF tier drops a capability for 0 current PDF sources. **Lesson.** "Unused" ≠ "dead" — don't remove working code from a just-stabilized critical path for tidiness; the regression risk dwarfs the gain. (Jina/Docling files WERE deleted — genuinely orphaned v2-only dead code.)
+
+### Decision 3 — Bulk re-extract is now SAFE to ship (P0 de-risked it)
+**Context.** The skeptic flagged "re-extract all broken" as a 429-storm risk (defer-unless-gated). **Chose** to ship it — P0 already added the global concurrency cap (`[{limit:3}]`) on scrapeOneShul + the daily cost-gate, so the fan-out throttles and can't repeat the storm; added a UI `confirm()` + admin-auth as the human gate. **Lesson.** A risk flagged in an earlier review can be retired by a later fix — re-evaluate "deferred" items against the current state.
+
+### Decision 4 — M8 admin auth via per-page guard, not middleware
+**Context.** The layout gate isn't a hard authz boundary (Next 16). **Options.** Per-page `requireAdmin()` (11 edits) vs a single `middleware.ts`. **Chose** per-page (delegated the mechanical edits to a subagent) — middleware carries edge/node-runtime behavior I couldn't verify, and a broken middleware would 500 ALL of /admin; per-page is mechanical + each edit build-verified. **Implications.** Verified live: admin pages 307→/signin (guard works, no 500). **Lesson.** Prefer the low-blast-radius fix when you can't runtime-verify the elegant one.
+
+### Decision 5 — E-D2 cost-gate counts spend by `built_at`, not `last_run_at`
+**Context.** The gate summed only `created_at >= today`, blind to cron rescrape spend (rescrapes UPDATE, not INSERT). First fix used `last_run_at >= today`, but review caught that `last_run_at` bumps on no_change/broken runs that spent NO tokens (stale usage) → over-count. **Chose** `built_at >= today` (bumped only on a real extraction). **Lesson.** Measure with the timestamp that moves on the event you care about (token spend), not a correlated one.
+
+---
+
 ## 2026-06-07 (evening) — P3 reframe + deploy reality
 
 ### Decision — Descope the ShulCloud deterministic adapter (P3 E-B2); ship report-wrong-time instead
