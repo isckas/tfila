@@ -6,6 +6,46 @@ Day-versioned log of features, functions, and stack/code notes. Rendered in the 
 
 ---
 
+## v4 — 2026-06-07
+
+**The holistic remediation.** The site had silently dropped from ~41 to **9 active shuls** after the 2026-05-24 Anthropic 429 storm turned transient rate-limit failures into permanent demotions through a one-way trapdoor — and every safety net had a blind spot, so it went unnoticed for two weeks. A 3-review audit (error/log · effectiveness · UI) drove a single unified fix executed as phases **P0–P5** plus a full cleanup backlog, shipped straight to prod and adversarially reviewed each step. Recovered to **24 active**; the directory is correct, hardened, and monitored. (Also folds in the late-May state-machine / dedup hardening that shipped as PRs #2–#4.)
+
+### Features
+
+- **Report a wrong time** — an anonymous "Report a wrong time" tap on each shul page records a lightweight report (`time_report`, migration 0013) that the admin triages at **`/admin/reports`**. Never auto-spends LLM — it surfaces for review, the admin decides whether to re-extract.
+- **Bulk re-extract** — a confirm-gated button on the admin cockpit re-extracts every broken shul at once, throttled by the global concurrency cap + the daily cost-gate (so it can't repeat the storm).
+- **Both UIs redesigned** — landing (Find made dominant, dropped "N shuls indexed"); located feed (date picker navigates on change instead of a submit button, an upcoming minyan now outranks one that already started, walking empty-state gets an Add-a-shul CTA); shul page (Today/Tomorrow tabs, map clutter cut, zmanim rendered in the shul's own timezone); `/signin` + `/bot` rescued from being dead-ends; admin cockpit (8 count-tiles → in-place filter chips that absorb `/queue` + `/rejected`); candidate Pending/Reviewed tabs; admin source-quotes shown next to each rule by default.
+
+### Fixes
+
+- **Stopped the outage.** Fixed the geo-tz crash that 500'd the located home feed (Next file-tracing + a try/catch). Killed the no-recovery trapdoor — public visibility is now *derived* from "has a fresh, approved, successful source," not a stored `status='active'`, so a demoted shul self-heals on its next good scrape. Made the 429 storm unrepeatable (a global concurrency cap + transient-vs-terminal classification: a rate limit is now a one-week stale window, not a permanent demotion). **Recovered 9 → 24 active.**
+- **Correct times.** Day-of-week is computed in the *shul's* timezone (the server-UTC version dropped Friday-night minyanim after ~7 pm ET); zmanim render in the shul tz so screen == print == feed; evening minyanim the source describes relative to a zman now emit `zmanim`-anchored times (instead of freezing to a summer clock that's wrong all winter), with a "may shift seasonally" note on fixed evening clocks; `shul.timezone` backfilled.
+- **Admin review queue** no longer shows zero reviewable shuls — a reviewable extraction now outranks "broken" in the derived state.
+- **Email-channel parity** — a good email now restores a previously-demoted source (was a one-way door).
+- **Design system** — the entire app was silently rendering in Arial despite Geist being loaded; fixed. Blue badges → neutral (one accent color only); tap-target + focus-ring floors on controls.
+
+### Security & observability
+
+- **SSRF closed at the fetch boundary** — every fetch (the extraction cascade *and* the weekly rescrape over stored URLs) now validates the URL + each redirect hop against private / loopback / metadata IPs, not just the `/submit` form. The Cloudflare fetch-proxy got the same guard.
+- **Dead-man's switch** — a silently-dead weekly cron now fires a loud "CRON DID NOT RUN" alert (this is exactly how the original outage hid for two weeks).
+- **`/api/health` probes the feed** — it now exercises the geo-tz dependency that 500'd the feed, so monitoring goes red instead of reporting green-while-broken.
+- **Inngest `onFailure`** on all 5 key functions → admin email + Sentry; critical alerts retry and fall back to Sentry when email is unconfigured.
+- **Per-page admin auth** — every admin page re-verifies the session (defense-in-depth beyond the layout gate).
+- Weekly digest gained a mass-breakage spike-gate (`🚨 [ALERT]` prefix) + the live active-shul count, and now surfaces sources that broke before the `first_broken_at` column existed.
+
+### Stack & infra
+
+- **Consolidated to one extraction cascade** — retired the v2 agent-loop pipeline (router, agent-loop, 5 tools, critique pass, Jina, Docling — ~2.6k LOC) after it underperformed v1 and amplified the 429 storm; kept v2's two real wins (forced Anthropic tool-schema output + a required per-rule `sourceQuote`).
+- **Cost-gate now counts weekly-cron spend** — it was structurally blind to rescrapes (which UPDATE rows; the gate only summed same-day inserts); now gates on `built_at`.
+- Migrations applied to prod: **0013** (`time_report`), **0014** (`shul_candidate.review_status` CHECK constraint).
+- Added Biome lint + Vitest + a render smoke test; deleted orphaned Jina/Docling scrapers; removed a discovery "run all targets" footgun.
+
+### Process
+
+- Executed on one branch, deployed straight to prod in dependency-ordered phases, each one **adversarially reviewed by multi-agent workflows** (~50 agents total) — which caught real bugs before merge (a Cloudflare-worker host-block false-positive on `fda.gov`-style domains, an Inngest runId mix-up, a cost-gate over-count). Every deploy was smoke-checked.
+
+---
+
 ## v3 — 2026-05-14
 
 ### Features
