@@ -90,9 +90,9 @@ export default async function AdminRejectedDataSourcesPage({
       <h1 className="text-2xl font-semibold">Rejected data sources</h1>
       <p className="mt-1 text-sm text-neutral-600">
         Per-source audit view. Source-level dedupe + auto-reject artifacts
-        live here. For shul-level &ldquo;no good source&rdquo; triage, see{" "}
-        <Link href="/admin/rejected" className="underline-offset-2 hover:underline">
-          /admin/rejected
+        live here. For shul-level &ldquo;no good source&rdquo; triage, see the{" "}
+        <Link href="/admin" className="underline-offset-2 hover:underline">
+          inbox (Broken lane)
         </Link>
         .
       </p>

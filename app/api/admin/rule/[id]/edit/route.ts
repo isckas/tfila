@@ -127,9 +127,12 @@ export async function POST(
     })
     .where(eq(minyanRule.id, ruleId));
 
-  // Redirect back to wherever the form said (?dsId=) or fall through to shul.
+  // The edit form lives on its OWN standalone page (/admin/rule/[id]/edit), not
+  // on the data_source page — so we must NOT honor the Referer (that would bounce
+  // back to the just-submitted form). Redirect explicitly to the data_source
+  // review page where the edited rule shows in context (?dsId carries it).
   const url = new URL(req.url);
   const dsId = url.searchParams.get("dsId");
-  const target = dsId ? `/admin/data-source/${dsId}` : `/admin/shuls`;
+  const target = dsId ? `/admin/data-source/${dsId}` : "/admin";
   return NextResponse.redirect(new URL(target, req.url), 303);
 }

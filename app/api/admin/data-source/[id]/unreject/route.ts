@@ -3,6 +3,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/db/client";
 import { dataSource } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 /**
  * Move a previously-rejected data_source back to pending so it can be
@@ -37,10 +38,12 @@ export async function POST(
     .limit(1);
   const row = rows[0];
   if (!row) {
-    return NextResponse.redirect(
-      new URL("/admin/rejected?err=not-found", req.url),
-      303,
-    );
+    // The "Move back to pending" button lives on the deep data_source page;
+    // land back there (which renders an ?err banner). /admin/rejected was
+    // retired in the mission-control redesign.
+    return safeRedirect(req, `/admin/data-source/${dsId}`, {
+      err: "Data source not found.",
+    });
   }
 
   const sibling = await db
@@ -59,13 +62,10 @@ export async function POST(
     // A live (non-rejected) source already occupies this (shul_id, identifier).
     // Re-opening would violate the unique index — this row is a superseded
     // duplicate, so there is nothing to recover.
-    return NextResponse.redirect(
-      new URL(
-        `/admin/rejected?err=duplicate-identifier&winner=${sibling[0].id}`,
-        req.url,
-      ),
-      303,
-    );
+    return safeRedirect(req, `/admin/data-source/${dsId}`, {
+      err: `Can't reopen — a live source (#${sibling[0].id}) already owns this address. This rejected row is a superseded duplicate.`,
+      winner: String(sibling[0].id),
+    });
   }
 
   try {
@@ -80,11 +80,11 @@ export async function POST(
   } catch {
     // Belt-and-suspenders for any other unique-violation / DB hiccup — surface
     // a banner instead of a 500.
-    return NextResponse.redirect(
-      new URL("/admin/rejected?err=reopen-failed", req.url),
-      303,
-    );
+    return safeRedirect(req, `/admin/data-source/${dsId}`, {
+      err: "Couldn't reopen the data source — try again.",
+    });
   }
 
-  return NextResponse.redirect(new URL("/admin/rejected", req.url), 303);
+  // Success: back to the deep page (now showing the source as pending again).
+  return safeRedirect(req, `/admin/data-source/${dsId}`);
 }

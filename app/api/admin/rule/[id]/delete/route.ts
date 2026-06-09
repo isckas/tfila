@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { minyanRule } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 export async function POST(
   req: Request,
@@ -32,10 +33,18 @@ export async function POST(
     })
     .where(eq(minyanRule.id, ruleId));
 
-  // Redirect back to whichever data_source page this came from
-  // (via ?dsId in the form action) — falls back to /admin/queue.
+  // The explicit ?dsId is a more specific, trustworthy target than the Referer,
+  // so prefer it: land on the deep data_source review page (full rules list) —
+  // both for a deep-page delete AND an inbox-expander delete (where the expander
+  // would otherwise collapse on a bare /admin reload mid-review). Fall back to
+  // the Referer/inbox only when no dsId is present.
   const url = new URL(req.url);
   const dsId = url.searchParams.get("dsId");
-  const target = dsId ? `/admin/data-source/${dsId}` : "/admin/queue";
-  return NextResponse.redirect(new URL(target, req.url), 303);
+  if (dsId && /^\d+$/.test(dsId)) {
+    return NextResponse.redirect(
+      new URL(`/admin/data-source/${dsId}`, req.url),
+      303,
+    );
+  }
+  return safeRedirect(req, "/admin");
 }

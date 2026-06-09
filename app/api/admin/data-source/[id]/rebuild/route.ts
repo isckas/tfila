@@ -65,7 +65,11 @@ export async function POST(
     console.error("[rebuild] inngest.send failed:", (err as Error).message);
   }
 
-  // `rebuilt` rides onto whichever target wins (inbox or shul page) so the
-  // confirmation banner survives the same-origin Referer redirect.
-  return safeRedirect(req, `/admin/shul/${ds.slug}`, { rebuilt: "1" });
+  // `rebuilt` → shul-page banner; `queued` → inbox banner + the shul id whose
+  // row mounts a RowPoller to auto-refresh when the re-extraction lands. Both
+  // ride onto whichever target wins the same-origin Referer redirect.
+  return safeRedirect(req, `/admin/shul/${ds.slug}`, {
+    rebuilt: "1",
+    queued: String(ds.shulId),
+  });
 }
