@@ -260,6 +260,7 @@ export async function getShulForAdmin(slug: string) {
       builtAt: dataSource.builtAt,
       builtBy: dataSource.builtBy,
       lastRunAt: dataSource.lastRunAt,
+      lastReceivedAt: dataSource.lastReceivedAt,
       lastRunStatus: dataSource.lastRunStatus,
       firstBrokenAt: dataSource.firstBrokenAt,
       extractionStrategy: dataSource.extractionStrategy,
@@ -604,6 +605,92 @@ export async function listAdminShuls(opts: {
     pendingSourceCount: Number(r.pending_source_count),
     pendingDataSourceId: r.pending_data_source_id,
   }));
+}
+
+// ─── Admin: single-shul derived-state (for the inbox auto-refresh poller) ──
+// A one-shul slice of listAdminShuls' aggregates — just enough for
+// deriveAdminShulState() plus the pending source id. Backs
+// GET /api/admin/shul/[id]/state, which an in-flight inbox row polls until the
+// extraction lands. Kept in lockstep with the ds_state LATERAL above.
+export interface AdminShulStateRow {
+  status: string;
+  dataSourceCount: number;
+  hasPendingSource: boolean;
+  hasApprovedSource: boolean;
+  hasRejectedSource: boolean;
+  hasBrokenRun: boolean;
+  lastFreshAt: Date | null;
+  pendingDataSourceId: number | null;
+}
+
+export async function getAdminShulStateById(
+  id: number,
+): Promise<AdminShulStateRow | null> {
+  const res = await db.execute<{
+    status: string;
+    data_source_count: number;
+    last_fresh_at: Date | null;
+    has_pending_source: boolean | null;
+    has_approved_source: boolean | null;
+    has_rejected_source: boolean | null;
+    has_broken_run: boolean | null;
+    pending_data_source_id: number | null;
+  }>(sql`
+    SELECT
+      s.status::text AS status,
+      COALESCE(ds_agg.cnt, 0)::int AS data_source_count,
+      fresh_agg.last_fresh_at,
+      ds_state.has_pending_source,
+      ds_state.has_approved_source,
+      ds_state.has_rejected_source,
+      ds_state.has_broken_run,
+      ds_state.pending_data_source_id
+    FROM shul s
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*) AS cnt FROM data_source WHERE shul_id = s.id
+    ) ds_agg ON true
+    LEFT JOIN LATERAL (
+      SELECT MAX(COALESCE(last_received_at, last_run_at)) AS last_fresh_at
+        FROM data_source
+       WHERE shul_id = s.id
+         AND last_run_status IN ('ok', 'no_change')
+         AND review_status = 'approved'
+    ) fresh_agg ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        bool_or(review_status = 'pending' AND
+                (extraction_strategy IS NULL
+                 OR extraction_strategy <> 'failed')) AS has_pending_source,
+        bool_or(review_status = 'approved') AS has_approved_source,
+        bool_or(review_status = 'rejected') AS has_rejected_source,
+        NOT bool_or(
+              review_status = 'approved'
+              AND last_run_status IN ('ok', 'no_change')
+              AND COALESCE(last_received_at, last_run_at) >=
+                  NOW() - INTERVAL '14 days'
+            ) AS has_broken_run,
+        (array_agg(id ORDER BY built_at DESC NULLS LAST, id DESC)
+           FILTER (WHERE review_status = 'pending'
+                   AND (extraction_strategy IS NULL OR extraction_strategy <> 'failed'))
+        )[1] AS pending_data_source_id
+      FROM data_source WHERE shul_id = s.id
+    ) ds_state ON true
+    WHERE s.id = ${id}
+    LIMIT 1
+  `);
+
+  const r = res.rows[0];
+  if (!r) return null;
+  return {
+    status: r.status,
+    dataSourceCount: Number(r.data_source_count),
+    hasPendingSource: r.has_pending_source ?? false,
+    hasApprovedSource: r.has_approved_source ?? false,
+    hasRejectedSource: r.has_rejected_source ?? false,
+    hasBrokenRun: r.has_broken_run ?? false,
+    lastFreshAt: r.last_fresh_at,
+    pendingDataSourceId: r.pending_data_source_id,
+  };
 }
 
 // ─── Davener home feed ───────────────────────────────────────────────────

@@ -37,6 +37,7 @@ export async function POST(
     .set({ status, resolvedAt: new Date(), resolvedBy: session.email })
     .where(and(eq(timeReport.id, reportId), eq(timeReport.status, "open")));
 
-  // Return to wherever it was triaged from (the inbox or the reports page).
-  return safeRedirect(req, "/admin/reports");
+  // Return to wherever it was triaged from (the inbox); /admin/reports is
+  // retired (it now redirects to /admin), so that's the fallback too.
+  return safeRedirect(req, "/admin");
 }

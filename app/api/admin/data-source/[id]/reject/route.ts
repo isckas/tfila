@@ -29,6 +29,7 @@ export async function POST(
     })
     .where(eq(dataSource.id, dsId));
 
-  // Land on the chip-filtered inbox (the cockpit absorbed /admin/queue in UI-5).
-  return safeRedirect(req, "/admin?state=pending_review");
+  // Return to wherever the admin rejected from — the inbox expander (/admin)
+  // or the deep review page — via the same-origin Referer; fall back to /admin.
+  return safeRedirect(req, "/admin");
 }

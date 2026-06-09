@@ -4,6 +4,28 @@ import { getShulForAdmin, getRecentScrapeRunsForShul } from "@/lib/queries";
 import { parseCascadeAttempts } from "@/lib/llm/cascade";
 import { StatusBadge } from "@/components/badges/StatusBadge";
 import { requireAdmin } from "@/lib/auth";
+import { STALE_THRESHOLD_DAYS } from "@/lib/freshness";
+
+/**
+ * The one canonical source: approved + last run ok/no_change + fresh (within
+ * the public freshness window). This is exactly what makes a shul publicly
+ * visible, so badging it makes clear the failed/stale/rejected siblings below
+ * don't affect the shul. Mirrors the EXISTS gate in listShulsForLookup.
+ */
+function isLiveSource(ds: {
+  reviewStatus: string;
+  lastRunStatus: string | null;
+  lastRunAt: Date | null;
+  lastReceivedAt: Date | null;
+}): boolean {
+  if (ds.reviewStatus !== "approved") return false;
+  if (ds.lastRunStatus !== "ok" && ds.lastRunStatus !== "no_change") return false;
+  const fresh = ds.lastReceivedAt ?? ds.lastRunAt;
+  if (!fresh) return false;
+  const days = (Date.now() - new Date(fresh).getTime()) / 86_400_000;
+  // Inclusive, matching the canonical SQL gate `COALESCE(...) >= NOW() - 14d`.
+  return days <= STALE_THRESHOLD_DAYS;
+}
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -42,6 +64,22 @@ export default async function AdminShulDetailPage({
 
   const { shul: s, dataSources } = data;
   const runs = await getRecentScrapeRunsForShul(s.id, 15);
+
+  // Phase-5 de-clutter: the active area shows only the live source + any pending
+  // source awaiting review; everything else (failed, rejected, or approved-but-
+  // stale/broken) is demoted into the collapsed audit section. Exhaustive +
+  // disjoint — every source lands in exactly one of these.
+  const activeSources = dataSources.filter(
+    (ds) =>
+      ds.extractionStrategy !== "failed" &&
+      (ds.reviewStatus === "pending" || isLiveSource(ds)),
+  );
+  const demotedSources = dataSources.filter(
+    (ds) =>
+      ds.extractionStrategy === "failed" ||
+      ds.reviewStatus === "rejected" ||
+      (ds.reviewStatus === "approved" && !isLiveSource(ds)),
+  );
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-8">
@@ -450,15 +488,18 @@ export default async function AdminShulDetailPage({
           <p className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
             No data sources yet. Manual re-extract below to create one.
           </p>
+        ) : activeSources.length === 0 ? (
+          <p className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
+            No active source — every source below is failed, stale, or rejected.
+            Re-extract to create a fresh one.
+          </p>
         ) : (
           <ul className="space-y-2">
-            {dataSources
-              .filter(
-                (ds) =>
-                  ds.extractionStrategy !== "failed" &&
-                  ds.reviewStatus !== "rejected",
-              )
-              .map((ds) => (
+            {/* Active area = the live source + any pending source awaiting
+                review. Approved-but-stale/broken siblings drop into the
+                collapsed "Failed / stale / superseded" section so it's obvious
+                they don't affect the shul. */}
+            {activeSources.map((ds) => (
               <li
                 key={ds.id}
                 className="rounded-xl border border-neutral-200 bg-white p-3"
@@ -476,6 +517,11 @@ export default async function AdminShulDetailPage({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 text-xs">
+                    {isLiveSource(ds) && (
+                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-medium text-emerald-800">
+                        ● Live source
+                      </span>
+                    )}
                     <span className={`rounded px-1.5 py-0.5 ${reviewBadge(ds.reviewStatus)}`}>
                       {ds.reviewStatus}
                     </span>
@@ -548,20 +594,17 @@ export default async function AdminShulDetailPage({
           </p>
         )}
 
-        {/* Fix X: demoted sources — failed extractions + rejected/superseded
-            data_sources. Kept here so admin can audit history without them
-            cluttering the primary source list. */}
+        {/* Fix X: demoted sources — failed extractions, rejected/superseded
+            data_sources, AND approved-but-stale/broken siblings (no longer the
+            live source). Kept here so admin can audit history without them
+            cluttering the active source list. */}
         {(() => {
-          const demoted = dataSources.filter(
-            (ds) =>
-              ds.extractionStrategy === "failed" ||
-              ds.reviewStatus === "rejected",
-          );
+          const demoted = demotedSources;
           if (demoted.length === 0) return null;
           return (
             <details className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
               <summary className="cursor-pointer text-xs font-medium text-neutral-500 hover:text-neutral-700">
-                Failed / superseded ({demoted.length})
+                Failed / stale / superseded ({demoted.length})
               </summary>
               <ul className="mt-2 space-y-1.5">
                 {demoted.map((ds) => (

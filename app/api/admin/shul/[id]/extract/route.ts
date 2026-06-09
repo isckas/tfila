@@ -69,8 +69,12 @@ export async function POST(
   }
 
   // Return to wherever the admin triggered it — the inbox row (/admin) or the
-  // shul page — via the same-origin Referer; fall back to the shul page. The
-  // `rebuilt` flag rides along onto either target so both surfaces show a
-  // "queued" banner (the inbox row can't change yet — extraction is async).
-  return safeRedirect(req, `/admin/shul/${s.slug}`, { rebuilt: "1" });
+  // shul page — via the same-origin Referer; fall back to the shul page.
+  //   `rebuilt`  → the shul detail page's "queued" banner.
+  //   `queued`   → the inbox: banner + the shul id whose row mounts a RowPoller
+  //                that auto-refreshes when the async extraction lands.
+  return safeRedirect(req, `/admin/shul/${s.slug}`, {
+    rebuilt: "1",
+    queued: String(s.id),
+  });
 }

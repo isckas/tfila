@@ -28,6 +28,12 @@ export function safeRedirect(
   return NextResponse.redirect(target, 303);
 }
 
+// Transient banner/feedback params that should never ride along onto an
+// unrelated next action via the Referer (e.g. a failed-approve `?err`
+// re-surfacing after a successful rule delete). Callers re-set their own
+// feedback via the `search` arg after this resolves.
+const TRANSIENT_PARAMS = ["err", "rebuilt", "queued", "reextract"];
+
 function resolveSafeTarget(req: Request, fallback: string): URL {
   const referer = req.headers.get("referer");
   if (referer) {
@@ -35,6 +41,7 @@ function resolveSafeTarget(req: Request, fallback: string): URL {
       const parsed = new URL(referer);
       const here = new URL(req.url);
       if (parsed.origin === here.origin) {
+        for (const key of TRANSIENT_PARAMS) parsed.searchParams.delete(key);
         return parsed;
       }
     } catch {

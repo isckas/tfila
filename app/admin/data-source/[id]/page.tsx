@@ -1,19 +1,24 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDataSourceForReview } from "@/lib/queries";
-import type { MinyanTime } from "@/db/schema";
 import { parseCascadeAttempts } from "@/lib/llm/cascade";
 import { requireAdmin } from "@/lib/auth";
+import { RulesReviewPanel, toReviewRule } from "@/components/admin/RulesReviewPanel";
 
 interface PageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ err?: string }>;
 }
 
 export const dynamic = "force-dynamic";
 
-export default async function ReviewDetailPage({ params }: PageProps) {
+export default async function ReviewDetailPage({
+  params,
+  searchParams,
+}: PageProps) {
   await requireAdmin();
   const { id } = await params;
+  const { err } = await searchParams;
   const dsId = Number(id);
   if (!Number.isInteger(dsId)) notFound();
 
@@ -33,12 +38,15 @@ export default async function ReviewDetailPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-8">
-      <Link
-        href="/admin/queue"
-        className="text-xs text-neutral-500 hover:underline"
-      >
-        ← back to queue
+      <Link href="/admin" className="text-xs text-neutral-500 hover:underline">
+        ← back to inbox
       </Link>
+
+      {err && (
+        <div className="mt-3 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-sm text-rose-900">
+          {decodeURIComponent(err)}
+        </div>
+      )}
 
       {/* Header */}
       <header className="mt-3">
@@ -274,94 +282,14 @@ export default async function ReviewDetailPage({ params }: PageProps) {
         </section>
       )}
 
-      {/* Rules table */}
+      {/* Rules table — shared with the inbox expand-in-place panel
+          (components/admin/RulesReviewPanel) so both surfaces render rules,
+          source quotes, and the per-rule delete control identically. */}
       <section className="mt-6">
         <h2 className="mb-2 text-sm font-medium text-neutral-700">
           Extracted minyan rules
         </h2>
-        {rules.length === 0 ? (
-          <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-6 text-sm text-neutral-600">
-            No rules. Either the LLM found nothing or you&apos;ve deleted them
-            all.
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {rules.map((r) => (
-              <li
-                key={r.id}
-                className="flex flex-wrap items-baseline justify-between gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3"
-              >
-                <div className="min-w-0">
-                  <div className="font-medium text-neutral-900">
-                    {tefillahLabel(r.tefillah)}
-                    {r.tefillahLabel && (
-                      <span className="ml-2 text-xs text-neutral-500">
-                        ({r.tefillahLabel})
-                      </span>
-                    )}
-                    {r.specialScheduleKind &&
-                      r.specialScheduleKind !== "regular" && (
-                        <span className="ml-2 rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-800">
-                          {r.specialScheduleKind.replace(/_/g, " ")}
-                        </span>
-                      )}
-                    {r.nusach && (
-                      <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-700">
-                        {r.nusach}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 text-sm text-neutral-700">
-                    <span className="font-mono tabular-nums">
-                      {formatTime(r.time as MinyanTime)}
-                    </span>
-                    {" · "}
-                    <span>{daysLabel(r.daysOfWeek)}</span>
-                    {(r.validFrom || r.validTo) && (
-                      <>
-                        {" · "}
-                        <span className="text-neutral-500">
-                          {r.validFrom ?? "−∞"} → {r.validTo ?? "∞"}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                  {r.notes && (
-                    <div className="mt-1 text-xs text-neutral-500">
-                      {r.notes}
-                    </div>
-                  )}
-                  {/* UI-6: source quote shown by default (not collapsed) — the
-                      whole point of grounding is verifying each rule against
-                      its quote without opening the URL. A rule with no quote is
-                      flagged so ungrounded extractions are obvious. */}
-                  {r.sourceQuote ? (
-                    <blockquote className="mt-1.5 border-l-2 border-neutral-300 bg-neutral-50 px-2 py-1 font-mono text-[11px] text-neutral-600">
-                      {r.sourceQuote}
-                    </blockquote>
-                  ) : (
-                    <div className="mt-1.5 text-[11px] text-amber-800">
-                      ⚠ no source quote — unverified extraction
-                    </div>
-                  )}
-                </div>
-
-                <form
-                  method="post"
-                  action={`/api/admin/rule/${r.id}/delete?dsId=${ds.id}`}
-                  className="shrink-0"
-                >
-                  <button
-                    type="submit"
-                    className="rounded border border-rose-300 px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50"
-                  >
-                    Delete
-                  </button>
-                </form>
-              </li>
-            ))}
-          </ul>
-        )}
+        <RulesReviewPanel rules={rules.map(toReviewRule)} dsId={ds.id} />
       </section>
 
       {/* Reviewer notes (if previously reviewed) */}
@@ -373,47 +301,4 @@ export default async function ReviewDetailPage({ params }: PageProps) {
       )}
     </div>
   );
-}
-
-const TEFILLAH_LABEL: Record<string, string> = {
-  shacharis: "Shacharis",
-  mincha: "Mincha",
-  maariv: "Maariv",
-  selichos: "Selichos",
-  neilah: "Neilah",
-  other: "Other",
-};
-
-function tefillahLabel(t: string): string {
-  return TEFILLAH_LABEL[t] ?? t;
-}
-
-function formatTime(t: MinyanTime): string {
-  if (t.kind === "fixed") {
-    const [hStr, mStr] = t.clock.split(":");
-    const h = parseInt(hStr, 10);
-    const m = parseInt(mStr, 10);
-    if (Number.isNaN(h) || Number.isNaN(m)) return t.clock;
-    const ampm = h >= 12 ? "PM" : "AM";
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return `${h12}:${m.toString().padStart(2, "0")} ${ampm}`;
-  }
-  const off = t.offsetMin;
-  const offDesc =
-    off === 0 ? "at" : off > 0 ? `${off} min after` : `${Math.abs(off)} min before`;
-  return `${offDesc} ${t.anchor.replace(/_/g, " ")}`;
-}
-
-const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Shabbos"];
-
-function daysLabel(days: number[] | null): string {
-  if (!days || days.length === 0) return "(no recurring day — check valid_from/to)";
-  if (days.length === 7) return "Every day";
-  if (
-    days.length === 5 &&
-    [1, 2, 3, 4, 5].every((d) => days.includes(d))
-  )
-    return "Mon-Fri";
-  if (days.length === 1) return DAY_NAMES[days[0]];
-  return days.map((d) => DAY_NAMES[d]).join(", ");
 }

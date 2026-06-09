@@ -39,7 +39,12 @@ export async function POST(
   }
 
   if (existing[0].extractionStrategy === "failed") {
-    return safeRedirect(req, `/admin/data-source/${dsId}?err=cannot-approve-failed`);
+    // err rides onto whichever target wins (inbox or deep page) — see
+    // safeRedirect's search arg; a bare fallback would lose it on a
+    // same-origin Referer redirect.
+    return safeRedirect(req, `/admin/data-source/${dsId}`, {
+      err: "Can't approve — the extraction cascade failed (0 rules). Re-extract or reject.",
+    });
   }
 
   await db.transaction(async (tx) => {
@@ -69,6 +74,8 @@ export async function POST(
       );
   });
 
-  // Land on the chip-filtered inbox (the cockpit absorbed /admin/queue in UI-5).
-  return safeRedirect(req, "/admin?state=pending_review");
+  // Return to wherever the admin approved from — the inbox expander (/admin)
+  // or the deep review page — via the same-origin Referer; fall back to /admin.
+  // An approved shul goes live, so it leaves the inbox on reload.
+  return safeRedirect(req, "/admin");
 }

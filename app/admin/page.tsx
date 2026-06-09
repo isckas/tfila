@@ -2,6 +2,9 @@ import Link from "next/link";
 import { buildAdminFeed, type AdminFeedShulItem } from "@/lib/admin-feed";
 import { BulkReextractButton } from "@/components/BulkReextractButton";
 import { FreshnessBadge } from "@/components/badges/FreshnessBadge";
+import { ReviewExpander } from "@/components/admin/ReviewExpander";
+import { RowPoller } from "@/components/admin/RowPoller";
+import { ApproveNoUrlForm, RejectForm } from "@/components/admin/CandidateForms";
 import { formatRelativeDays } from "@/lib/format";
 import { requireAdmin } from "@/lib/auth";
 
@@ -21,7 +24,7 @@ export default async function AdminHomePage({
 }: {
   searchParams: Promise<{
     reextract?: string;
-    rebuilt?: string;
+    queued?: string;
     err?: string;
     ran?: string;
     new?: string;
@@ -53,10 +56,10 @@ export default async function AdminHomePage({
             : `Queued ${sp.reextract} re-extraction${sp.reextract === "1" ? "" : "s"} (throttled to 3 at a time). They'll move out of Broken as they recover.`}
         </Banner>
       )}
-      {sp.rebuilt != null && (
+      {sp.queued != null && (
         <Banner tone="emerald">
-          Queued a re-extraction — it runs in the background (~1–2 min). No need
-          to click again; reload to see the result.
+          Queued a re-extraction — it runs in the background (~1–2 min). The
+          row below auto-refreshes when it lands; no need to click again.
         </Banner>
       )}
       {sp.ran && (
@@ -78,6 +81,7 @@ export default async function AdminHomePage({
         hint="New submissions + approved discovery finds. Vet the first extraction, then approve."
         items={feed.newItems}
         empty="✓ No new shuls awaiting review."
+        queuedId={sp.queued}
       />
 
       {/* ─── 🔧 BROKEN — needs fixing ─────────────────────────── */}
@@ -86,6 +90,7 @@ export default async function AdminHomePage({
         hint="Were live, broke on the weekly re-extraction. Re-extract or fix the URL."
         items={feed.brokenItems}
         empty="✓ Nothing broken — every live shul is healthy."
+        queuedId={sp.queued}
       />
 
       {/* ─── 🚩 Reports ───────────────────────────────────────── */}
@@ -181,19 +186,9 @@ export default async function AdminHomePage({
                         </button>
                       </form>
                     ) : (
-                      <Link
-                        href="/admin/candidates"
-                        className="rounded-lg border border-neutral-300 px-3 py-1.5 text-neutral-700 hover:bg-neutral-100"
-                      >
-                        Add URL →
-                      </Link>
+                      <ApproveNoUrlForm candidateId={c.id} />
                     )}
-                    <Link
-                      href="/admin/candidates"
-                      className="text-neutral-500 underline-offset-2 hover:underline"
-                    >
-                      more
-                    </Link>
+                    <RejectForm candidateId={c.id} />
                   </div>
                 </li>
               ))}
@@ -235,11 +230,14 @@ function Lane({
   hint,
   items,
   empty,
+  queuedId,
 }: {
   title: string;
   hint: string;
   items: AdminFeedShulItem[];
   empty: string;
+  /** ?queued=<shulId> — the row just re-extracted, so it polls for the result. */
+  queuedId?: string;
 }) {
   return (
     <section className="mt-8">
@@ -255,7 +253,7 @@ function Lane({
       ) : (
         <ul className="space-y-2">
           {items.map((item) => (
-            <ShulRow key={item.shul.id} item={item} />
+            <ShulRow key={item.shul.id} item={item} queuedId={queuedId} />
           ))}
         </ul>
       )}
@@ -264,9 +262,23 @@ function Lane({
 }
 
 // ─── One shul row (NEW or BROKEN) ──────────────────────────────────────────
-function ShulRow({ item }: { item: AdminFeedShulItem }) {
-  const { shul } = item;
+function ShulRow({
+  item,
+  queuedId,
+}: {
+  item: AdminFeedShulItem;
+  queuedId?: string;
+}) {
+  const { shul, state } = item;
   const meta = shulRowMeta(item);
+  // Mount the auto-refresh poller while an extraction is in flight: a first
+  // extraction (awaiting_extraction), or a just-queued re-extract whose fresh
+  // source hasn't landed yet (still pre-review). Once it lands → pending_review
+  // (the Review expander shows) or active (leaves the inbox) → poller is gone.
+  const justQueued = queuedId != null && String(shul.id) === queuedId;
+  const inFlight =
+    state === "awaiting_extraction" ||
+    (justQueued && state !== "pending_review");
   const tone: Record<string, string> = {
     rose: "border-l-rose-400",
     amber: "border-l-amber-400",
@@ -303,15 +315,33 @@ function ShulRow({ item }: { item: AdminFeedShulItem }) {
         </div>
       </div>
 
+      {/* In-flight extraction: poll + auto-refresh when the result lands. */}
+      {inFlight && (
+        <div>
+          <RowPoller
+            shulId={shul.id}
+            initialState={state}
+            initialPendingId={shul.pendingDataSourceId}
+          />
+        </div>
+      )}
+
+      {/* Primary action for a reviewable row: expand the extraction inline
+          (lazy-fetched) and approve/reject without a page hop. */}
+      {meta.canReview && shul.pendingDataSourceId != null && (
+        <ReviewExpander
+          dataSourceId={shul.pendingDataSourceId}
+          label={
+            shul.pendingSourceCount > 1
+              ? `Review ${shul.pendingSourceCount} sources`
+              : item.lane === "new"
+                ? "Review first extraction"
+                : "Review the fix"
+          }
+        />
+      )}
+
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-        {meta.canReview && shul.pendingDataSourceId != null && (
-          <Link
-            href={`/admin/data-source/${shul.pendingDataSourceId}`}
-            className="rounded-lg bg-amber-800 px-3 py-1.5 font-medium text-white hover:bg-amber-900"
-          >
-            Review {shul.pendingSourceCount > 1 ? `${shul.pendingSourceCount} sources` : "rules"} →
-          </Link>
-        )}
         {meta.canReextract && shul.submittedUrl && (
           <form method="post" action={`/api/admin/shul/${shul.id}/extract`}>
             <button
