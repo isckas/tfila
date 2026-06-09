@@ -4,6 +4,7 @@ import { db } from "@/db/client";
 import { dataSource, shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { inngest } from "@/lib/inngest/client";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 /**
  * Fires a `data-source.requested` event so the Inngest pipeline
@@ -64,8 +65,7 @@ export async function POST(
     console.error("[rebuild] inngest.send failed:", (err as Error).message);
   }
 
-  return NextResponse.redirect(
-    new URL(`/admin/shul/${ds.slug}?rebuilt=1`, req.url),
-    303,
-  );
+  // `rebuilt` rides onto whichever target wins (inbox or shul page) so the
+  // confirmation banner survives the same-origin Referer redirect.
+  return safeRedirect(req, `/admin/shul/${ds.slug}`, { rebuilt: "1" });
 }

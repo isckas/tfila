@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 export async function POST(
   req: Request,
@@ -37,8 +38,5 @@ export async function POST(
     })
     .where(eq(shul.id, shulId));
 
-  return NextResponse.redirect(
-    new URL(`/admin/shul/${s.slug}`, req.url),
-    303,
-  );
+  return safeRedirect(req, `/admin/shul/${s.slug}`);
 }

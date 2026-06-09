@@ -1,183 +1,220 @@
 import Link from "next/link";
-import { listAdminShuls, countOpenTimeReports } from "@/lib/queries";
-import {
-  adminShulStateSortKey,
-  deriveAdminShulState,
-  isInboxState,
-  type AdminShulState,
-} from "@/lib/admin-state";
-import { AdminInbox } from "@/components/AdminInbox";
+import { buildAdminFeed, type AdminFeedShulItem } from "@/lib/admin-feed";
 import { BulkReextractButton } from "@/components/BulkReextractButton";
+import { FreshnessBadge } from "@/components/badges/FreshnessBadge";
+import { formatRelativeDays } from "@/lib/format";
 import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Admin landing — inbox-style. Counts at the top by state, then a list
- * of every shul that needs attention (not active, not archived). Click
- * any row → /admin/shul/[slug] for the full mission-control view.
- *
- * The /admin/queue and /admin/rejected pages are filtered views of the
- * same data; /admin/shuls remains the catalog of every shul (active or
- * not).
+ * Admin mission-control. Anchored on the two recurring jobs, not the internal
+ * state enum:
+ *   🆕 NEW    — shuls that have never gone live: review the first extraction.
+ *   🔧 BROKEN — shuls that were live and broke: re-extract / fix.
+ * Plus thin secondary areas: wrong-time reports + pending discovery candidates.
+ * Inline actions are native form-posts to the existing routes (which now
+ * Referer-redirect back here). Expand-in-place rule review = Phase 3.
  */
 export default async function AdminHomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ state?: string; reextract?: string }>;
+  searchParams: Promise<{
+    reextract?: string;
+    rebuilt?: string;
+    err?: string;
+    ran?: string;
+    new?: string;
+    dup?: string;
+    queries?: string;
+  }>;
 }) {
   await requireAdmin();
-  const { state: stateParam, reextract } = await searchParams;
-  // Pull a generous slice — most projects have a few hundred shuls at most.
-  const shuls = await listAdminShuls({ q: null, status: null, limit: 500 });
-  const openReports = await countOpenTimeReports();
-
-  // Derive state per shul + bucket counts
-  const withState = shuls.map((s) => ({
-    row: s,
-    state: deriveAdminShulState(s),
-  }));
-  const counts = bucketByState(withState.map((x) => x.state));
-
-  // Inbox = needs-attention rows, sorted urgent-first.
-  // Fix S: within the "broken" tier, sort by first_broken_at DESC so the
-  // most-recent breakage floats to the top — admin sees this week's
-  // fails first, chronic ones drop below.
-  const inboxWithState = withState
-    .filter((x) => isInboxState(x.state))
-    .sort((a, b) => {
-      const dk = adminShulStateSortKey(a.state) - adminShulStateSortKey(b.state);
-      if (dk !== 0) return dk;
-      // Within "broken" / "no_good_source" / "stale" tier, newer broken first.
-      if (a.row.firstBrokenAt || b.row.firstBrokenAt) {
-        const aT = a.row.firstBrokenAt
-          ? new Date(a.row.firstBrokenAt).valueOf()
-          : 0;
-        const bT = b.row.firstBrokenAt
-          ? new Date(b.row.firstBrokenAt).valueOf()
-          : 0;
-        if (aT !== bT) return bT - aT;
-      }
-      // Other tiers: prefer oldest signal (lowest lastFreshAt or oldest submittedAt)
-      const at = (a.row.lastFreshAt ?? a.row.submittedAt).valueOf();
-      const bt = (b.row.lastFreshAt ?? b.row.submittedAt).valueOf();
-      return at - bt;
-    });
-
-  const totalActive = counts.active;
-  const totalArchived = counts.archived;
-  const inboxTotal = inboxWithState.length;
-
-  // UI-5: filter chips filter the inbox on THIS page (absorbing the old
-  // /queue + /rejected routes + the 8-tile wall) rather than linking out.
-  // Only honor a ?state= that maps to a real inbox chip; anything else
-  // (active, archived, a stale bookmark, garbage) falls back to the full
-  // inbox rather than a misleading "Filtered — 0 shuls" view.
-  const activeChip =
-    stateParam && INBOX_CHIPS.some((c) => c.state === stateParam)
-      ? stateParam
-      : "all";
-  const displayedRows = (
-    activeChip === "all"
-      ? inboxWithState
-      : inboxWithState.filter((x) => x.state === activeChip)
-  ).map((x) => x.row);
+  const sp = await searchParams;
+  const feed = await buildAdminFeed();
+  const { counts } = feed;
 
   return (
     <div className="mx-auto max-w-4xl px-5 py-8">
       <h1 className="text-2xl font-semibold">Admin</h1>
       <p className="mt-1 text-sm text-neutral-600">
-        {inboxTotal} shul{inboxTotal === 1 ? "" : "s"} need attention ·{" "}
-        {totalActive} active · {totalArchived} archived
+        <strong className="text-neutral-900">{counts.new}</strong> new ·{" "}
+        <strong className="text-neutral-900">{counts.broken}</strong> broken ·{" "}
+        {counts.reports} report{counts.reports === 1 ? "" : "s"} ·{" "}
+        {counts.candidates} to add
       </p>
 
-      {/* Bulk re-extract result banner. */}
-      {reextract != null && (
-        <div
-          className={
-            "mt-3 rounded-lg border px-3 py-1.5 text-sm " +
-            (reextract === "error"
-              ? "border-rose-300 bg-rose-50 text-rose-900"
-              : "border-emerald-300 bg-emerald-50 text-emerald-900")
-          }
-        >
-          {reextract === "error"
+      {/* Banners */}
+      {sp.err && <Banner tone="rose">{decodeURIComponent(sp.err)}</Banner>}
+      {sp.reextract != null && (
+        <Banner tone={sp.reextract === "error" ? "rose" : "emerald"}>
+          {sp.reextract === "error"
             ? "Couldn't queue the re-extraction — check the logs."
-            : `Queued ${reextract} re-extraction${reextract === "1" ? "" : "s"} (throttled to 3 at a time). Check back in a few minutes.`}
-        </div>
+            : `Queued ${sp.reextract} re-extraction${sp.reextract === "1" ? "" : "s"} (throttled to 3 at a time). They'll move out of Broken as they recover.`}
+        </Banner>
+      )}
+      {sp.rebuilt != null && (
+        <Banner tone="emerald">
+          Queued a re-extraction — it runs in the background (~1–2 min). No need
+          to click again; reload to see the result.
+        </Banner>
+      )}
+      {sp.ran && (
+        <Banner tone={Number(sp.queries ?? "0") > 0 ? "amber" : "emerald"}>
+          Ran discovery for <strong>{sp.ran}</strong>: {sp.new ?? 0} new,{" "}
+          {sp.dup ?? 0} duplicate. New finds are under "Discovery" below.
+        </Banner>
       )}
 
-      {/* UI-5: bulk re-extract all broken shuls (confirm + rate-gated). */}
       {counts.broken > 0 && (
         <div className="mt-3">
           <BulkReextractButton count={counts.broken} />
         </div>
       )}
 
-      {/* E-B5: user wrong-time reports awaiting triage. */}
-      {openReports > 0 && (
-        <Link
-          href="/admin/reports"
-          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-900 hover:bg-amber-100"
-        >
-          🚩 {openReports} wrong-time report{openReports === 1 ? "" : "s"} to
-          review →
-        </Link>
+      {/* ─── 🆕 NEW — review first extraction ─────────────────── */}
+      <Lane
+        title="🆕 New shuls — review"
+        hint="New submissions + approved discovery finds. Vet the first extraction, then approve."
+        items={feed.newItems}
+        empty="✓ No new shuls awaiting review."
+      />
+
+      {/* ─── 🔧 BROKEN — needs fixing ─────────────────────────── */}
+      <Lane
+        title="🔧 Broken — needs fixing"
+        hint="Were live, broke on the weekly re-extraction. Re-extract or fix the URL."
+        items={feed.brokenItems}
+        empty="✓ Nothing broken — every live shul is healthy."
+      />
+
+      {/* ─── 🚩 Reports ───────────────────────────────────────── */}
+      {feed.reports.length > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-1 text-sm font-semibold text-neutral-700">
+            🚩 Wrong-time reports
+          </h2>
+          <ul className="space-y-2">
+            {feed.reports.map((r) => (
+              <li
+                key={r.id}
+                className="rounded-xl border border-amber-200 bg-amber-50/40 px-4 py-3"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <Link
+                    href={`/admin/shul/${r.shulSlug}`}
+                    className="font-medium text-neutral-900 underline-offset-2 hover:underline"
+                  >
+                    {r.shulName}
+                  </Link>
+                  <span className="text-xs text-neutral-500">
+                    {new Date(r.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-neutral-700">
+                  {r.note ? `“${r.note}”` : <em className="text-neutral-400">(no note)</em>}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                  <Link
+                    href={`/shul/${r.shulSlug}`}
+                    target="_blank"
+                    className="text-neutral-500 underline-offset-2 hover:underline"
+                  >
+                    view public page →
+                  </Link>
+                  <Link
+                    href={`/admin/shul/${r.shulSlug}`}
+                    className="text-amber-800 underline-offset-2 hover:underline"
+                  >
+                    fix in detail →
+                  </Link>
+                  <ResolveForm reportId={r.id} status="resolved" label="Mark resolved" tone="emerald" />
+                  <ResolveForm reportId={r.id} status="dismissed" label="Dismiss" tone="neutral" />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
-      {/* ─── Inbox filter chips (UI-5) ───────────────────────── */}
-      {/* Collapses the old 8-tile wall + the /queue + /rejected routes into
-          one chip row that filters the inbox in place via ?state=. Only chips
-          with rows are shown. "All shuls" / Active live in the shortcuts. */}
-      <section className="mt-6 flex flex-wrap gap-1.5">
-        <InboxChip label="All" count={inboxTotal} state="all" active={activeChip} />
-        {INBOX_CHIPS.filter((c) => counts[c.state] > 0).map((c) => (
-          <InboxChip
-            key={c.state}
-            label={c.label}
-            count={counts[c.state]}
-            state={c.state}
-            active={activeChip}
-          />
-        ))}
+      {/* ─── 🔍 Discovery — approve to add ───────────────────── */}
+      <section className="mt-8">
+        <details open={feed.candidates.length > 0}>
+          <summary className="cursor-pointer text-sm font-semibold text-neutral-700">
+            🔍 Discovery — {feed.candidates.length} to add
+            <span className="ml-1 font-normal text-neutral-400">
+              (approving creates a shul → shows up under New)
+            </span>
+          </summary>
+          {feed.candidates.length === 0 ? (
+            <p className="mt-2 text-sm text-neutral-500">
+              None pending.{" "}
+              <Link href="/admin/candidates" className="text-amber-800 underline-offset-2 hover:underline">
+                Run discovery →
+              </Link>
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-2">
+              {feed.candidates.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-neutral-900">
+                      {c.name}
+                    </div>
+                    {c.formattedAddress && (
+                      <div className="truncate text-xs text-neutral-500">
+                        {c.formattedAddress}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-xs">
+                    {c.websiteUri ? (
+                      <form method="post" action={`/api/admin/candidate/${c.id}/approve`}>
+                        <button
+                          type="submit"
+                          className="rounded-lg bg-emerald-700 px-3 py-1.5 font-medium text-white hover:bg-emerald-800"
+                        >
+                          Approve (extract)
+                        </button>
+                      </form>
+                    ) : (
+                      <Link
+                        href="/admin/candidates"
+                        className="rounded-lg border border-neutral-300 px-3 py-1.5 text-neutral-700 hover:bg-neutral-100"
+                      >
+                        Add URL →
+                      </Link>
+                    )}
+                    <Link
+                      href="/admin/candidates"
+                      className="text-neutral-500 underline-offset-2 hover:underline"
+                    >
+                      more
+                    </Link>
+                  </div>
+                </li>
+              ))}
+              <li className="pt-1 text-xs">
+                <Link href="/admin/candidates" className="text-amber-800 underline-offset-2 hover:underline">
+                  Run discovery / full triage →
+                </Link>
+              </li>
+            </ul>
+          )}
+        </details>
       </section>
 
-      {/* ─── Inbox ───────────────────────────────────────────── */}
-      <section className="mt-6">
-        <h2 className="mb-3 text-sm font-semibold text-neutral-700">
-          {activeChip === "all"
-            ? "Inbox — shuls needing attention"
-            : `Filtered — ${displayedRows.length} shul${displayedRows.length === 1 ? "" : "s"}`}
-        </h2>
-        <AdminInbox
-          rows={displayedRows}
-          emptyMessage={
-            activeChip === "all"
-              ? "✓ All clear. No shuls currently need attention."
-              : "Nothing in this filter."
-          }
-        />
-      </section>
-
-      {/* ─── Other shortcuts ─────────────────────────────────── */}
-      <section className="mt-8 text-xs text-neutral-500">
+      {/* ─── Shortcuts ───────────────────────────────────────── */}
+      <section className="mt-10 text-xs text-neutral-500">
         <Link href="/admin/shuls" className="underline-offset-2 hover:underline">
-          All shuls ({shuls.length}) →
-        </Link>
-        {" · "}
-        <Link
-          href="/admin/shuls?status=active"
-          className="underline-offset-2 hover:underline"
-        >
-          Active ({totalActive}) →
-        </Link>
-        {" · "}
-        <Link href="/admin/reports" className="underline-offset-2 hover:underline">
-          Wrong-time reports →
+          All shuls →
         </Link>
         {" · "}
         <Link href="/admin/candidates" className="underline-offset-2 hover:underline">
-          Discovery candidates →
+          Discovery →
         </Link>
         {" · "}
         <Link href="/admin/changelog" className="underline-offset-2 hover:underline">
@@ -192,59 +229,191 @@ export default async function AdminHomePage({
   );
 }
 
-function bucketByState(states: AdminShulState[]): Record<AdminShulState, number> {
-  const init: Record<AdminShulState, number> = {
-    archived: 0,
-    unsupported: 0,
-    broken: 0,
-    pending_review: 0,
-    no_good_source: 0,
-    awaiting_extraction: 0,
-    stale: 0,
-    active: 0,
-  };
-  for (const s of states) init[s]++;
-  return init;
+// ─── Lane (a NEW or BROKEN section) ────────────────────────────────────────
+function Lane({
+  title,
+  hint,
+  items,
+  empty,
+}: {
+  title: string;
+  hint: string;
+  items: AdminFeedShulItem[];
+  empty: string;
+}) {
+  return (
+    <section className="mt-8">
+      <h2 className="text-sm font-semibold text-neutral-700">
+        {title}{" "}
+        <span className="font-normal text-neutral-400">({items.length})</span>
+      </h2>
+      <p className="mb-2 text-xs text-neutral-500">{hint}</p>
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-5 text-sm text-neutral-600">
+          {empty}
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((item) => (
+            <ShulRow key={item.shul.id} item={item} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
 }
 
-// Inbox states surfaced as filter chips (UI-5), in triage order. Only chips
-// with a non-zero count render. 'active'/'archived' aren't inbox states.
-const INBOX_CHIPS: { state: AdminShulState; label: string }[] = [
-  { state: "pending_review", label: "Review" },
-  { state: "broken", label: "Broken" },
-  { state: "no_good_source", label: "No source" },
-  { state: "stale", label: "Stale" },
-  { state: "awaiting_extraction", label: "Awaiting" },
-  { state: "unsupported", label: "Unsupported" },
-];
-
-function InboxChip({
-  label,
-  count,
-  state,
-  active,
-}: {
-  label: string;
-  count: number;
-  state: string;
-  active: string;
-}) {
-  const isActive = active === state;
+// ─── One shul row (NEW or BROKEN) ──────────────────────────────────────────
+function ShulRow({ item }: { item: AdminFeedShulItem }) {
+  const { shul } = item;
+  const meta = shulRowMeta(item);
+  const tone: Record<string, string> = {
+    rose: "border-l-rose-400",
+    amber: "border-l-amber-400",
+    neutral: "border-l-neutral-300",
+  };
+  const verbTone: Record<string, string> = {
+    rose: "text-rose-800",
+    amber: "text-amber-900",
+    neutral: "text-neutral-600",
+  };
   return (
-    <Link
-      href={state === "all" ? "/admin" : `/admin?state=${state}`}
-      className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 ${
-        isActive
-          ? "border-neutral-900 bg-neutral-900 text-white"
-          : "border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-      }`}
+    <li
+      className={`rounded-xl border border-l-4 border-neutral-200 bg-white px-4 py-3 ${tone[meta.tone]}`}
     >
-      {label}
-      <span
-        className={`tabular-nums ${isActive ? "text-neutral-300" : "text-neutral-400"}`}
-      >
-        {count}
-      </span>
-    </Link>
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0">
+          <div className={`text-sm font-semibold ${verbTone[meta.tone]}`}>
+            {meta.verb}
+          </div>
+          <div className="mt-0.5 truncate font-medium text-neutral-900">
+            {shul.name}
+          </div>
+          {shul.address && (
+            <div className="truncate text-xs text-neutral-500">{shul.address}</div>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1 text-xs">
+          <FreshnessBadge lastFreshAt={shul.lastFreshAt ? new Date(shul.lastFreshAt) : null} />
+          {item.lane === "broken" && shul.firstBrokenAt && (
+            <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] tracking-wide text-rose-700">
+              broken {formatRelativeDays(new Date(shul.firstBrokenAt))}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        {meta.canReview && shul.pendingDataSourceId != null && (
+          <Link
+            href={`/admin/data-source/${shul.pendingDataSourceId}`}
+            className="rounded-lg bg-amber-800 px-3 py-1.5 font-medium text-white hover:bg-amber-900"
+          >
+            Review {shul.pendingSourceCount > 1 ? `${shul.pendingSourceCount} sources` : "rules"} →
+          </Link>
+        )}
+        {meta.canReextract && shul.submittedUrl && (
+          <form method="post" action={`/api/admin/shul/${shul.id}/extract`}>
+            <button
+              type="submit"
+              className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-neutral-700 hover:bg-neutral-100"
+            >
+              Re-extract
+            </button>
+          </form>
+        )}
+        {/* No source URL on file — re-extract can't run; send the admin to
+            Details where they can paste one. Otherwise the row's verb
+            ("re-extract / fix the URL") would promise an action it can't do. */}
+        {meta.canReextract && !shul.submittedUrl && (
+          <Link
+            href={`/admin/shul/${shul.slug}`}
+            className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 font-medium text-rose-800 hover:bg-rose-100"
+          >
+            Add a source URL →
+          </Link>
+        )}
+        <Link
+          href={`/admin/shul/${shul.slug}`}
+          className="rounded-lg border border-neutral-300 px-3 py-1.5 text-neutral-700 hover:bg-neutral-100"
+        >
+          Details →
+        </Link>
+        <form method="post" action={`/api/admin/shul/${shul.id}/archive`} className="ml-auto">
+          <button
+            type="submit"
+            className="rounded-lg px-2 py-1.5 text-neutral-400 hover:text-neutral-700 hover:underline"
+          >
+            Archive
+          </button>
+        </form>
+      </div>
+    </li>
+  );
+}
+
+/** Lane-aware label + which actions a row supports. */
+function shulRowMeta(item: AdminFeedShulItem): {
+  verb: string;
+  tone: "rose" | "amber" | "neutral";
+  canReview: boolean;
+  canReextract: boolean;
+} {
+  const { lane, state, shul } = item;
+  const hasReviewable = shul.pendingDataSourceId != null;
+  if (lane === "new") {
+    if (state === "awaiting_extraction") {
+      return { verb: "Extracting first run…", tone: "amber", canReview: false, canReextract: true };
+    }
+    if (hasReviewable) {
+      return { verb: "Review first extraction", tone: "amber", canReview: true, canReextract: true };
+    }
+    return { verb: "First extraction failed — try another URL", tone: "rose", canReview: false, canReextract: true };
+  }
+  // broken lane (was live)
+  if (hasReviewable) {
+    return { verb: "Re-extracted — review the fix", tone: "amber", canReview: true, canReextract: true };
+  }
+  if (state === "stale") {
+    return { verb: "Stale — re-extract", tone: "amber", canReview: false, canReextract: true };
+  }
+  return { verb: "Broke — re-extract or fix the URL", tone: "rose", canReview: false, canReextract: true };
+}
+
+function Banner({ tone, children }: { tone: "rose" | "amber" | "emerald"; children: React.ReactNode }) {
+  const styles: Record<string, string> = {
+    rose: "border-rose-300 bg-rose-50 text-rose-900",
+    amber: "border-amber-300 bg-amber-50 text-amber-900",
+    emerald: "border-emerald-300 bg-emerald-50 text-emerald-900",
+  };
+  return (
+    <div className={`mt-3 rounded-lg border px-3 py-1.5 text-sm ${styles[tone]}`}>
+      {children}
+    </div>
+  );
+}
+
+function ResolveForm({
+  reportId,
+  status,
+  label,
+  tone,
+}: {
+  reportId: number;
+  status: "resolved" | "dismissed";
+  label: string;
+  tone: "emerald" | "neutral";
+}) {
+  const cls =
+    tone === "emerald"
+      ? "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+      : "border-neutral-300 text-neutral-600 hover:bg-neutral-100";
+  return (
+    <form method="post" action={`/api/admin/report/${reportId}/resolve`} className="inline">
+      <input type="hidden" name="status" value={status} />
+      <button type="submit" className={`rounded border px-2 py-1 ${cls}`}>
+        {label}
+      </button>
+    </form>
   );
 }

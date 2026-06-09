@@ -5,6 +5,7 @@ import {
   minyanRule,
   scrapeRun,
   shul,
+  shulCandidate,
   timeReport,
   type MinyanTime,
 } from "../db/schema";
@@ -453,6 +454,9 @@ export interface AdminShulRow {
   hasRejectedSource: boolean;
   hasBrokenRun: boolean;
   pendingSourceCount: number;
+  /** Newest reviewable (non-failed) pending data_source id, or null. Lets the
+   *  inbox expand + approve that source inline without a page hop. */
+  pendingDataSourceId: number | null;
 }
 
 export async function listAdminShuls(opts: {
@@ -496,6 +500,7 @@ export async function listAdminShuls(opts: {
     has_rejected_source: boolean | null;
     has_broken_run: boolean | null;
     pending_source_count: number;
+    pending_data_source_id: number | null;
   }>(sql`
     SELECT
       s.id, s.slug, s.name, s.status::text AS status, s.address, s.contact_email,
@@ -510,7 +515,8 @@ export async function listAdminShuls(opts: {
       ds_state.has_approved_source,
       ds_state.has_rejected_source,
       ds_state.has_broken_run,
-      COALESCE(ds_state.pending_source_count, 0)::int AS pending_source_count
+      COALESCE(ds_state.pending_source_count, 0)::int AS pending_source_count,
+      ds_state.pending_data_source_id
     FROM shul s
     LEFT JOIN LATERAL (
       SELECT COUNT(*) AS cnt FROM data_source WHERE shul_id = s.id
@@ -561,7 +567,14 @@ export async function listAdminShuls(opts: {
           WHERE review_status = 'pending'
             AND (extraction_strategy IS NULL
                  OR extraction_strategy <> 'failed')
-        ) AS pending_source_count
+        ) AS pending_source_count,
+        -- Newest REVIEWABLE (non-failed) pending source id, so the inbox can
+        -- expand + approve the right source inline (the "primary" source isn't
+        -- always the pending one).
+        (array_agg(id ORDER BY built_at DESC NULLS LAST, id DESC)
+           FILTER (WHERE review_status = 'pending'
+                   AND (extraction_strategy IS NULL OR extraction_strategy <> 'failed'))
+        )[1] AS pending_data_source_id
       FROM data_source WHERE shul_id = s.id
     ) ds_state ON true
     WHERE ${where}
@@ -589,6 +602,7 @@ export async function listAdminShuls(opts: {
     hasRejectedSource: r.has_rejected_source ?? false,
     hasBrokenRun: r.has_broken_run ?? false,
     pendingSourceCount: Number(r.pending_source_count),
+    pendingDataSourceId: r.pending_data_source_id,
   }));
 }
 
@@ -796,5 +810,25 @@ export async function listOpenTimeReports(limit = 100) {
     .innerJoin(shul, eq(shul.id, timeReport.shulId))
     .where(eq(timeReport.status, "open"))
     .orderBy(desc(timeReport.createdAt))
+    .limit(limit);
+}
+
+// ─── Admin: pending discovery candidates (for the unified inbox) ──────────
+// Pending shul_candidate rows surface as "Discovery — approve to add" items in
+// the mission-control inbox; approving one creates a real shul that then shows
+// up in the NEW lane. The deeper discovery/audit view stays at /admin/candidates.
+export async function listPendingCandidates(limit = 200) {
+  return db
+    .select({
+      id: shulCandidate.id,
+      name: shulCandidate.name,
+      formattedAddress: shulCandidate.formattedAddress,
+      websiteUri: shulCandidate.websiteUri,
+      discoveryTargetName: shulCandidate.discoveryTargetName,
+      createdAt: shulCandidate.createdAt,
+    })
+    .from(shulCandidate)
+    .where(eq(shulCandidate.reviewStatus, "pending"))
+    .orderBy(desc(shulCandidate.createdAt))
     .limit(limit);
 }

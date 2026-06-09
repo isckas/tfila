@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { timeReport } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 // E-B5 — triage a "report a wrong time" report. POST with form field
 // `status` = 'resolved' (admin re-extracted / fixed) or 'dismissed' (the
@@ -36,5 +37,6 @@ export async function POST(
     .set({ status, resolvedAt: new Date(), resolvedBy: session.email })
     .where(and(eq(timeReport.id, reportId), eq(timeReport.status, "open")));
 
-  return NextResponse.redirect(new URL("/admin/reports", req.url), 303);
+  // Return to wherever it was triaged from (the inbox or the reports page).
+  return safeRedirect(req, "/admin/reports");
 }
