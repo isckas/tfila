@@ -66,11 +66,19 @@ export interface AdminFeed {
 }
 
 function serializeShulRow(row: AdminShulRow): SerialAdminShulRow {
+  // NOTE: listAdminShuls runs a RAW db.execute(), so the Neon driver hands back
+  // timestamp columns as STRINGS at runtime — the AdminShulRow `Date` typings are
+  // an unchecked cast on the raw query, not a real Date. Calling `.toISOString()`
+  // on a string threw "is not a function" and 500'd the whole inbox. Coerce via
+  // `new Date(...)`, which is correct whether the value arrives as a string or a
+  // Date. (Date methods elsewhere already wrap these in `new Date()`.)
   return {
     ...row,
-    submittedAt: row.submittedAt.toISOString(),
-    lastFreshAt: row.lastFreshAt ? row.lastFreshAt.toISOString() : null,
-    firstBrokenAt: row.firstBrokenAt ? row.firstBrokenAt.toISOString() : null,
+    submittedAt: new Date(row.submittedAt).toISOString(),
+    lastFreshAt: row.lastFreshAt ? new Date(row.lastFreshAt).toISOString() : null,
+    firstBrokenAt: row.firstBrokenAt
+      ? new Date(row.firstBrokenAt).toISOString()
+      : null,
   };
 }
 
