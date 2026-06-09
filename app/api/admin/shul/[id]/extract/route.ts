@@ -4,6 +4,7 @@ import { db } from "@/db/client";
 import { shul } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
 import { inngest } from "@/lib/inngest/client";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 /**
  * Trigger an extraction cascade for a shul. Dispatches the
@@ -67,8 +68,9 @@ export async function POST(
     console.error("[shul/extract] inngest.send failed:", (err as Error).message);
   }
 
-  return NextResponse.redirect(
-    new URL(`/admin/shul/${s.slug}?rebuilt=1`, req.url),
-    303,
-  );
+  // Return to wherever the admin triggered it — the inbox row (/admin) or the
+  // shul page — via the same-origin Referer; fall back to the shul page. The
+  // `rebuilt` flag rides along onto either target so both surfaces show a
+  // "queued" banner (the inbox row can't change yet — extraction is async).
+  return safeRedirect(req, `/admin/shul/${s.slug}`, { rebuilt: "1" });
 }
