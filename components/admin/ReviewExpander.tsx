@@ -23,11 +23,13 @@ interface RulesPayload {
  * shared RulesReviewPanel inline, and offers Approve / Reject right there — no
  * hop to the deep /admin/data-source/[id] page.
  *
- * Reads are client fetches; WRITES stay native form-posts (Approve / Reject /
- * delete-rule), which 303-redirect back to /admin via the routes' safeRedirect.
- * That keeps the server the single source of truth — no optimistic client
- * re-derivation of the 3-axis review state. After a write the page reloads and
- * the row reflects the new state (an approved row leaves the inbox entirely).
+ * Reads are client fetches; WRITES stay native form-posts. Approve / Reject
+ * 303-redirect back to /admin (safeRedirect honors the inbox Referer), so the
+ * row reflects the new state on reload (an approved row leaves the inbox). The
+ * per-rule Delete instead lands on the deep /admin/data-source/[id] page (the
+ * delete route prefers the explicit ?dsId over the Referer) — the full review
+ * surface to keep deleting wrong rules in context. Either way the server stays
+ * the single source of truth — no optimistic client re-derivation of state.
  *
  * Fetch failure degrades to a link to the full page.
  */

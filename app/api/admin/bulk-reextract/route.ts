@@ -17,27 +17,45 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  // Every currently-broken/error source that could recover: not rejected, not
-  // archived, and not a known-terminal 'failed' strategy. Mirrors the
-  // recover-stranded.mjs target. LIMIT bounds a single batch.
-  const rows = await db.execute<{ data_source_id: number; shul_id: number }>(sql`
-    SELECT ds.id AS data_source_id, ds.shul_id
-      FROM data_source ds
-      JOIN shul s ON s.id = ds.shul_id
-     WHERE ds.last_run_status IN ('broken', 'error')
-       AND ds.review_status <> 'rejected'
-       AND s.status <> 'archived'
-       AND COALESCE(ds.extraction_strategy::text, 'html') <> 'failed'
-     ORDER BY ds.shul_id
+  // Every BROKEN-LANE shul: it has an approved source but NO fresh healthy one
+  // (review_status='approved' + last_run ok/no_change + within 14d). This is
+  // exactly the has_broken_run / counts.broken population the inbox shows — so
+  // the button's "Re-extract all N broken" promise matches what actually fires.
+  // The old filter (last_run_status IN ('broken','error')) silently SKIPPED
+  // stale-but-ok shuls (last run 'ok' but >14d old), which the inbox still
+  // counts as broken — so the count and the action diverged. We re-extract each
+  // shul's submitted URL via data-source.requested, identical to clicking the
+  // per-shul Re-extract button. URL-less broken shuls can't be re-extracted
+  // (the inbox shows them an "Add a source URL" link instead). LIMIT bounds a
+  // single batch; scrapeOneShul's global [{limit:3}] cap + the daily cost-gate
+  // keep the fan-out safe.
+  const rows = await db.execute<{ shul_id: number; submitted_url: string }>(sql`
+    SELECT s.id AS shul_id, s.submitted_url
+      FROM shul s
+     WHERE s.status <> 'archived'
+       AND s.submitted_url IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM data_source d
+          WHERE d.shul_id = s.id AND d.review_status = 'approved'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM data_source d2
+          WHERE d2.shul_id = s.id
+            AND d2.review_status = 'approved'
+            AND d2.last_run_status IN ('ok', 'no_change')
+            AND COALESCE(d2.last_received_at, d2.last_run_at) >=
+                NOW() - INTERVAL '14 days'
+       )
+     ORDER BY s.id
      LIMIT 100
   `);
 
   const events = rows.rows.map((r) => ({
-    name: "shul.scrape.requested" as const,
+    name: "data-source.requested" as const,
     data: {
       shulId: r.shul_id,
-      dataSourceId: r.data_source_id,
-      reason: "manual" as const,
+      url: r.submitted_url,
+      sourceKind: "website_llm" as const,
     },
   }));
 

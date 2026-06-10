@@ -99,9 +99,14 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
       reviewStatus: shulCandidate.reviewStatus,
       reviewReason: shulCandidate.reviewReason,
       linkedShulId: shulCandidate.linkedShulId,
+      // The linked shul's SLUG — /admin/shul/[slug] resolves by slug, not id, so
+      // the "→ shul #N" link must use this (a numeric id 404s). leftJoin keeps
+      // unlinked candidates (slug null).
+      linkedShulSlug: shul.slug,
       createdAt: shulCandidate.createdAt,
     })
     .from(shulCandidate)
+    .leftJoin(shul, eq(shulCandidate.linkedShulId, shul.id))
     .where(and(...conditions))
     .orderBy(desc(shulCandidate.createdAt))
     .limit(200);
@@ -493,9 +498,9 @@ export default async function AdminCandidatesPage({ searchParams }: PageProps) {
                           {t}
                         </span>
                       ))}
-                      {c.linkedShulId && (
+                      {c.linkedShulId && c.linkedShulSlug && (
                         <Link
-                          href={`/admin/shul/${c.linkedShulId}`}
+                          href={`/admin/shul/${c.linkedShulSlug}`}
                           className="text-amber-800 underline-offset-2 hover:underline"
                         >
                           → shul #{c.linkedShulId}

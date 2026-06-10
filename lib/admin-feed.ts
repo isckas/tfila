@@ -84,9 +84,15 @@ function serializeShulRow(row: AdminShulRow): SerialAdminShulRow {
 
 export async function buildAdminFeed(): Promise<AdminFeed> {
   const [shuls, reports, candidates] = await Promise.all([
-    listAdminShuls({ q: null, status: null, limit: 500 }),
-    listOpenTimeReports(200),
-    listPendingCandidates(200),
+    // listAdminShuls is ORDER BY submitted_at DESC, so a too-low cap would drop
+    // the OLDEST inbox shuls (e.g. a long-stuck broken one) from the feed +
+    // counts. The inbox filters to non-active/non-archived states in JS after
+    // the fetch, so this cap must comfortably exceed the whole directory. 5000
+    // is far beyond foreseeable scale for this niche; if it's ever approached,
+    // the real fix is a server-side inbox-state-filtered query.
+    listAdminShuls({ q: null, status: null, limit: 5000 }),
+    listOpenTimeReports(500),
+    listPendingCandidates(500),
   ]);
 
   const newItems: AdminFeedShulItem[] = [];

@@ -9,16 +9,22 @@ const MAX_MS = 4 * 60 * 1000; // give up after ~4 min → manual refresh
 interface StatePayload {
   state: string;
   pendingDataSourceId: number | null;
+  dataSourceCount: number;
 }
 
 /**
  * Auto-refresh for an in-flight inbox row. Mounts only on a row whose
  * extraction is running (first extraction, or a just-queued re-extract). Polls
  * GET /api/admin/shul/[id]/state every few seconds; the moment the derived
- * state OR the pending source id differs from what it mounted with, the
- * extraction has landed → router.refresh() re-renders the server row (which is
- * then no longer in-flight, so this unmounts). Caps at ~4 min → a manual
- * "Refresh" fallback so a silently-failed extraction never spins forever.
+ * state, the pending source id, OR the data_source count differs from what it
+ * mounted with, the extraction has LANDED — including a FAILED cascade, which
+ * changes neither state nor pendingId but does insert a new source (count++).
+ *
+ * On landing it navigates to a clean /admin (router.replace drops the ?queued
+ * marker) and refreshes. Dropping ?queued is load-bearing: it makes the row's
+ * `inFlight` gate go false on the re-render, so the poller cannot re-mount and
+ * spin again on an already-landed row. Caps at ~4 min → a manual "Refresh"
+ * fallback for the rare case nothing observable changed.
  *
  * Only ever runs for the handful of rows actively extracting (single-admin
  * tool), and the endpoint is one indexed aggregate — no scale concern.
@@ -27,10 +33,12 @@ export function RowPoller({
   shulId,
   initialState,
   initialPendingId,
+  initialDataSourceCount,
 }: {
   shulId: number;
   initialState: string;
   initialPendingId: number | null;
+  initialDataSourceCount: number;
 }) {
   const router = useRouter();
   const [gaveUp, setGaveUp] = useState(false);
@@ -55,10 +63,14 @@ export function RowPoller({
           const data = (await res.json()) as StatePayload;
           if (
             data.state !== initialState ||
-            data.pendingDataSourceId !== initialPendingId
+            data.pendingDataSourceId !== initialPendingId ||
+            data.dataSourceCount !== initialDataSourceCount
           ) {
-            if (!cancelled) router.refresh();
-            return; // landed — refresh remounts the (now-terminal) row
+            if (!cancelled) {
+              router.replace("/admin"); // drop ?queued so we can't re-mount-spin
+              router.refresh();
+            }
+            return; // landed
           }
         }
       } catch {
@@ -72,7 +84,7 @@ export function RowPoller({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [shulId, initialState, initialPendingId, router]);
+  }, [shulId, initialState, initialPendingId, initialDataSourceCount, router]);
 
   if (gaveUp) {
     return (

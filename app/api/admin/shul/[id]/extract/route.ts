@@ -66,6 +66,12 @@ export async function POST(
     });
   } catch (err) {
     console.error("[shul/extract] inngest.send failed:", (err as Error).message);
+    // Don't return the success `queued` redirect when the enqueue actually
+    // failed — that would mount a RowPoller on a job that never started and
+    // spin for 4 min. Surface the failure instead.
+    return safeRedirect(req, `/admin/shul/${s.slug}`, {
+      err: "Couldn't queue the re-extraction — the job system may be down. Try again.",
+    });
   }
 
   // Return to wherever the admin triggered it — the inbox row (/admin) or the
