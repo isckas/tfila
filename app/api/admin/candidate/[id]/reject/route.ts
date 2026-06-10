@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { shulCandidate } from "@/db/schema";
 import { getAdminSession } from "@/lib/auth";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,8 @@ export async function POST(
     })
     .where(eq(shulCandidate.id, candidateId));
 
-  const back = req.headers.get("referer") ?? "/admin/candidates";
-  return NextResponse.redirect(new URL(back, req.url), 303);
+  // safeRedirect honors a same-origin Referer (inbox Discovery strip or the
+  // candidates page) and falls back to /admin/candidates — without the
+  // open-redirect risk of trusting a bare Referer.
+  return safeRedirect(req, "/admin/candidates");
 }

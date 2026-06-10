@@ -23,6 +23,7 @@ import { slugify, allocateUniqueSlug } from "@/lib/slug";
 import { inngest } from "@/lib/inngest/client";
 import { matchDomainOf } from "@/lib/dedup";
 import { resolveScheduleUrl } from "@/lib/discovery/find-schedule-page";
+import { safeRedirect } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
 
@@ -77,21 +78,16 @@ export async function POST(
     );
   }
   if (preRows[0].reviewStatus !== "pending") {
-    const back = req.headers.get("referer") ?? "/admin/candidates";
-    const u = new URL(back, req.url);
-    u.searchParams.set("err", `candidate already ${preRows[0].reviewStatus}`);
-    return NextResponse.redirect(u, 303);
+    return safeRedirect(req, "/admin/candidates", {
+      err: `candidate already ${preRows[0].reviewStatus}`,
+    });
   }
 
   const submittedUrl = urlOverride ?? preRows[0].websiteUri ?? null;
   if (!submittedUrl) {
-    const back = req.headers.get("referer") ?? "/admin/candidates";
-    const u = new URL(back, req.url);
-    u.searchParams.set(
-      "err",
-      "URL required — paste one in the Add URL & approve form, or reject this candidate",
-    );
-    return NextResponse.redirect(u, 303);
+    return safeRedirect(req, "/admin/candidates", {
+      err: "URL required — paste one in the Add URL & approve form, or reject this candidate",
+    });
   }
 
   // ─── Resolve to the schedule page. For root-only URLs (Places usually
@@ -249,11 +245,11 @@ export async function POST(
       303,
     );
   }
-  const back = req.headers.get("referer") ?? "/admin/candidates";
+  // dedup-merge / error: return via the same-origin Referer (inbox Discovery or
+  // candidates page), falling back to /admin/candidates. safeRedirect's
+  // same-origin guard avoids trusting a bare attacker-influenced Referer.
   if (!result.ok && result.reason) {
-    const u = new URL(back, req.url);
-    u.searchParams.set("err", result.reason);
-    return NextResponse.redirect(u, 303);
+    return safeRedirect(req, "/admin/candidates", { err: result.reason });
   }
-  return NextResponse.redirect(new URL(back, req.url), 303);
+  return safeRedirect(req, "/admin/candidates");
 }

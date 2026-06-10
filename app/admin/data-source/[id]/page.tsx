@@ -44,7 +44,7 @@ export default async function ReviewDetailPage({
 
       {err && (
         <div className="mt-3 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-sm text-rose-900">
-          {decodeURIComponent(err)}
+          {err}
         </div>
       )}
 

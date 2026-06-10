@@ -63,6 +63,11 @@ export async function POST(
     });
   } catch (err) {
     console.error("[rebuild] inngest.send failed:", (err as Error).message);
+    // Don't claim a queued re-extraction when the enqueue failed (it would mount
+    // a poller on a job that never started). Surface the failure instead.
+    return safeRedirect(req, `/admin/shul/${ds.slug}`, {
+      err: "Couldn't queue the re-extraction — the job system may be down. Try again.",
+    });
   }
 
   // `rebuilt` → shul-page banner; `queued` → inbox banner + the shul id whose

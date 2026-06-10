@@ -35,5 +35,10 @@ export async function GET(
   return NextResponse.json({
     state: deriveAdminShulState(row),
     pendingDataSourceId: row.pendingDataSourceId,
+    // dataSourceCount lets the poller detect a re-extraction that LANDED but
+    // didn't change state/pendingId — notably a FAILED cascade, which inserts a
+    // new strategy='failed' source (count++) yet leaves a broken row broken with
+    // no reviewable pending source. Without this the poller spun to its cap.
+    dataSourceCount: row.dataSourceCount,
   });
 }

@@ -48,12 +48,23 @@ export default async function AdminHomePage({
       </p>
 
       {/* Banners */}
-      {sp.err && <Banner tone="rose">{decodeURIComponent(sp.err)}</Banner>}
-      {sp.reextract != null && (
-        <Banner tone={sp.reextract === "error" ? "rose" : "emerald"}>
-          {sp.reextract === "error"
-            ? "Couldn't queue the re-extraction — check the logs."
-            : `Queued ${sp.reextract} re-extraction${sp.reextract === "1" ? "" : "s"} (throttled to 3 at a time). They'll move out of Broken as they recover.`}
+      {sp.err && <Banner tone="rose">{sp.err}</Banner>}
+      {sp.reextract === "error" && (
+        <Banner tone="rose">
+          Couldn&apos;t queue the re-extraction — check the logs.
+        </Banner>
+      )}
+      {sp.reextract === "0" && (
+        <Banner tone="amber">
+          Nothing to re-extract right now — no broken shul has a re-extractable
+          source URL.
+        </Banner>
+      )}
+      {sp.reextract != null && sp.reextract !== "error" && sp.reextract !== "0" && (
+        <Banner tone="emerald">
+          Queued {sp.reextract} re-extraction{sp.reextract === "1" ? "" : "s"}{" "}
+          (throttled to 3 at a time). They&apos;ll move out of Broken as they
+          recover.
         </Banner>
       )}
       {sp.queued != null && (
@@ -272,13 +283,14 @@ function ShulRow({
   const { shul, state } = item;
   const meta = shulRowMeta(item);
   // Mount the auto-refresh poller while an extraction is in flight: a first
-  // extraction (awaiting_extraction), or a just-queued re-extract whose fresh
-  // source hasn't landed yet (still pre-review). Once it lands → pending_review
-  // (the Review expander shows) or active (leaves the inbox) → poller is gone.
+  // extraction (awaiting_extraction), or ANY just-queued re-extract — including
+  // one on a row that was already pending_review (re-extracting to supersede a
+  // stale extraction). The poller drops ?queued on landing, so once it fires
+  // justQueued goes false and it won't re-mount; that makes it safe to mount
+  // here without the old `state !== "pending_review"` exclusion (which used to
+  // skip the poller entirely when re-extracting an already-pending row).
   const justQueued = queuedId != null && String(shul.id) === queuedId;
-  const inFlight =
-    state === "awaiting_extraction" ||
-    (justQueued && state !== "pending_review");
+  const inFlight = state === "awaiting_extraction" || justQueued;
   const tone: Record<string, string> = {
     rose: "border-l-rose-400",
     amber: "border-l-amber-400",
@@ -322,6 +334,7 @@ function ShulRow({
             shulId={shul.id}
             initialState={state}
             initialPendingId={shul.pendingDataSourceId}
+            initialDataSourceCount={shul.dataSourceCount}
           />
         </div>
       )}
