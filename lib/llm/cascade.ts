@@ -86,6 +86,39 @@ export function parseCascadeAttempts(raw: unknown): CascadeAttempt[] {
   return result.data;
 }
 
+/**
+ * Build a concise, human-readable failure summary from cascade attempts — for
+ * the `scrape_run.error` column + the admin BROKEN lane. Leads with the
+ * preferred/stored strategy's attempt so a vision/PDF re-run failure reads e.g.
+ * "vision_image skipped: no schedule image on page | html 0r | js_rendered 0r"
+ * instead of the old generic "cascade re-run failed for strategy vision_image".
+ */
+export function summarizeCascadeFailure(
+  attempts: CascadeAttempt[],
+  preferredStrategy?: ExtractionStrategy,
+): string {
+  if (!attempts || attempts.length === 0) {
+    return "no extraction attempts recorded";
+  }
+  const fmt = (a: CascadeAttempt): string => {
+    if (a.status === "extracted") {
+      const conf = a.confidence != null ? `@${a.confidence.toFixed(2)}` : "";
+      return `${a.strategy} ${a.rulesCount}r${conf}`;
+    }
+    const msg = a.errorMessage
+      ? `: ${a.errorMessage.replace(/\s+/g, " ").slice(0, 90)}`
+      : "";
+    return `${a.strategy} ${a.status}${msg}`;
+  };
+  const lead = preferredStrategy
+    ? attempts.find((a) => a.strategy === preferredStrategy)
+    : undefined;
+  const ordered = lead
+    ? [lead, ...attempts.filter((a) => a !== lead)]
+    : attempts;
+  return ordered.map(fmt).join(" | ").slice(0, 240);
+}
+
 export interface CascadeResult {
   strategy: ExtractionStrategy;
   /** Null when strategy = 'failed'. */
@@ -394,6 +427,68 @@ async function runCascadeV1Internal(
       rulesCount: 0,
       confidence: null,
     });
+  }
+
+  // ─── Fetch-for-resource-tiers fix ──────────────────────────
+  // When PINNED to a resource tier (vision_image / pdf_document) — as the
+  // weekly rescrape does for known image/PDF sources — the HTML + JS tiers
+  // above were skipped. But those tiers are what FETCH + RENDER the page, and
+  // the resource finders below scan that HTML. Pinned, neither ran, so
+  // `searchHtmls` was empty and the cascade ALWAYS returned "failed" with
+  // "no HTML available to scan". This is why every weekly vision/PDF re-run
+  // broke 100% of the time (verified: 45 days, 0 successes). Fetch + render
+  // here (cheap; no LLM) so the finders have HTML to work with.
+  if (
+    !html &&
+    !renderedHtml &&
+    (opts.preferredStrategy === "vision_image" ||
+      opts.preferredStrategy === "pdf_document")
+  ) {
+    let fetchErr: string | undefined;
+    let renderErr: string | undefined;
+    try {
+      const fetched = await fetchHtml(submittedUrl, { timeoutMs });
+      if (fetched.ok) {
+        html = fetched.html;
+        baseUrl = fetched.finalUrl;
+      } else {
+        fetchErr = `HTTP ${fetched.status}`;
+      }
+    } catch (e) {
+      fetchErr = (e as Error).message;
+    }
+    try {
+      const rendered = await renderHtml(submittedUrl, { timeoutMs });
+      if (rendered.ok && rendered.html) {
+        renderedHtml = rendered.html;
+      } else {
+        renderErr = rendered.error;
+      }
+    } catch (e) {
+      renderErr = (e as Error).message;
+    }
+    // If BOTH fetch and render failed, record a real attempt carrying the
+    // underlying error(s). A TRANSIENT outage (timeout / DNS / 5xx) must then
+    // be detected by isTransientCascadeFailure and THROWN for an Inngest retry
+    // — NOT masked as "no HTML available" → permanent broken. (2026-05-24 class:
+    // a transient failure demoted to permanent. Mirrors the js_rendered
+    // fetch_failed branch above.)
+    if (!html && !renderedHtml) {
+      const msg =
+        [
+          fetchErr && `fetch: ${fetchErr}`,
+          renderErr && `render: ${renderErr}`,
+        ]
+          .filter(Boolean)
+          .join("; ") || "fetch + render both failed";
+      attempts.push({
+        strategy: opts.preferredStrategy,
+        status: "fetch_failed",
+        rulesCount: 0,
+        confidence: null,
+        errorMessage: msg.slice(0, 200),
+      });
+    }
   }
 
   // Scan BOTH static and rendered HTML for PDF/image candidates and

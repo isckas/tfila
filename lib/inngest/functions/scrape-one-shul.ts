@@ -22,6 +22,7 @@ import {
   runCascade,
   isTransientCascadeFailure,
   transientCascadeMessage,
+  summarizeCascadeFailure,
 } from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
@@ -250,7 +251,10 @@ export const scrapeOneShul = inngest.createFunction(
     const newCount = cascade.extraction?.rules.length ?? 0;
     const newConfidence = cascade.extraction?.confidence ?? 0;
     const verdict = cascadeFailed
-      ? { shouldFlagBroken: true, reason: "cascade exhausted all tiers" }
+      ? {
+          shouldFlagBroken: true,
+          reason: summarizeCascadeFailure(cascade.attempts, "html"),
+        }
       : evaluateExtractionGuardrails({
           prevRuleCount: prevCount,
           newRuleCount: newCount,
@@ -480,6 +484,13 @@ async function rescrapeNonHtml(
   });
 
   if (cascade.strategy === "failed" || !cascade.extraction) {
+    // Phase 1 (diagnosability): write a SPECIFIC error summarized from the
+    // per-tier attempts (was a generic "cascade re-run failed for strategy X"),
+    // and PERSIST the attempts into config_json.last_rejected_extraction —
+    // mirroring the HTML broken path — so the admin BROKEN lane can show WHY
+    // (no schedule image / low confidence / 404) instead of guessing. Does NOT
+    // clobber config_json.cascade_attempts (the last GOOD extraction's record).
+    const failureSummary = summarizeCascadeFailure(cascade.attempts, args.strategy);
     await step.run("mark-broken-cascade-failed", async () => {
       const now = new Date();
       await db.transaction(async (tx) => {
@@ -492,7 +503,7 @@ async function rescrapeNonHtml(
           rulesAdded: 0,
           rulesRemoved: 0,
           rulesChanged: 0,
-          error: `cascade re-run failed for strategy ${args.strategy}`,
+          error: failureSummary,
         });
         await tx
           .update(dataSource)
@@ -502,6 +513,15 @@ async function rescrapeNonHtml(
             // E-A4: review_status stays sticky (see scrapeOneShul mark-broken).
             firstBrokenAt: sql`COALESCE(${dataSource.firstBrokenAt}, ${now})` as unknown as Date,
             updatedAt: now,
+            configJson: {
+              ...(args.previousConfig ?? {}),
+              last_rejected_extraction: {
+                at: now.toISOString(),
+                model: cascade.model,
+                reason: failureSummary,
+                cascade_attempts: cascade.attempts,
+              },
+            },
           })
           .where(eq(dataSource.id, args.dataSourceId));
         // E-A2: no shul.status demotion (visibility is derived). See the HTML
