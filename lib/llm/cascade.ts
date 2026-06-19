@@ -255,6 +255,129 @@ function findImageCandidates(htmls: string[], baseUrl: string): string[] {
 }
 
 /**
+ * Canonical key for "is this the same poster?" comparisons. Strips volatile
+ * cache-buster query params (and bare epoch / long-hex values that are per-load
+ * tokens) and compares on origin + pathname + stable query, so a re-rendered
+ * `14062026.png?v=1718…` still matches the stored `14062026.png?v=…`. A genuine
+ * rotation changes the dated filename (pathname) → keys differ → "changed".
+ */
+function canonicalResourceKey(raw: string): string {
+  try {
+    const u = new URL(raw);
+    // Only UNAMBIGUOUS cache-buster keys. We deliberately do NOT strip short,
+    // overloaded keys like t / ts / r / id that a site might use to encode the
+    // WEEK (e.g. weekly.php?t=20260614, poster?id=1718000000). Stripping those
+    // would canonicalize two DIFFERENT posters to the same key and MISS a
+    // rotation — i.e. publish last week's times — which is strictly worse than
+    // the opposite error (an un-stripped per-load buster → one wasted re-extract,
+    // bounded by the $25/day cost-gate). Same asymmetry rules out a bare-epoch
+    // value rule (epochs overlap with week-dates / numeric ids); we strip a
+    // value only when it is a long random hex/hash token, which is never a date.
+    const VOLATILE = new Set([
+      "v", "ver", "rev", "cb", "cache", "nocache",
+      "cachebuster", "cachebust", "_", "build", "rand",
+    ]);
+    for (const k of [...u.searchParams.keys()]) {
+      const val = u.searchParams.get(k) ?? "";
+      if (
+        VOLATILE.has(k.toLowerCase()) ||
+        /^[a-f0-9]{16,}$/i.test(val) // long random/hash token (never a date)
+      ) {
+        u.searchParams.delete(k);
+      }
+    }
+    const q = u.searchParams.toString();
+    return u.origin + u.pathname + (q ? "?" + q : "");
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * True if two resource URLs point at the same poster, ignoring volatile
+ * cache-buster query params. Used by the change-detection gate so a stable
+ * poster re-rendered with a fresh `?v=` token does not read as "changed".
+ */
+export function sameResource(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  return canonicalResourceKey(a) === canonicalResourceKey(b);
+}
+
+/**
+ * Cheap (NO LLM) resource probe for change-detection: which schedule image/PDF
+ * is on the page right now? Always fetches static HTML; renders via Browserless
+ * ONLY when the static HTML does not already show the resource we last extracted
+ * (`opts.knownResource`). So a static-hosted flyer that hasn't rotated costs just
+ * one fetch (no render); a JS-injected poster, a changed poster, or a first probe
+ * falls through to a render. When it DOES render it scans rendered-first
+ * ([rendered, static]) to MIRROR runCascade's searchHtmls ordering, so the
+ * probe's candidate set matches the one the extractor picked `winningUrl` from
+ * (otherwise an unchanged poster reads as "changed" and re-pays the LLM forever).
+ * Returns the ranked candidate URLs plus `probeFailed` = we couldn't load the
+ * page at all (both fetch AND render produced no usable HTML — a transient outage
+ * / WAF block, NOT "no schedule image on the page"). The caller treats probeFailed
+ * as "fall through to the cascade" (which carries its own transient-retry +
+ * single broken write), NOT as changed/unchanged. Returns []/false for
+ * js_rendered (the page itself is the source — use the page hash instead).
+ */
+export async function discoverResources(
+  url: string,
+  strategy: "vision_image" | "pdf_document" | "js_rendered",
+  opts: { timeoutMs?: number; knownResource?: string } = {},
+): Promise<{ candidates: string[]; probeFailed: boolean }> {
+  if (strategy === "js_rendered") return { candidates: [], probeFailed: false };
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const find =
+    strategy === "vision_image" ? findImageCandidates : findPdfCandidates;
+  let staticHtml = "";
+  let renderedHtml = "";
+  let base = url;
+  try {
+    const f = await fetchHtml(url, { timeoutMs });
+    if (f.ok) {
+      staticHtml = f.html;
+      base = f.finalUrl;
+    }
+  } catch {
+    // non-fatal — try the render below
+  }
+
+  const staticFound = find([staticHtml], base);
+  // Cheap path: if the resource we last extracted is already present in STATIC
+  // HTML, the poster hasn't rotated — return WITHOUT paying a Browserless render.
+  // (Static-hosted flyers hit this every cycle; only JS-injected / changed /
+  // first-probe posters fall through to the render below.)
+  if (
+    opts.knownResource &&
+    staticFound.some((c) => sameResource(c, opts.knownResource))
+  ) {
+    return { candidates: staticFound, probeFailed: false };
+  }
+
+  // Static did not already show the known resource → render and scan
+  // rendered-first, mirroring runCascade's searchHtmls = [renderedHtml, html],
+  // so `candidates` is computed from the same DOM/ordering the extractor used.
+  let found = staticFound;
+  try {
+    const r = await renderHtml(url, { timeoutMs });
+    if (r.ok && r.html) {
+      renderedHtml = r.html;
+      found = find([r.html, staticHtml], base);
+    }
+  } catch {
+    // non-fatal — probeFailed reflects the dual failure below
+  }
+
+  // probeFailed = neither the static fetch nor the render yielded usable HTML.
+  // Distinct from "page loaded, but has no schedule image" (found === [] with
+  // HTML present) — the latter is a real change/break, the former is transient.
+  return { candidates: found, probeFailed: !staticHtml && !renderedHtml };
+}
+
+/**
  * Top-level cascade entry point. Runs the 4-tier extraction cascade
  * (HTML → JS-rendered → Vision → PDF) behind a cost circuit-breaker.
  */
