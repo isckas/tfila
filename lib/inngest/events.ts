@@ -26,7 +26,9 @@ export interface InngestEvents {
     data: {
       shulId: number;
       dataSourceId: number;
-      reason: "weekly" | "manual";
+      // weekly = Sat weekly-rescrape cron; manual = admin "Extract Now" /
+      // recovery scripts; recheck = daily image/PDF poster re-check cron.
+      reason: "weekly" | "manual" | "recheck";
     };
   };
 

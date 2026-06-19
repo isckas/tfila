@@ -23,6 +23,8 @@ import {
   isTransientCascadeFailure,
   transientCascadeMessage,
   summarizeCascadeFailure,
+  discoverResources,
+  sameResource,
 } from "../../llm/cascade";
 import { evaluateExtractionGuardrails } from "../../pipeline/guardrails";
 import { insertRuleFromExtraction } from "../../pipeline/persist-submission";
@@ -57,7 +59,7 @@ export const scrapeOneShul = inngest.createFunction(
     const { shulId, dataSourceId, reason } = event.data as {
       shulId: number;
       dataSourceId: number;
-      reason: "weekly" | "manual";
+      reason: "weekly" | "manual" | "recheck";
     };
 
     if (process.env.SCRAPE_ENABLED === "false") {
@@ -125,6 +127,7 @@ export const scrapeOneShul = inngest.createFunction(
         identifier: loaded.identifier,
         strategy: strategy as "js_rendered" | "pdf_document" | "vision_image",
         previousConfig: loaded.configJson as object | null,
+        lastRunStatus: loaded.lastRunStatus,
       });
     }
 
@@ -189,6 +192,14 @@ export const scrapeOneShul = inngest.createFunction(
       return checkCostGate();
     });
     if (!gate.allowed) {
+      // Don't hide a previously-healthy shul on an operational pause (budget /
+      // kill switch): last_run_status='error' would drop it from search/feed.
+      // Skip this run with its state untouched (it re-attempts next cron once the
+      // gate reopens); only record 'error' when the source was already
+      // non-healthy. Mirrors the non-HTML rescrape cost-gate.
+      if (priorWasOk) {
+        return { changed: false, reason: "cost-gated-skipped" };
+      }
       const gateMsg =
         gate.reason === "kill_switch"
           ? "extraction disabled via EXTRACTION_DISABLED kill switch"
@@ -454,6 +465,7 @@ async function rescrapeNonHtml(
     identifier: string;
     strategy: "js_rendered" | "pdf_document" | "vision_image";
     previousConfig: object | null;
+    lastRunStatus: string | null;
   },
 ): Promise<{
   changed: boolean;
@@ -470,6 +482,133 @@ async function rescrapeNonHtml(
   const submittedUrl =
     (args.previousConfig as { submitted_url?: string } | null)?.submitted_url ??
     args.identifier;
+
+  // ─── Phase 2: cheap change-detection (no LLM) ───────────────
+  // Probe the page for the current schedule image/PDF and compare it to the one
+  // we last extracted. If it's the SAME resource, nothing new was posted — skip
+  // the expensive vision/PDF LLM. This is what makes the daily re-check cron
+  // affordable. (js_rendered has no discrete resource → discoverResources returns
+  // [] → falls through to a normal re-extract.)
+  //
+  // Accepted residual: we use membership ("is the last resource still present?")
+  // rather than a top-candidate compare, because last_extracted_resource is the
+  // candidate that actually EXTRACTED (winningUrl) and can rank below a decoy —
+  // position-0 compare would false-"change" those forever. The trade: if a site
+  // hardcodes the OLD poster URL in static HTML AND swaps in a new one via JS
+  // (old URL lingers in the candidate set), a real rotation reads as unchanged.
+  // No current source is known to do this; the weekly cron + admin Extract Now
+  // are the backstop. Revisit with candidate-set equality if one surfaces.
+  const lastResource = (
+    args.previousConfig as { last_extracted_resource?: string } | null
+  )?.last_extracted_resource;
+  const priorWasOk =
+    args.lastRunStatus === "ok" || args.lastRunStatus === "no_change";
+  if (lastResource) {
+    // `null` = probe couldn't load the page at all (transient outage / WAF). Do
+    // NOT throw here: a persistent block would otherwise exhaust retries and fire
+    // an onFailure alert on EVERY cron run (unbounded alert spam). Instead null
+    // falls through to the cost-gate + cascade below, which carries its own
+    // transient-retry (isTransientCascadeFailure → throw) and writes exactly ONE
+    // broken row on a persistent non-transient failure.
+    const current = await step.run("detect-change", async () => {
+      const probe = await discoverResources(submittedUrl, args.strategy, {
+        timeoutMs: 15_000,
+        knownResource: lastResource,
+      });
+      return probe.probeFailed ? null : probe.candidates;
+    });
+    // Unchanged = the resource we last extracted is still present (compared by
+    // canonical key, so a fresh ?v= cache-buster doesn't read as changed).
+    // Membership, NOT position-0: last_extracted_resource is the candidate that
+    // actually EXTRACTED (winningUrl), which can rank below a decoy; a genuine
+    // rotation yields a new dated filename absent from the set → not unchanged.
+    const unchanged =
+      current !== null && current.some((c) => sameResource(c, lastResource));
+    if (unchanged && priorWasOk) {
+      // Healthy + the poster hasn't changed → no_change, skip the LLM.
+      await step.run("write-no-change-nonhtml", async () => {
+        const now = new Date();
+        await db.insert(scrapeRun).values({
+          shulId: args.shulId,
+          dataSourceId: args.dataSourceId,
+          startedAt: now,
+          finishedAt: now,
+          status: "no_change",
+          rulesAdded: 0,
+          rulesRemoved: 0,
+          rulesChanged: 0,
+        });
+        await db
+          .update(dataSource)
+          .set({
+            lastRunAt: now,
+            lastRunStatus: "no_change",
+            updatedAt: now,
+          })
+          .where(eq(dataSource.id, args.dataSourceId));
+      });
+      return { changed: false, strategy: args.strategy };
+    }
+    // unchanged && !priorWasOk → fall through (NO early return). A broken source
+    // on an unchanged poster still earns a fresh recovery extract each cron run
+    // until it recovers or ages out of the daily-recheck window — matching the
+    // HTML path's Fix I invariant (never lock a broken source into broken). The
+    // re-extract is bounded by the 14-day recheck window + the $25/day cost-gate
+    // below, so a genuinely-dead poster can't burn unbounded LLM. (An earlier
+    // draft short-circuited here with {broken:true}; that made a guardrail-dip
+    // break on an unchanged poster permanently unrecoverable — the trapdoor the
+    // HTML Fix I exists to prevent.)
+    //
+    // changed (unchanged === false, incl. probe null) → also falls through.
+  }
+
+  // ─── Cost gate — kill switch + daily budget cap (mirrors the HTML path).
+  // The change-detection probe above is free; the cascade below spends LLM, so
+  // gate HERE (not before the probe) — that keeps the no_change short-circuit
+  // working under budget pressure instead of needlessly flipping unchanged
+  // healthy posters to `error`. On a bail write a scrape_run marked `error`
+  // (NOT `broken`): a budget / kill-switch stop is operational, not a content
+  // failure. Before this gate a cost-blocked runCascade returned
+  // strategy='failed' and fell into mark-broken below, wrongly demoting healthy
+  // sources to broken whenever the daily cap was hit.
+  const gate = await step.run("cost-gate-nonhtml", async () => {
+    const { checkCostGate } = await import("../../llm/cost-gate");
+    return checkCostGate();
+  });
+  if (!gate.allowed) {
+    // A budget / kill-switch pause must NOT hide a previously-healthy shul:
+    // last_run_status='error' would drop it from search/feed. If the source was
+    // ok/no_change, leave its state untouched and just skip this cycle (it
+    // re-attempts next cron once the gate reopens). Only RECORD an 'error' run
+    // when the source was already non-healthy — so we don't mask a real break
+    // and the admin still sees the operational bail.
+    if (priorWasOk) {
+      return { changed: false, strategy: args.strategy };
+    }
+    const gateMsg =
+      gate.reason === "kill_switch"
+        ? "extraction disabled via EXTRACTION_DISABLED kill switch"
+        : `daily LLM budget exceeded (today $${gate.todayUsd?.toFixed(2)} / cap $${gate.budgetUsd?.toFixed(2)})`;
+    await step.run("write-scrape-run-cost-gated-nonhtml", async () => {
+      const now = new Date();
+      await db.insert(scrapeRun).values({
+        shulId: args.shulId,
+        dataSourceId: args.dataSourceId,
+        startedAt: now,
+        finishedAt: now,
+        status: "error",
+        rulesAdded: 0,
+        rulesRemoved: 0,
+        rulesChanged: 0,
+        error: gateMsg,
+      });
+      await db
+        .update(dataSource)
+        .set({ lastRunAt: now, lastRunStatus: "error", updatedAt: now })
+        .where(eq(dataSource.id, args.dataSourceId));
+    });
+    return { changed: false, strategy: args.strategy };
+  }
 
   const cascade = await step.run("cascade-rerun", async () => {
     const r = await runCascade(submittedUrl, {
